@@ -195,7 +195,7 @@
     "network_type": "Tipo de Red:",
     "sleep_mode": "Modo de Sueño:",
     "alert_type": "Tipo de Alerta:",
-    "gt06_protocol": "Protocolo GT06:",
+    "gt06_protocol": "Protocolo:",
     "volte_switch": "Interruptor VoLTE:",
     "relay_state": "Estado del Relé:",
     "power_alert_type": "Tipo de Alerta de Energía:",

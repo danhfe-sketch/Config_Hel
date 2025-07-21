@@ -36,6 +36,10 @@ The existing architecture will be preserved and extended:
 
 **Parameter Categories to Add** (per Requirement 1):
 ```python
+# Parameter Column Sequence
+- APN configuration: APN server, user and password
+- Main server configuration: URL/IP, port and protocol (options for the protocol are: GT06-0x60, GT06-0x12 or CRX3)
+
 # Numeric Parameters with Validation
 - Vibration (0-255) - Range validation with error feedback
 - Timer settings (various ranges) - Context-specific validation
@@ -44,7 +48,7 @@ The existing architecture will be preserved and extended:
 # Dropdown Parameters with All Valid Options
 - Heart Beat intervals (30s, 1min, 5min, 10min, 30min, 1hr, 2hr, 6hr, 12hr, 24hr)
 - Curve Sensor options (Enabled/Disabled/Auto)
-- Protocol types (TCP/UDP) - Network protocol selection
+- Protocol types (GT06-0x60, GT06-0x12 or CRX3) - Protocol selection
 
 # Radio Button Groups with Exclusive Selection
 - Lock Type (PIN/Card) - Security method selection
@@ -160,7 +164,7 @@ ACCALM,ON,{type}#                # Configure ignition ON alert
 ACCOFFALM,ON,{type}#             # Configure ignition OFF alert
 
 # Network and Protocol Settings
-SZCS#GT06SEL={protocol}          # Select protocol (0=GT06, 1=CRX3, 2=CRX)
+SZCS#GT06SEL={protocol}          # Select protocol (GT06-0x60, GT06-0x12 or CRX3)
 SZCS#NETSELECT={network}         # Select network (0=AUTO, 1=4G, 2=2G)
 SZCS#VOLTESWITCH={network}       # Set SMS network (0=2G, 1=4G)
 
@@ -247,6 +251,60 @@ class DeviceInfoService:
     def format_device_info_display(self, info: DeviceInfo) -> str
 ```
 
+### 8. ConfigurationReaderService
+
+**Purpose**: Read and display current device configurations from RS232 (per Requirement 6)
+**Features**:
+- Query all device parameters using appropriate AT commands
+- Parse device responses and populate UI fields
+- Progress indication during read operations
+- Error handling for failed reads with specific error messages
+- Logging of read operations with timestamps
+- Visual indication of parameters updated from device
+- Graceful handling of invalid or unexpected device responses
+
+**Interface**:
+```python
+class ConfigurationReaderService:
+    def read_all_configurations(self) -> ConfigurationReadResult
+    def read_specific_parameter(self, param_name: str) -> ParameterReadResult
+    def parse_device_response(self, command: str, response: str) -> ParsedResponse
+    def update_ui_from_device_config(self, config_data: dict) -> None
+    def show_read_progress(self, progress: float, current_param: str) -> None
+    def handle_read_error(self, error: Exception, param_name: str) -> None
+```
+
+**Configuration Reading Commands**:
+```python
+# Parameter Query Commands (to be sent with ATSMS: prefix)
+PARAMETER_QUERY_COMMANDS = {
+    'apn_config': 'APN#',                    # Query APN settings
+    'server_config': 'SERVER#',             # Query server configuration
+    'timer_settings': 'TIMER#',             # Query timer intervals
+    'heartbeat_settings': 'HBT#',           # Query heartbeat intervals
+    'vibration_settings': 'SZCS#VIBL',      # Query vibration sensitivity
+    'ignition_config': 'SZCS#ACCLINE',      # Query ignition configuration
+    'protocol_settings': 'SZCS#GT06SEL',    # Query protocol selection
+    'network_settings': 'SZCS#NETSELECT',   # Query network selection
+    'device_info': ['CXCS#IMEI', 'CXCS#ICCID', 'VERSION#'],  # Device information
+    'all_parameters': 'PARAM#'              # Query all parameters at once
+}
+```
+
+**Response Parsing Strategy**:
+```python
+# Expected Response Formats
+RESPONSE_PATTERNS = {
+    'APN#': r'APN:([^,]*),([^,]*),([^#]*)',           # APN:server,user,password
+    'SERVER#': r'SERVER:(\d+),([^,]*),(\d+),(\d+)',   # SERVER:type,address,port,protocol
+    'TIMER#': r'TIMER:(\d+),(\d+)',                   # TIMER:ign_on,ign_off
+    'HBT#': r'HBT:(\d+),(\d+)',                       # HBT:ign_on,ign_off
+    'SZCS#VIBL': r'VIBL=(\d+)',                       # VIBL=level
+    'CXCS#IMEI': r'IMEI:(\d+)',                       # IMEI:number
+    'CXCS#ICCID': r'ICCID:(\d+)',                     # ICCID:number
+}
+```
+
 ## Data Models
 
 ### Configuration Profile Structure
@@ -316,6 +374,34 @@ class ParameterDefinition:
     help_text: str
 ```
 
+### Configuration Reading Models
+```python
+@dataclass
+class ParameterReadResult:
+    parameter_name: str
+    success: bool
+    value: Optional[str]
+    error_message: Optional[str]
+    raw_response: str
+
+@dataclass
+class ConfigurationReadResult:
+    success: bool
+    parameters_read: List[ParameterReadResult]
+    total_parameters: int
+    failed_parameters: List[str]
+    read_duration: float
+    timestamp: datetime
+
+@dataclass
+class ParsedResponse:
+    command: str
+    success: bool
+    parsed_values: dict
+    raw_response: str
+    error_message: Optional[str]
+```
+
 ## Error Handling
 
 ### Enhanced Error Categories
@@ -376,8 +462,18 @@ class ParameterDefinition:
 - Add comprehensive error handling for device communication
 - Implement log export functionality
 
-### Phase 5: Polish and Testing
+### Phase 5: Configuration Reading Implementation
+- Implement ConfigurationReaderService with AT command queries
+- Add response parsing for all parameter types
+- Create progress indication UI for read operations
+- Implement UI field population from device responses
+- Add error handling for failed parameter reads
+- Integrate configuration reading with "Checar configuração" button
+- Add visual indicators for parameters updated from device
+
+### Phase 6: Polish and Testing
 - Add comprehensive input validation
 - Implement remaining UI enhancements
-- Conduct thorough testing
+- Test configuration reading with various device states
+- Conduct thorough testing of read/write parameter workflows
 - Update documentation and build process

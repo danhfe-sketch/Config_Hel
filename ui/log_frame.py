@@ -105,6 +105,22 @@ class LogFrame(ctk.CTkFrame):
             if current_time - self.last_log_update > self.update_interval:
                 self._update_log_display()
                 
+    def _get_theme_appropriate_background(self):
+        """
+        Get the theme-appropriate background color for the log textbox.
+        
+        Returns:
+            The appropriate background color for the current theme
+        """
+        current_mode = ctk.get_appearance_mode()
+        
+        if current_mode == "Dark":
+            # Default dark mode background for CTkTextbox
+            return ["#212121", "#2B2B2B"]  # CTkTextbox default dark colors
+        else:
+            # Default light mode background for CTkTextbox
+            return ["#F9F9FA", "#FFFFFF"]  # CTkTextbox default light colors
+
     def _flash_log_for_attention(self, success=False):
         """
         Flash the log textbox background briefly to draw attention to important messages.
@@ -112,18 +128,55 @@ class LogFrame(ctk.CTkFrame):
         Args:
             success: If True, flash with green for success, otherwise red for errors
         """
-        original_bg = self.log_textbox.cget("fg_color")
+        # Safety check - ensure textbox exists
+        if not hasattr(self, 'log_textbox') or self.log_textbox is None:
+            return
         
-        # Flash with appropriate background color
-        if success:
-            # Light green for success
-            self.log_textbox.configure(fg_color="#E0FFE0")
-        else:
-            # Light red for errors
-            self.log_textbox.configure(fg_color="#FFE0E0")
-        
-        # Reset after a short delay
-        self.after(500, lambda: self.log_textbox.configure(fg_color=original_bg))
+        try:
+            # Get the current theme mode to use appropriate colors
+            current_mode = ctk.get_appearance_mode()
+            
+            # Get the correct theme-appropriate background color
+            original_bg = self._get_theme_appropriate_background()
+            
+            # Flash with appropriate background color based on theme
+            if success:
+                if current_mode == "Dark":
+                    # Dark green for success in dark mode
+                    flash_color = "#1B4D3E"
+                else:
+                    # Light green for success in light mode
+                    flash_color = "#E0FFE0"
+            else:
+                if current_mode == "Dark":
+                    # Dark red for errors in dark mode
+                    flash_color = "#4D1B1B"
+                else:
+                    # Light red for errors in light mode
+                    flash_color = "#FFE0E0"
+            
+            self.log_textbox.configure(fg_color=flash_color)
+            
+            # Reset after a short delay to the proper theme-appropriate color
+            self.after(500, lambda: self.log_textbox.configure(fg_color=original_bg))
+            
+        except Exception as e:
+            # Silently handle any errors to avoid breaking the application
+            # This could happen if the widget is destroyed or not properly initialized
+            pass
+
+    def reset_log_background_to_theme(self):
+        """
+        Reset the log textbox background to the appropriate theme color.
+        This can be called externally if needed to fix background color issues.
+        """
+        if hasattr(self, 'log_textbox') and self.log_textbox is not None:
+            try:
+                theme_bg = self._get_theme_appropriate_background()
+                self.log_textbox.configure(fg_color=theme_bg)
+            except Exception:
+                # Silently handle any errors
+                pass
     
     def _update_log_display(self):
         """Update the log display with all buffered messages."""

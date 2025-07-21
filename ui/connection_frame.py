@@ -16,7 +16,10 @@ class ConnectionFrame(ctk.CTkFrame):
         self.max_auto_reconnect_attempts = 3
         self.connection_quality = 100  # Connection quality percentage (100 = perfect)
 
-        self.grid_columnconfigure(1, weight=1)
+        # Configure grid columns - give more space to the middle column and ensure the button column has enough space
+        self.grid_columnconfigure(0, weight=0, minsize=80)  # Label column
+        self.grid_columnconfigure(1, weight=1)              # Content column (expandable)
+        self.grid_columnconfigure(2, weight=0, minsize=90)  # Button column
 
         # --- Connection Section ---
         self.conn_label = ctk.CTkLabel(self, text=self.i18n.get("connection"), font=ctk.CTkFont(weight="bold"))
@@ -29,8 +32,15 @@ class ConnectionFrame(ctk.CTkFrame):
         self.com_port_combo.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self.refresh_ports() # Initial population
 
-        self.connect_button = ctk.CTkButton(self, text=self.i18n.get("connect"), width=80, command=self.toggle_connection)
-        self.connect_button.grid(row=1, column=2, padx=(5, 10), pady=5)
+        # Use a slightly smaller button with more compact text to ensure it fits on small screens
+        self.connect_button = ctk.CTkButton(
+            self, 
+            text=self.i18n.get("connect"), 
+            width=85,  # Slightly wider to accommodate text
+            height=28, # Slightly shorter height
+            command=self.toggle_connection
+        )
+        self.connect_button.grid(row=1, column=2, padx=(5, 10), pady=5, sticky="e")
 
         # Status row with indicator
         self.status_label = ctk.CTkLabel(self, text=self.i18n.get("status"))
@@ -93,39 +103,93 @@ class ConnectionFrame(ctk.CTkFrame):
 
         self.imei_label = ctk.CTkLabel(self, text=self.i18n.get("imei"))
         self.imei_label.grid(row=5, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.imei_value_label = ctk.CTkLabel(self, text=self.i18n.get("not_available"))
-        self.imei_value_label.grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        
+        # Use Entry widget for IMEI to allow text selection and copying
+        self.imei_value_var = tk.StringVar(value=self.i18n.get("not_available"))
+        self.imei_value_entry = tk.Entry(
+            self,
+            textvariable=self.imei_value_var,
+            state="readonly",
+            readonlybackground=self._get_entry_bg_color(),
+            highlightthickness=0,
+            relief="flat",
+            bd=0,
+            font=("Arial", 12, "bold"),
+            fg="#1F6AA5" if ctk.get_appearance_mode() == "Light" else "#78BDFF",
+            width=25
+        )
+        self.imei_value_entry.grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky="w")
 
         self.iccid_label = ctk.CTkLabel(self, text=self.i18n.get("iccid"))
         self.iccid_label.grid(row=6, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.iccid_value_label = ctk.CTkLabel(self, text=self.i18n.get("not_available"))
-        self.iccid_value_label.grid(row=6, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        
+        # Use Entry widget for ICCID to allow text selection and copying
+        self.iccid_value_var = tk.StringVar(value=self.i18n.get("not_available"))
+        self.iccid_value_entry = tk.Entry(
+            self,
+            textvariable=self.iccid_value_var,
+            state="readonly",
+            readonlybackground=self._get_entry_bg_color(),
+            highlightthickness=0,
+            relief="flat",
+            bd=0,
+            font=("Arial", 12, "bold"),
+            fg="#1F6AA5" if ctk.get_appearance_mode() == "Light" else "#78BDFF",
+            width=25
+        )
+        self.iccid_value_entry.grid(row=6, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+
+        self.version_label = ctk.CTkLabel(self, text=self.i18n.get("version"))
+        self.version_label.grid(row=7, column=0, padx=(10, 5), pady=5, sticky="w")
+        
+        # Use Entry widget for Version to allow text selection and copying
+        self.version_value_var = tk.StringVar(value=self.i18n.get("not_available"))
+        self.version_value_entry = tk.Entry(
+            self,
+            textvariable=self.version_value_var,
+            state="readonly",
+            readonlybackground=self._get_entry_bg_color(),
+            highlightthickness=0,
+            relief="flat",
+            bd=0,
+            font=("Arial", 12, "bold"),
+            fg="#1F6AA5" if ctk.get_appearance_mode() == "Light" else "#78BDFF",
+            width=25
+        )
+        self.version_value_entry.grid(row=7, column=1, columnspan=2, padx=5, pady=5, sticky="w")
         
         # Connection quality indicator
-        self.quality_label = ctk.CTkLabel(self, text=self.i18n.get("connection_quality", "Connection Quality"))
-        self.quality_label.grid(row=7, column=0, padx=(10, 5), pady=5, sticky="w")
+        # self.quality_label = ctk.CTkLabel(self, text=self.i18n.get("connection_quality", "Connection Quality"))
+        # self.quality_label.grid(row=8, column=0, padx=(10, 5), pady=5, sticky="w")
         
         # Quality frame with progress bar and percentage
-        self.quality_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.quality_frame.grid(row=7, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
-        self.quality_frame.grid_columnconfigure(0, weight=1)
+        # self.quality_frame = ctk.CTkFrame(self, fg_color="transparent")
+        # self.quality_frame.grid(row=8, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
+        # self.quality_frame.grid_columnconfigure(0, weight=1)
         
-        self.quality_bar = ctk.CTkProgressBar(self.quality_frame, width=80)  # Further reduced width
-        self.quality_bar.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="w")  # Changed from "ew" to "w"
-        self.quality_bar.set(1.0)  # Start at 100%
+        # self.quality_bar = ctk.CTkProgressBar(self.quality_frame, width=80)  # Further reduced width
+        # self.quality_bar.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="w")  # Changed from "ew" to "w"
+        # self.quality_bar.set(1.0)  # Start at 100%
         
-        self.quality_value_label = ctk.CTkLabel(self.quality_frame, text="100%")
-        self.quality_value_label.grid(row=0, column=1, padx=(0, 5), pady=0, sticky="w")
+        # self.quality_value_label = ctk.CTkLabel(self.quality_frame, text="100%")
+        # self.quality_value_label.grid(row=0, column=1, padx=(0, 5), pady=0, sticky="w")
         
         # Auto-reconnect toggle
-        self.auto_reconnect_var = tk.BooleanVar(value=True)
-        self.auto_reconnect_checkbox = ctk.CTkCheckBox(
-            self, 
-            text=self.i18n.get("auto_reconnect", "Auto-reconnect"), 
-            variable=self.auto_reconnect_var,
-            command=self.toggle_auto_reconnect
-        )
-        self.auto_reconnect_checkbox.grid(row=8, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="w")
+        # self.auto_reconnect_var = tk.BooleanVar(value=True)
+        # self.auto_reconnect_checkbox = ctk.CTkCheckBox(
+        #     self, 
+        #     text=self.i18n.get("auto_reconnect", "Auto-reconnect"), 
+        #     variable=self.auto_reconnect_var,
+        #     command=self.toggle_auto_reconnect
+        # )
+        # self.auto_reconnect_checkbox.grid(row=9, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="w")
+
+    def _get_entry_bg_color(self):
+        """Get the appropriate background color for entry widgets based on the current theme."""
+        if ctk.get_appearance_mode() == "Dark":
+            return "#2B2B2B"  # Dark gray for dark theme
+        else:
+            return "#F0F0F0"  # Light gray for light theme
 
     def refresh_ports(self, _=None):
         """Refreshes the list of available COM ports."""
@@ -165,7 +229,7 @@ class ConnectionFrame(ctk.CTkFrame):
             self.update_connection_indicator(True)
             
             # Reset connection quality to good on new connection
-            self.update_connection_quality(100)
+            # self.update_connection_quality(100)
             
             # Hide reconnection frame if visible
             self.hide_reconnecting_status()
@@ -181,8 +245,9 @@ class ConnectionFrame(ctk.CTkFrame):
             self.status_value_label.configure(text=self.i18n.get("disconnected"), text_color="red")
             self.connect_button.configure(text=self.i18n.get("connect"))
             self.com_port_combo.configure(state="normal")
-            self.imei_value_label.configure(text=self.i18n.get("not_available"))
-            self.iccid_value_label.configure(text=self.i18n.get("not_available"))
+            self.imei_value_var.set(self.i18n.get("not_available"))
+            self.iccid_value_var.set(self.i18n.get("not_available"))
+            self.version_value_var.set(self.i18n.get("not_available"))
             
             # Update connection indicator
             self.update_connection_indicator(False)
@@ -206,10 +271,11 @@ class ConnectionFrame(ctk.CTkFrame):
         self.status_label.configure(text=self.i18n.get("status"))
         self.imei_label.configure(text=self.i18n.get("imei"))
         self.iccid_label.configure(text=self.i18n.get("iccid"))
-        self.quality_label.configure(text=self.i18n.get("connection_quality", "Connection Quality"))
+        self.version_label.configure(text=self.i18n.get("version"))
+        # self.quality_label.configure(text=self.i18n.get("connection_quality", "Connection Quality"))
         self.reconnect_label.configure(text=self.i18n.get("reconnecting", "Reconnecting..."))
         self.cancel_reconnect_button.configure(text=self.i18n.get("cancel", "Cancel"))
-        self.auto_reconnect_checkbox.configure(text=self.i18n.get("auto_reconnect", "Auto-reconnect"))
+        # self.auto_reconnect_checkbox.configure(text=self.i18n.get("auto_reconnect", "Auto-reconnect"))
         
         # Update button text based on connection state
         if self.serial_service.is_connected:
@@ -220,14 +286,18 @@ class ConnectionFrame(ctk.CTkFrame):
             self.status_value_label.configure(text=self.i18n.get("disconnected"))
         
         # Update value labels if they show "not available"
-        current_imei = self.imei_value_label.cget("text")
-        current_iccid = self.iccid_value_label.cget("text")
+        current_imei = self.imei_value_var.get()
+        current_iccid = self.iccid_value_var.get()
+        current_version = self.version_value_var.get()
         
         if current_imei in ["N/A", "not_available", "N/D"]:
-            self.imei_value_label.configure(text=self.i18n.get("not_available"))
+            self.imei_value_var.set(self.i18n.get("not_available"))
         
         if current_iccid in ["N/A", "not_available", "N/D"]:
-            self.iccid_value_label.configure(text=self.i18n.get("not_available"))
+            self.iccid_value_var.set(self.i18n.get("not_available"))
+            
+        if current_version in ["N/A", "not_available", "N/D"]:
+            self.version_value_var.set(self.i18n.get("not_available"))
             
     def update_connection_indicator(self, is_connected, is_active=False):
         """
@@ -284,34 +354,34 @@ class ConnectionFrame(ctk.CTkFrame):
         """Flash the connection indicator to show activity."""
         self.update_connection_indicator(True, True)
         
-    def update_connection_quality(self, quality):
-        """
-        Update the connection quality indicator.
+    # def update_connection_quality(self, quality):
+    #     """
+    #     Update the connection quality indicator.
         
-        Args:
-            quality: Connection quality percentage (0-100)
-        """
-        self.connection_quality = max(0, min(100, quality))
+    #     Args:
+    #         quality: Connection quality percentage (0-100)
+    #     """
+    #     self.connection_quality = max(0, min(100, quality))
         
-        # Update progress bar
-        self.quality_bar.set(self.connection_quality / 100)
+    #     # Update progress bar
+    #     self.quality_bar.set(self.connection_quality / 100)
         
-        # Update percentage label
-        self.quality_value_label.configure(text=f"{self.connection_quality}%")
+    #     # Update percentage label
+    #     self.quality_value_label.configure(text=f"{self.connection_quality}%")
         
-        # Update color based on quality
-        if self.connection_quality >= 90:
-            self.quality_bar.configure(progress_color="#00CC00")  # Green
-        elif self.connection_quality >= 70:
-            self.quality_bar.configure(progress_color="#88CC00")  # Yellow-green
-        elif self.connection_quality >= 40:
-            self.quality_bar.configure(progress_color="#CCCC00")  # Yellow
-        else:
-            self.quality_bar.configure(progress_color="#CC8800")  # Orange
+    #     # Update color based on quality
+    #     if self.connection_quality >= 90:
+    #         self.quality_bar.configure(progress_color="#00CC00")  # Green
+    #     elif self.connection_quality >= 70:
+    #         self.quality_bar.configure(progress_color="#88CC00")  # Yellow-green
+    #     elif self.connection_quality >= 40:
+    #         self.quality_bar.configure(progress_color="#CCCC00")  # Yellow
+    #     else:
+    #         self.quality_bar.configure(progress_color="#CC8800")  # Orange
             
-        # Update connection indicator
-        if self.serial_service.is_connected:
-            self.update_connection_indicator(True)
+    #     # Update connection indicator
+    #     if self.serial_service.is_connected:
+    #         self.update_connection_indicator(True)
             
     def show_reconnecting_status(self):
         """Show the reconnection status UI."""

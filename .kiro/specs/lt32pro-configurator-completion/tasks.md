@@ -22,7 +22,9 @@
 - [x] 3. Extend ParametersFrame with complete parameter set
   - [x] 3.1 Create parameter factory pattern for different input types
     - Write ParameterFactory class to generate numeric inputs, dropdowns, and radio button groups
-    - Implement parameter grouping system for logical organization of settings
+    - Implement parameter grouping system for logical organization of settings with specific sequence:
+      - APN configuration: APN server, user and password
+      - Main server configuration: URL/IP, port and protocol (options for the protocol are: GT06-0x60, GT06-0x12 or CRX3)
     - Create base parameter classes with common validation and command generation interfaces
     - _Requirements: 1.1, 1.3, 1.4_
 
@@ -35,13 +37,14 @@
   - [x] 3.3 Add dropdown parameter controls (Heart Beat, Curve Sensor)
     - Implement Heart Beat interval dropdown with options (30s, 1min, 5min, etc.)
     - Add Curve Sensor dropdown with Enabled/Disabled/Auto options
+    - Add Protocol dropdown with options (GT06-0x60, GT06-0x12 or CRX3)
     - Create dropdown change handlers that trigger appropriate device commands
     - _Requirements: 1.1, 1.3_
 
-  - [x] 3.4 Add radio button group controls (Lock Type, Ignition Type, Protocol)
+  - [x] 3.4 Add radio button group controls (Lock Type, Ignition Type)
     - Implement Lock Type radio buttons for PIN/Card selection
     - Add Ignition Type radio buttons for Digital/Analog selection
-    - Create Protocol radio buttons for TCP/UDP selection with proper command mapping
+    - Create proper command mapping for radio button selections
     - _Requirements: 1.1, 1.4_
 
 - [x] 4. Create ToolbarFrame component with all required functionality
@@ -121,9 +124,6 @@
     - _Requirements: 1.5, 6.5_
 
 - [x] 8. Add comprehensive error handling and user feedback
-
-
-
   - [x] 8.1 Implement connection error handling improvements
     - Add detailed error messages for different connection failure scenarios
     - Implement automatic reconnection attempts with user feedback
@@ -150,7 +150,6 @@
     - _Requirements: 6.1_
 
 - [x] 10. Integration testing and final polish
-
   - [x] 10.1 Create comprehensive integration tests
     - Write integration tests for complete configuration workflows
     - Test theme switching persistence across application restarts
@@ -158,11 +157,120 @@
     - _Requirements: All requirements_
 
   - [x] 10.2 Update build configuration and documentation
-
-
-
-
     - Update PyInstaller spec file if needed for new components
     - Test standalone executable generation with all new features
     - Update README with new feature documentation
     - _Requirements: All requirements_
+
+- [x] 11. Update parameter sequence and protocol options
+  - [x] 11.1 Implement correct parameter sequence in ParametersFrame
+    - Update the parameter creation order to match the required sequence:
+      - APN configuration: APN server, user and password
+      - Main server configuration: URL/IP, port and protocol
+    - Ensure the UI displays parameters in the correct order
+    - _Requirements: 1.1_
+
+  - [x] 11.2 Add protocol options for GT06-0x60, GT06-0x12 or CRX3
+    - Update the protocol dropdown to include the specific protocol options
+    - Update the DeviceCommandMapper to handle the new protocol options
+    - Add validation rules for the protocol options
+    - _Requirements: 1.1, 1.3_
+
+- [x] 12. Implement configuration reading from RS232 connection
+
+
+
+
+  - [x] 12.1 Create ConfigurationReaderService class
+
+
+
+
+
+    - Write ConfigurationReaderService with methods for querying device parameters
+    - Implement AT command mapping for reading all parameter types (APN, server, timers, etc.)
+    - Add response parsing logic for different parameter response formats
+    - Create error handling for failed parameter reads with specific error messages
+    - _Requirements: 6.1, 6.4, 6.7_
+
+  - [x] 12.2 Implement device parameter query commands
+
+
+
+
+
+    - Add parameter query commands (APN#, SERVER#, TIMER#, HBT#, etc.) to DeviceCommandMapper
+    - Implement response pattern matching for parsing device responses
+    - Create command-to-parameter mapping for populating UI fields from device responses
+    - Add timeout handling for unresponsive device queries
+    - _Requirements: 6.1, 6.2_
+
+  - [x] 12.3 Add progress indication for configuration reading
+
+
+
+
+
+    - Create progress dialog or indicator for configuration reading operations
+    - Implement progress tracking for multiple parameter queries
+    - Add cancellation capability for long-running read operations
+    - Disable parameter modification during read operations to prevent conflicts
+    - _Requirements: 6.3_
+-
+
+  - [x] 12.4 Implement UI field population from device responses
+
+
+
+
+    - Create methods to update all UI parameter fields from parsed device responses
+    - Add visual indicators to show which parameters were successfully updated from device
+    - Implement differential highlighting to show parameters that differ from current UI values
+    - Add logging of all parameter updates with timestamps and values
+    - _Requirements: 6.2, 6.5, 6.6_
+
+  - [x] 12.5 Add "Checar configuração" button functionality
+
+
+
+
+
+    - Connect existing "Checar configuração" button to ConfigurationReaderService
+    - Implement complete configuration reading workflow with progress indication
+    - Add error handling and user feedback for failed configuration reads
+    - Create comprehensive logging of the configuration reading process
+    - _Requirements: 6.1, 6.4, 6.5_
+
+  - [x] 12.6 Implement error handling for configuration reading
+
+
+    - Add specific error messages for different types of read failures (timeout, invalid response, etc.)
+    - Implement graceful handling of partial configuration reads (some parameters succeed, others fail)
+    - Create retry logic for failed parameter queries
+    - Add user-friendly error reporting with suggestions for resolution
+    - _Requirements: 6.4, 6.7_
+
+# Implementation Status
+
+## Completed Features
+
+Tasks 1-11 have been successfully implemented to meet the original PRD requirements, including:
+
+1. Complete parameter set with proper validation and organization
+2. Comprehensive toolbar with all required functionality
+3. Theme customization with persistence
+4. Enhanced device communication with proper AT command mapping
+5. Improved logging and export capabilities
+6. Comprehensive error handling and user feedback
+7. Full internationalization support
+
+## Remaining Tasks
+
+Task 12 implements the new requirement for reading and displaying configurations from the RS232 connection. This includes:
+
+- ConfigurationReaderService for querying device parameters
+- Response parsing and UI field population
+- Progress indication and error handling
+- Integration with "Checar configuração" button functionality
+
+The implementation follows the design document's architecture and component structure, maintaining the established patterns while extending functionality as needed.

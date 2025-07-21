@@ -177,8 +177,10 @@ class ValidationService:
                 'required': False
             },
             'server_ip': {
-                'type': 'ip_address',
-                'required': True
+                'type': 'text',
+                'max_length': 100,
+                'required': True,
+                'pattern': r'^((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))$'
             },
             'server_domain': {
                 'type': 'domain',
@@ -224,7 +226,7 @@ class ValidationService:
             },
             'gt06_protocol': {
                 'type': 'dropdown',
-                'allowed_values': ['GT06', 'CRX3', 'CRX']
+                'allowed_values': ['GT06-0x60', 'GT06-0x12', 'CRX3']
             },
             'volte_switch': {
                 'type': 'dropdown',
@@ -251,6 +253,10 @@ class ValidationService:
             'timezone_direction': {
                 'type': 'radio',
                 'allowed_values': ['E', 'W']
+            },
+            'tcp_ack_config': {
+                'type': 'radio',
+                'allowed_values': ['Enabled', 'Disabled']
             },
             
             # Additional numeric parameters for comprehensive coverage
@@ -414,12 +420,19 @@ class ValidationService:
         rules = self.validation_rules[param_name]
         param_type = rules['type']
         
+        # Get the translated display name for the parameter
+        display_name = self.i18n.get(param_name, param_name)
+        
+        # For server_ip, use the server_url_ip translation
+        if param_name == 'server_ip':
+            display_name = self.i18n.get('server_url_ip', 'URL/IP')
+        
         # Handle empty values
         if value is None or (isinstance(value, str) and value.strip() == ''):
             if rules.get('required', False):
                 return ValidationResult(
                     is_valid=False,
-                    error_message=self.i18n.get('validation_required_field', '{param_name} is required and cannot be empty').format(param_name=param_name),
+                    error_message=self.i18n.get('validation_required_field', '{param_name} is required and cannot be empty').format(param_name=display_name),
                     error_code='REQUIRED_FIELD'
                 )
             else:
@@ -444,6 +457,12 @@ class ValidationService:
         return ValidationResult(is_valid=True)
     
     def _validate_numeric(self, param_name: str, value: Any, rules: Dict) -> ValidationResult:
+        # Get the translated display name for the parameter
+        display_name = self.i18n.get(param_name, param_name)
+        
+        # For server_port, use the server_port translation
+        if param_name == 'server_port':
+            display_name = self.i18n.get('server_port', 'Porta do Servidor')
         """Validate numeric parameters with range checking."""
         try:
             if isinstance(value, str):
@@ -459,7 +478,7 @@ class ValidationService:
                 if isinstance(num_value, float) and not num_value.is_integer():
                     return ValidationResult(
                         is_valid=False,
-                        error_message=self.i18n.get('validation_integer_required', '{param_name} must be an integer value').format(param_name=param_name),
+                        error_message=self.i18n.get('validation_integer_required', '{param_name} must be an integer value').format(param_name=display_name),
                         error_code='INTEGER_REQUIRED'
                     )
                 num_value = int(num_value)
@@ -474,7 +493,7 @@ class ValidationService:
                     return ValidationResult(
                         is_valid=False,
                         error_message=self.i18n.get('validation_range_error', '{param_name} must be between {min_val} and {max_val}').format(
-                            param_name=param_name, min_val=min_val, max_val=max_val
+                            param_name=display_name, min_val=min_val, max_val=max_val
                         ),
                         error_code='RANGE_ERROR',
                         suggested_value=str(min_val)
@@ -483,7 +502,7 @@ class ValidationService:
                     return ValidationResult(
                         is_valid=False,
                         error_message=self.i18n.get('validation_min_value', '{param_name} must be at least {min_val}').format(
-                            param_name=param_name, min_val=min_val
+                            param_name=display_name, min_val=min_val
                         ),
                         error_code='MIN_VALUE',
                         suggested_value=str(min_val)
@@ -493,7 +512,7 @@ class ValidationService:
                 return ValidationResult(
                     is_valid=False,
                     error_message=self.i18n.get('validation_max_value', '{param_name} must be at most {max_val}').format(
-                        param_name=param_name, max_val=max_val
+                        param_name=display_name, max_val=max_val
                     ),
                     error_code='MAX_VALUE',
                     suggested_value=str(max_val)
@@ -505,7 +524,7 @@ class ValidationService:
                 return ValidationResult(
                     is_valid=False,
                     error_message=self.i18n.get('validation_not_in_allowed_values', '{param_name} must be one of: {allowed_values}').format(
-                        param_name=param_name, 
+                        param_name=display_name, 
                         allowed_values=", ".join(map(str, allowed_values))
                     ),
                     error_code='NOT_IN_ALLOWED_VALUES'
@@ -516,11 +535,17 @@ class ValidationService:
         except (ValueError, TypeError):
             return ValidationResult(
                 is_valid=False,
-                error_message=self.i18n.get('validation_numeric_required', '{param_name} must be a numeric value').format(param_name=param_name),
+                error_message=self.i18n.get('validation_numeric_required', '{param_name} must be a numeric value').format(param_name=display_name),
                 error_code='NUMERIC_REQUIRED'
             )
     
     def _validate_text(self, param_name: str, value: Any, rules: Dict) -> ValidationResult:
+        # Get the translated display name for the parameter
+        display_name = self.i18n.get(param_name, param_name)
+        
+        # For server_ip, use the server_url_ip translation
+        if param_name == 'server_ip':
+            display_name = self.i18n.get('server_url_ip', 'URL/IP')
         """Validate text parameters with length and pattern checking."""
         if not isinstance(value, str):
             value = str(value)
@@ -531,7 +556,7 @@ class ValidationService:
             return ValidationResult(
                 is_valid=False,
                 error_message=self.i18n.get('validation_min_length', '{param_name} must be at least {min_length} characters').format(
-                    param_name=param_name, 
+                    param_name=display_name, 
                     min_length=min_length
                 ),
                 error_code='MIN_LENGTH'
@@ -556,31 +581,37 @@ class ValidationService:
             if param_name == 'imei':
                 return ValidationResult(
                     is_valid=False,
-                    error_message=self.i18n.get('validation_invalid_imei', '{param_name} must be exactly 15 digits').format(param_name=param_name),
+                    error_message=self.i18n.get('validation_invalid_imei', '{param_name} must be exactly 15 digits').format(param_name=display_name),
                     error_code='INVALID_IMEI'
                 )
             elif param_name == 'iccid':
                 return ValidationResult(
                     is_valid=False,
-                    error_message=self.i18n.get('validation_invalid_iccid', '{param_name} must be 19-20 digits').format(param_name=param_name),
+                    error_message=self.i18n.get('validation_invalid_iccid', '{param_name} must be 19-20 digits').format(param_name=display_name),
                     error_code='INVALID_ICCID'
                 )
             elif param_name == 'imsi':
                 return ValidationResult(
                     is_valid=False,
-                    error_message=self.i18n.get('validation_invalid_imsi', '{param_name} must be exactly 15 digits').format(param_name=param_name),
+                    error_message=self.i18n.get('validation_invalid_imsi', '{param_name} must be exactly 15 digits').format(param_name=display_name),
                     error_code='INVALID_IMSI'
                 )
             elif param_name == 'apn_server':
                 return ValidationResult(
                     is_valid=False,
-                    error_message=self.i18n.get('validation_invalid_apn', '{param_name} must be a valid hostname or IP address').format(param_name=param_name),
+                    error_message=self.i18n.get('validation_invalid_apn', '{param_name} must be a valid hostname or IP address').format(param_name=display_name),
                     error_code='INVALID_APN'
+                )
+            elif param_name == 'server_ip':
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_server_url_ip', '{param_name} must be a valid URL or IP address').format(param_name=display_name),
+                    error_code='INVALID_SERVER_URL_IP'
                 )
             else:
                 return ValidationResult(
                     is_valid=False,
-                    error_message=self.i18n.get('validation_invalid_format', '{param_name} has an invalid format').format(param_name=param_name),
+                    error_message=self.i18n.get('validation_invalid_format', '{param_name} has an invalid format').format(param_name=display_name),
                     error_code='INVALID_FORMAT'
                 )
         
@@ -669,6 +700,19 @@ class ValidationService:
                     allowed_values=", ".join(allowed_values)
                 ),
                 error_code='INVALID_SELECTION'
+            )
+        
+        return ValidationResult(is_valid=True)
+        
+    def _validate_ip_address(self, param_name: str, value: str) -> ValidationResult:
+        """Validate IP address format."""
+        ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        
+        if not re.match(ip_pattern, value):
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_ip', '{param_name} must be a valid IP address (e.g. 192.168.1.1)').format(param_name=param_name),
+                error_code='INVALID_IP'
             )
         
         return ValidationResult(is_valid=True)

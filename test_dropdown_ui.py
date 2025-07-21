@@ -136,10 +136,10 @@ class DropdownParameterTest(unittest.TestCase):
         
         # Test protocol type command
         command = self.device_command_mapper.get_command("protocol_type", "TCP")
-        self.assertEqual(command, "ATSMS:SZCS#GT06SEL=0#")
+        self.assertEqual(command, "ATSMS:CXCS#GT06SEL=0#")
         
         command = self.device_command_mapper.get_command("protocol_type", "UDP")
-        self.assertEqual(command, "ATSMS:SZCS#GT06SEL=1#")
+        self.assertEqual(command, "ATSMS:CXCS#GT06SEL=1#")
         
         # Test network type command
         command = self.device_command_mapper.get_command("network_type", "AUTO")

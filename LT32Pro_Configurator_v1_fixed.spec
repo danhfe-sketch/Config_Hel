@@ -8,6 +8,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
+        ('ui', 'ui'),
     ],
     hiddenimports=[
         'services.theme_service',
@@ -56,4 +57,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/icons/app_icon.ico'  # Using the newly created icon
 )

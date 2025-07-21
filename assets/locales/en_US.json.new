@@ -195,7 +195,7 @@
     "network_type": "Network Type:",
     "sleep_mode": "Sleep Mode:",
     "alert_type": "Alert Type:",
-    "gt06_protocol": "GT06 Protocol:",
+    "gt06_protocol": "Protocol:",
     "volte_switch": "VoLTE Switch:",
     "relay_state": "Relay State:",
     "power_alert_type": "Power Alert Type:",

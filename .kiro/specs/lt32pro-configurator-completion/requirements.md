@@ -12,9 +12,11 @@ This feature spec addresses the completion of the LT32Pro Device Configurator v1
 
 #### Acceptance Criteria
 
-1. WHEN I open the parameters section THEN the system SHALL display all parameter categories including Vibration, Timers, Sensitivity, Heart Beat, Curve Sensor, Lock Type, Ignition Type, and Protocol settings
+1. WHEN I open the parameters section THEN the system SHALL display all parameter categories including Vibration, Timers, Sensitivity, Heart Beat, Curve Sensor, Lock Type, Ignition Type, and Protocol settings, with the parameter column having the following sequence:
+   - APN configuration: APN server, user and password
+   - Main server configuration: URL/IP, port and protocol (options for the protocol are: GT06-0x60, GT06-0x12 or CRX3)
 2. WHEN I modify any numeric parameter THEN the system SHALL validate the input is within acceptable ranges and display appropriate error messages for invalid values
-3. WHEN I select dropdown options THEN the system SHALL provide all valid choices for Heart Beat intervals, Curve Sensor settings, and Protocol types
+3. WHEN I select dropdown options THEN the system SHALL provide all valid choices for Heart Beat intervals, Curve Sensor settings, and Protocol types (GT06-0x60, GT06-0x12 or CRX3)
 4. WHEN I configure radio button groups THEN the system SHALL allow selection of Lock Type (PIN/Card), Ignition Type (Digital/Analog), and Protocol options
 5. WHEN I click any parameter's "Enviar" button THEN the system SHALL send the appropriate AT command to the connected device
 
@@ -65,6 +67,20 @@ This feature spec addresses the completion of the LT32Pro Device Configurator v1
 4. WHEN I copy the log THEN the system SHALL copy all log content to the clipboard in a readable format
 
 ### Requirement 6
+
+**User Story:** As a technician, I want to read and display current device configurations from the RS232 connection, so that I can verify existing settings and make informed configuration changes.
+
+#### Acceptance Criteria
+
+1. WHEN I click "Checar configuração" or a similar read configuration button THEN the system SHALL send appropriate AT commands to query all current device parameters
+2. WHEN the device responds with configuration data THEN the system SHALL parse the responses and populate all corresponding UI parameter fields with the current device values
+3. WHEN configuration reading is in progress THEN the system SHALL display a progress indicator and disable parameter modification until the operation completes
+4. WHEN configuration reading fails THEN the system SHALL display specific error messages indicating which parameters could not be retrieved and maintain existing UI values
+5. WHEN configuration data is successfully retrieved THEN the system SHALL log the operation in the communication log with timestamps and parameter values
+6. WHEN retrieved values differ from UI values THEN the system SHALL clearly indicate which parameters have been updated from the device
+7. WHEN the device returns invalid or unexpected responses THEN the system SHALL handle errors gracefully and provide meaningful feedback to the user
+
+### Requirement 7
 
 **User Story:** As a technician, I want comprehensive input validation and user feedback, so that I can avoid configuration errors and understand system status clearly.
 

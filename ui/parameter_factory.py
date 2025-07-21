@@ -79,12 +79,24 @@ class BaseParameter(ABC):
                 if command_mapper:
                     command = command_mapper.get_command(self.definition.name, value)
                 else:
-                    # Fall back to the template if no command mapper is available
-                    command = self.definition.at_command_template.format(value=value)
+                    # Handle special cases for server parameters
+                    if self.definition.name in ['server_ip', 'server_port']:
+                        # Server parameters should not be sent individually
+                        # They are handled by the ServerParameterGroup
+                        self._show_error("Use the group 'Send' button to configure server settings")
+                        return
+                    else:
+                        # Fall back to the template if no command mapper is available
+                        command = self.definition.at_command_template.format(value=value)
                 
                 self.send_command_callback(command)
             except ValueError as e:
                 self._show_error(str(e))
+                return
+            except KeyError as e:
+                # Handle missing format keys
+                missing_key = str(e).strip("'")
+                self._show_error(f"Missing required parameter: {missing_key}")
                 return
     
     def _show_error(self, message: str) -> None:
@@ -110,17 +122,57 @@ class BaseParameter(ABC):
         if hasattr(self, 'param_label'):
             self.param_label.configure(text=self.i18n.get(self.definition.display_label, self.definition.display_label))
     
+    def add_update_indicator(self, value_changed: bool = True) -> None:
+        """
+        Add visual indicator to show this parameter was updated from device.
+        
+        Args:
+            value_changed: True if the value changed, False if it was the same
+        """
+        try:
+            if self.widget:
+                if value_changed:
+                    # Green border for changed values
+                    original_border_color = self.widget.cget("border_color")
+                    self.widget.configure(border_color="#00ff00", border_width=2)
+                    
+                    # Schedule removal after 3 seconds
+                    if hasattr(self, '_master_widget'):
+                        self._master_widget.after(3000, lambda: self._remove_update_indicator(original_border_color))
+                else:
+                    # Blue border for unchanged values
+                    original_border_color = self.widget.cget("border_color")
+                    self.widget.configure(border_color="#0066cc", border_width=1)
+                    
+                    # Schedule removal after 2 seconds
+                    if hasattr(self, '_master_widget'):
+                        self._master_widget.after(2000, lambda: self._remove_update_indicator(original_border_color))
+                        
+        except Exception as e:
+            print(f"WARNING: Failed to add update indicator: {str(e)}")
+    
+    def _remove_update_indicator(self, original_border_color) -> None:
+        """Remove the visual update indicator."""
+        try:
+            if self.widget:
+                self.widget.configure(border_color=original_border_color, border_width=0)
+        except Exception as e:
+            print(f"WARNING: Failed to remove update indicator: {str(e)}")
+    
     def _create_base_frame(self, parent) -> ctk.CTkFrame:
         """Create the base frame with label, input, and send button."""
         frame = ctk.CTkFrame(parent)
         frame.grid_columnconfigure(1, weight=1)  # Make input column expandable
+        
+        # Store reference to master widget for scheduling callbacks
+        self._master_widget = parent
         
         # Parameter label - store reference for language updates
         self.param_label = ctk.CTkLabel(frame, text=self.i18n.get(self.definition.display_label, self.definition.display_label))
         self.param_label.grid(row=0, column=0, padx=10, pady=5, sticky="w")
         
         # Error label (initially empty)
-        self.error_label = ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=10))
+        self.error_label = ctk.CTkLabel(frame, text="", text_color="red", font=ctk.CTkFont(size=10))
         self.error_label.grid(row=2, column=0, columnspan=3, padx=10, pady=(0, 5), sticky="w")
         
         return frame
@@ -142,16 +194,17 @@ class NumericParameter(BaseParameter):
             self.widget.insert(0, str(self.definition.default_value))
         
         # Send button
-        self.send_button = ctk.CTkButton(
-            frame, 
-            text=self.i18n.get("send", "Send"), 
-            width=60, 
-            command=self.send_command
-        )
-        self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
+        # self.send_button = ctk.CTkButton(
+        #     frame, 
+        #     text=self.i18n.get("send", "Send"), 
+        #     width=60, 
+        #     command=self.send_command
+        # )
+        # self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
         
-        # Add validation on focus out
+        # Add validation on focus out and key release
         self.widget.bind("<FocusOut>", self._on_focus_out)
+        self.widget.bind("<KeyRelease>", self._on_key_release)
         
         return frame
     
@@ -186,6 +239,99 @@ class NumericParameter(BaseParameter):
             self._show_error(validation_result.error_message)
         else:
             self._clear_error()
+            
+    def _on_key_release(self, event) -> None:
+        """Validate on key release."""
+        # Only validate if the field is not empty
+        text = self.widget.get().strip()
+        if text:
+            # For numeric parameters, check if the input is a valid number
+            try:
+                # Try to convert to int or float based on the validation rules
+                if self.definition.validation_rules.get('integer', True):
+                    int(text)
+                else:
+                    float(text)
+            except ValueError:
+                # If conversion fails, show an error message
+                display_name = self.i18n.get(self.definition.display_label, self.definition.display_label)
+                error_message = self.i18n.get('validation_numeric_required', '{param_name} must be a numeric value').format(param_name=display_name)
+                self._show_error(error_message)
+                return
+            
+            # Perform regular validation
+            validation_result = self.validate()
+            if not validation_result.is_valid:
+                self._show_error(validation_result.error_message)
+            else:
+                self._clear_error()
+
+
+class TextParameter(BaseParameter):
+    """Text parameter with entry field."""
+    
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create text input widget with validation."""
+        frame = self._create_base_frame(parent)
+        
+        # Entry field
+        self.widget = ctk.CTkEntry(frame, width=150)
+        self.widget.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        # Set default value if provided
+        if self.definition.default_value is not None:
+            self.widget.insert(0, str(self.definition.default_value))
+        
+        # Send button
+        # self.send_button = ctk.CTkButton(
+        #     frame, 
+        #     text=self.i18n.get("send", "Send"), 
+        #     width=60, 
+        #     command=self.send_command
+        # )
+        # self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
+        
+        # Add validation on focus out and key release
+        self.widget.bind("<FocusOut>", self._on_focus_out)
+        self.widget.bind("<KeyRelease>", self._on_key_release)
+        
+        return frame
+    
+    def get_value(self) -> Optional[str]:
+        """Get text value from entry field."""
+        if not self.widget:
+            return None
+        
+        text = self.widget.get().strip()
+        if not text:
+            return None
+        
+        return text
+    
+    def set_value(self, value: Any) -> None:
+        """Set text value in entry field."""
+        if self.widget:
+            self.widget.delete(0, ctk.END)
+            if value is not None:
+                self.widget.insert(0, str(value))
+    
+    def _on_focus_out(self, event) -> None:
+        """Validate on focus out."""
+        validation_result = self.validate()
+        if not validation_result.is_valid:
+            self._show_error(validation_result.error_message)
+        else:
+            self._clear_error()
+            
+    def _on_key_release(self, event) -> None:
+        """Validate on key release."""
+        # Only validate if the field is not empty
+        if self.widget.get().strip():
+            validation_result = self.validate()
+            if not validation_result.is_valid:
+                self._show_error(validation_result.error_message)
+            else:
+                self._clear_error()
 
 
 class DropdownParameter(BaseParameter):
@@ -241,17 +387,8 @@ class RadioParameter(BaseParameter):
     def __init__(self, definition: ParameterDefinition, validation_service: ValidationService, 
                  i18n_service, send_command_callback: Callable[[str], None]):
         super().__init__(definition, validation_service, i18n_service, send_command_callback)
-        
-        # Store the current value until widget is created
         self.radio_var = None
-        self._current_value = None
-        
-        # Set default value
-        allowed_values = self.definition.validation_rules.get('allowed_values', [])
-        if self.definition.default_value is not None and self.definition.default_value in allowed_values:
-            self._current_value = self.definition.default_value
-        elif allowed_values:
-            self._current_value = allowed_values[0]
+        self.radio_buttons = []
     
     def create_widget(self, parent) -> ctk.CTkFrame:
         """Create radio button group widget."""
@@ -260,42 +397,26 @@ class RadioParameter(BaseParameter):
         # Get allowed values from validation rules
         allowed_values = self.definition.validation_rules.get('allowed_values', [])
         
-        # Create radio variable now that we have a parent window
-        self.radio_var = ctk.StringVar()
+        # Create radio button variable
+        self.radio_var = ctk.StringVar(value=allowed_values[0] if allowed_values else "")
         
-        # Set the current value if we have one stored
-        if self._current_value is not None:
-            self.radio_var.set(self._current_value)
-        elif allowed_values:
-            self.radio_var.set(allowed_values[0])
-            self._current_value = allowed_values[0]
-        
-        # Create radio buttons with responsive layout
+        # Create radio buttons in a horizontal layout
         radio_frame = ctk.CTkFrame(frame)
         radio_frame.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        # Make radio frame expandable
-        radio_frame.grid_columnconfigure(0, weight=1)
-        
-        # Create a container for radio buttons that can wrap if needed
-        radio_container = ctk.CTkFrame(radio_frame, fg_color="transparent")
-        radio_container.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
-        
-        # Configure columns with flexible sizing - reduce minsize for better responsiveness
-        for i in range(len(allowed_values)):
-            radio_container.grid_columnconfigure(i, weight=1, minsize=60)
-        
-        self.radio_buttons = []
         for i, value in enumerate(allowed_values):
-            radio_btn = ctk.CTkRadioButton(
-                radio_container, 
-                text=self.i18n.get(value.lower(), value), 
-                variable=self.radio_var, 
-                value=value,
-                command=self._on_radio_change
+            radio_button = ctk.CTkRadioButton(
+                radio_frame,
+                text=self.i18n.get(value.lower(), value),
+                variable=self.radio_var,
+                value=value
             )
-            radio_btn.grid(row=0, column=i, padx=3, pady=5, sticky="w")
-            self.radio_buttons.append(radio_btn)
+            radio_button.grid(row=0, column=i, padx=5, pady=5, sticky="w")
+            self.radio_buttons.append(radio_button)
+        
+        # Set default value if provided
+        if self.definition.default_value is not None and self.definition.default_value in allowed_values:
+            self.radio_var.set(self.definition.default_value)
         
         # Send button
         self.send_button = ctk.CTkButton(
@@ -310,35 +431,23 @@ class RadioParameter(BaseParameter):
     
     def get_value(self) -> Optional[str]:
         """Get selected radio button value."""
-        if hasattr(self, 'radio_var') and self.radio_var is not None:
-            return self.radio_var.get()
-        return self._current_value
+        if not self.radio_var:
+            return None
+        return self.radio_var.get()
     
     def set_value(self, value: Any) -> None:
         """Set selected radio button value."""
-        if value is not None:
-            str_value = str(value)
-            self._current_value = str_value
-            if hasattr(self, 'radio_var') and self.radio_var is not None:
-                self.radio_var.set(str_value)
-    
-    def _on_radio_change(self) -> None:
-        """Handle radio button selection change."""
-        # Clear any previous error when user makes a selection
-        self._clear_error()
-        # Optional: You can add additional logic here if needed
-        # For example, auto-validation or immediate feedback
+        if self.radio_var and value is not None:
+            self.radio_var.set(str(value))
     
     def update_language_display(self, i18n_service) -> None:
-        """Update the radio parameter widget's language display."""
-        # Call parent method to update common elements
+        """Update radio button labels for language changes."""
         super().update_language_display(i18n_service)
         
         # Update radio button text
-        if hasattr(self, 'radio_buttons'):
-            allowed_values = self.definition.validation_rules.get('allowed_values', [])
-            for i, (radio_btn, value) in enumerate(zip(self.radio_buttons, allowed_values)):
-                radio_btn.configure(text=self.i18n.get(value.lower(), value))
+        allowed_values = self.definition.validation_rules.get('allowed_values', [])
+        for i, (button, value) in enumerate(zip(self.radio_buttons, allowed_values)):
+            button.configure(text=self.i18n.get(value.lower(), value))
 
 
 class ParameterGroup:
@@ -410,178 +519,265 @@ class ParameterGroup:
                 parameter.update_language_display(i18n_service)
 
 
+class ServerParameterGroup(ParameterGroup):
+    """A special parameter group for server settings that includes a single send button."""
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create the group frame with all parameters and a single send button."""
+        super().create_widget(parent)
+
+        # Add a single send button for the entire group
+        send_button = ctk.CTkButton(
+            self.frame, 
+            text=self.i18n.get("send", "Send"), 
+            width=60, 
+            command=self.send_group_command
+        )
+        send_button.grid(row=len(self.parameters) + 1, column=0, padx=10, pady=10, sticky="ew")
+
+        return self.frame
+
+    def send_group_command(self) -> None:
+        """Validate and send combined server command with IP and port."""
+        all_valid = True
+        server_ip = None
+        server_port = None
+        
+        # Validate all parameters and collect values
+        for parameter in self.parameters:
+            validation_result = parameter.validate()
+            if not validation_result.is_valid:
+                all_valid = False
+                parameter._show_error(validation_result.error_message)
+            else:
+                parameter._clear_error()
+                # Collect parameter values
+                if parameter.definition.name == 'server_ip':
+                    server_ip = parameter.get_value()
+                elif parameter.definition.name == 'server_port':
+                    server_port = parameter.get_value()
+
+        if all_valid and server_ip and server_port:
+            # Send combined server command with both IP and port
+            # Format: ATSMS:SERVER,0,IP,PORT,0#
+            combined_command = f"ATSMS:SERVER,0,{server_ip},{server_port},0#"
+            
+            # Use the send command callback from the first parameter
+            if self.parameters:
+                self.parameters[0].send_command_callback(combined_command)
+                
+            # Log success message
+            if hasattr(self.parameters[0], '_log_success'):
+                self.parameters[0]._log_success(f"Server configuration sent: {server_ip}:{server_port}")
+        elif all_valid:
+            # Show error if missing values
+            error_msg = "Both server IP and port are required"
+            for parameter in self.parameters:
+                parameter._show_error(error_msg)
+
+
 class ParameterFactory:
-    """Factory for creating parameter widgets with consistent interfaces."""
+    """Factory class for creating parameter instances based on definitions."""
     
     def __init__(self, validation_service: ValidationService, i18n_service, 
                  send_command_callback: Callable[[str], None]):
         self.validation_service = validation_service
-        self.i18n = i18n_service
+        self.i18n_service = i18n_service
         self.send_command_callback = send_command_callback
-        self.groups: Dict[str, ParameterGroup] = {}
         self.command_mapper = DeviceCommandMapper()
-        self._init_parameter_definitions()
+        self.parameter_definitions = self._init_parameter_definitions()
     
-    def _init_parameter_definitions(self) -> None:
-        """Initialize parameter definitions based on validation rules."""
-        # Get command templates from the command mapper
-        cmd_templates = {}
-        for param_name in self.command_mapper.command_templates:
-            template = self.command_mapper.command_prefix + self.command_mapper.command_templates[param_name]
-            cmd_templates[param_name] = template
-        
-        self.parameter_definitions = {
-            # Numeric parameters
-            'vibration': ParameterDefinition(
-                name='vibration',
-                param_type='numeric',
-                display_label='vibration_level',
-                help_text='Set vibration sensitivity level (0-255)',
-                at_command_template=cmd_templates.get('vibration', 'ATSMS:SZCS#VIBL={value}#'),
-                validation_rules=self.validation_service.get_parameter_info('vibration') or {},
-                group='sensors',
-                default_value=128
-            ),
-            'sensitivity': ParameterDefinition(
-                name='sensitivity',
-                param_type='numeric',
-                display_label='sensitivity_level',
-                help_text='Set movement sensitivity level (1-10)',
-                at_command_template=cmd_templates.get('sensitivity', 'ATSMS:SZCS#SENSITIVITY={value}#'),
-                validation_rules=self.validation_service.get_parameter_info('sensitivity') or {},
-                group='sensors',
-                default_value=5
-            ),
-            'timer_ign_on': ParameterDefinition(
-                name='timer_ign_on',
-                param_type='numeric',
-                display_label='timer_ignition_on',
-                help_text='Reporting interval when ignition is ON (1-65500 seconds)',
-                at_command_template=cmd_templates.get('timer_ign_on', 'ATSMS:TIMER,{value},#'),
-                validation_rules=self.validation_service.get_parameter_info('timer_ign_on') or {},
-                group='timers',
-                default_value=30
-            ),
-            'timer_ign_off': ParameterDefinition(
-                name='timer_ign_off',
-                param_type='numeric',
-                display_label='timer_ignition_off',
-                help_text='Reporting interval when ignition is OFF (1-65500 seconds)',
-                at_command_template=cmd_templates.get('timer_ign_off', 'ATSMS:TIMER,,{value}#'),
-                validation_rules=self.validation_service.get_parameter_info('timer_ign_off') or {},
-                group='timers',
-                default_value=300
-            ),
-            'heartbeat_ign_on': ParameterDefinition(
-                name='heartbeat_ign_on',
-                param_type='numeric',
-                display_label='heartbeat_ignition_on',
-                help_text='Heartbeat interval when ignition is ON (60-300 seconds)',
-                at_command_template=cmd_templates.get('heartbeat_ign_on', 'ATSMS:HBT,{value},#'),
-                validation_rules=self.validation_service.get_parameter_info('heartbeat_ign_on') or {},
-                group='timers',
-                default_value=60
-            ),
-            'heartbeat_ign_off': ParameterDefinition(
-                name='heartbeat_ign_off',
-                param_type='numeric',
-                display_label='heartbeat_ignition_off',
-                help_text='Heartbeat interval when ignition is OFF (60-300 seconds)',
-                at_command_template=cmd_templates.get('heartbeat_ign_off', 'ATSMS:HBT,,{value}#'),
-                validation_rules=self.validation_service.get_parameter_info('heartbeat_ign_off') or {},
-                group='timers',
-                default_value=300
-            ),
-            
-            # Dropdown parameters
-            'heartbeat_interval': ParameterDefinition(
-                name='heartbeat_interval',
-                param_type='dropdown',
-                display_label='heartbeat_interval',
-                help_text='Select heartbeat reporting interval',
-                at_command_template=cmd_templates.get('heartbeat_interval', 'ATSMS:HBT,{value}#'),
-                validation_rules=self.validation_service.get_parameter_info('heartbeat_interval') or {},
-                group='timers',
-                default_value='1min'
-            ),
-            'curve_sensor': ParameterDefinition(
-                name='curve_sensor',
-                param_type='dropdown',
-                display_label='curve_sensor',
-                help_text='Configure curve sensor behavior',
-                at_command_template=cmd_templates.get('curve_sensor', 'ATSMS:SZCS#CURVE={value}#'),
-                validation_rules=self.validation_service.get_parameter_info('curve_sensor') or {},
-                group='sensors',
-                default_value='Auto'
-            ),
-            
-            # Radio button parameters
-            'lock_type': ParameterDefinition(
-                name='lock_type',
-                param_type='radio',
-                display_label='lock_type',
-                help_text='Select device lock type',
-                at_command_template=cmd_templates.get('lock_type', 'ATSMS:SZCS#LOCKTYPE={value}#'),
-                validation_rules=self.validation_service.get_parameter_info('lock_type') or {},
-                group='security',
-                default_value='PIN'
-            ),
-            'ignition_type': ParameterDefinition(
-                name='ignition_type',
-                param_type='radio',
-                display_label='ignition_type',
-                help_text='Select ignition detection type',
-                at_command_template=cmd_templates.get('ignition_type', 'ATSMS:SZCS#ACCLINE={value}#'),
-                validation_rules=self.validation_service.get_parameter_info('ignition_type') or {},
-                group='sensors',
-                default_value='Digital'
-            ),
-            'transmission_mode': ParameterDefinition(
-                name='transmission_mode',
-                param_type='radio',
-                display_label='transmission_mode',
-                help_text='Select data transmission protocol',
-                at_command_template=cmd_templates.get('transmission_mode', 'ATSMS:SZCS#PROTOCOL={value}#'),
-                validation_rules=self.validation_service.get_parameter_info('transmission_mode') or {},
-                group='communication',
-                default_value='TCP'
-            )
+    def _create_parameter_from_definition(self, definition: ParameterDefinition) -> BaseParameter:
+        """Create a parameter instance based on its definition."""
+        parameter_classes = {
+            'numeric': NumericParameter,
+            'text': TextParameter,
+            'dropdown': DropdownParameter,
+            'radio': RadioParameter
         }
-    
-    def create_parameter(self, param_name: str) -> Optional[BaseParameter]:
-        """Create a parameter widget by name."""
-        if param_name not in self.parameter_definitions:
-            return None
         
-        definition = self.parameter_definitions[param_name]
+        parameter_class = parameter_classes.get(definition.param_type)
+        if not parameter_class:
+            raise ValueError(f"Unknown parameter type: {definition.param_type}")
         
-        if definition.param_type == 'numeric':
-            return NumericParameter(definition, self.validation_service, self.i18n, self.send_command_callback)
-        elif definition.param_type == 'dropdown':
-            return DropdownParameter(definition, self.validation_service, self.i18n, self.send_command_callback)
-        elif definition.param_type == 'radio':
-            return RadioParameter(definition, self.validation_service, self.i18n, self.send_command_callback)
+        parameter = parameter_class(
+            definition, 
+            self.validation_service, 
+            self.i18n_service, 
+            self.send_command_callback
+        )
         
-        return None
+        # Inject command mapper for parameters that need it
+        parameter.command_mapper = self.command_mapper
+        
+        return parameter
     
-    def create_group(self, group_name: str, display_label: str) -> ParameterGroup:
-        """Create or get a parameter group."""
-        if group_name not in self.groups:
-            self.groups[group_name] = ParameterGroup(group_name, display_label, self.i18n)
-        return self.groups[group_name]
+    def create_group(self, name: str, display_label: str, 
+                    parameter_definitions: Optional[List[ParameterDefinition]] = None) -> ParameterGroup:
+        """Create a parameter group with optional parameters."""
+        if name == "server":
+            group = ServerParameterGroup(name, display_label, self.i18n_service)
+        else:
+            group = ParameterGroup(name, display_label, self.i18n_service)
+        
+        if parameter_definitions:
+            for definition in parameter_definitions:
+                parameter = self.create_parameter(definition)
+                group.add_parameter(parameter)
+        
+        return group
     
-    def get_group(self, group_name: str) -> Optional[ParameterGroup]:
-        """Get an existing parameter group."""
-        return self.groups.get(group_name)
-    
-    def get_all_groups(self) -> Dict[str, ParameterGroup]:
-        """Get all parameter groups."""
-        return self.groups.copy()
+    def _init_parameter_definitions(self) -> Dict[str, ParameterDefinition]:
+        """Initialize parameter definitions from validation rules and command templates."""
+        definitions = {}
+        
+        # Define parameter configurations with their UI properties
+        param_configs = {
+            'server_ip': {
+                'param_type': 'text',
+                'display_label': 'server_url_ip',
+                'help_text': 'Enter server URL or IP address',
+                'at_command_template': 'ATSMS:SERVER,0,{value},{port},0#',  # Requires port context
+                'group': 'server'
+            },
+            'server_port': {
+                'param_type': 'numeric',
+                'display_label': 'server_port',
+                'help_text': 'Enter server port number',
+                'at_command_template': 'ATSMS:SERVER,0,{ip},{value},0#',  # Requires ip context
+                'group': 'server'
+            },
+            'gt06_protocol': {
+                'param_type': 'dropdown',
+                'display_label': 'gt06_protocol',
+                'help_text': 'Select GT06 protocol version',
+                'at_command_template': 'ATSMS:PROTOCOL,{value}#',
+                'group': 'protocol'
+            },
+            'tcp_ack_config': {
+                'param_type': 'radio',
+                'display_label': 'tcp_ack_config',
+                'help_text': 'Configure TCP+ACK response',
+                'at_command_template': 'ATSMS:TCPACK,{value}#',
+                'group': 'protocol'
+            },
+            'vibration': {
+                'param_type': 'numeric',
+                'display_label': 'vibration',
+                'help_text': 'Set vibration sensitivity (0-255)',
+                'at_command_template': 'ATSMS:VIBRATION,{value}#',
+                'group': 'sensors'
+            },
+            'sensitivity': {
+                'param_type': 'numeric',
+                'display_label': 'sensitivity',
+                'help_text': 'Set sensitivity level (1-10)',
+                'at_command_template': 'ATSMS:SENSITIVITY,{value}#',
+                'group': 'sensors'
+            },
+            'curve_sensor': {
+                'param_type': 'dropdown',
+                'display_label': 'curve_sensor',
+                'help_text': 'Select curve sensor mode',
+                'at_command_template': 'ATSMS:CURVE,{value}#',
+                'group': 'sensors'
+            },
+            'ignition_type': {
+                'param_type': 'radio',
+                'display_label': 'ignition_type',
+                'help_text': 'Select ignition detection type',
+                'at_command_template': 'ATSMS:IGNITION,{value}#',
+                'group': 'sensors'
+            },
+            'timer_ign_on': {
+                'param_type': 'numeric',
+                'display_label': 'timer_ign_on',
+                'help_text': 'Timer when ignition is on (seconds)',
+                'at_command_template': 'ATSMS:TIMER,ON,{value}#',
+                'group': 'timers'
+            },
+            'timer_ign_off': {
+                'param_type': 'numeric',
+                'display_label': 'timer_ign_off',
+                'help_text': 'Timer when ignition is off (seconds)',
+                'at_command_template': 'ATSMS:TIMER,OFF,{value}#',
+                'group': 'timers'
+            },
+            'heartbeat_ign_on': {
+                'param_type': 'numeric',
+                'display_label': 'heartbeat_ign_on',
+                'help_text': 'Heartbeat interval when ignition is on (seconds)',
+                'at_command_template': 'ATSMS:HEARTBEAT,ON,{value}#',
+                'group': 'timers'
+            },
+            'heartbeat_ign_off': {
+                'param_type': 'numeric',
+                'display_label': 'heartbeat_ign_off',
+                'help_text': 'Heartbeat interval when ignition is off (seconds)',
+                'at_command_template': 'ATSMS:HEARTBEAT,OFF,{value}#',
+                'group': 'timers'
+            },
+            'heartbeat_interval': {
+                'param_type': 'dropdown',
+                'display_label': 'heartbeat_interval',
+                'help_text': 'Select heartbeat interval',
+                'at_command_template': 'ATSMS:HEARTBEAT,{value}#',
+                'group': 'timers'
+            },
+            'lock_type': {
+                'param_type': 'radio',
+                'display_label': 'lock_type',
+                'help_text': 'Select lock type',
+                'at_command_template': 'ATSMS:LOCK,{value}#',
+                'group': 'security'
+            }
+        }
+        
+        # Create ParameterDefinition objects
+        for param_name, config in param_configs.items():
+            # Get validation rules from validation service
+            validation_rules = self.validation_service.validation_rules.get(param_name, {})
+            
+            # Create parameter definition
+            definitions[param_name] = ParameterDefinition(
+                name=param_name,
+                param_type=config['param_type'],
+                display_label=config['display_label'],
+                help_text=config['help_text'],
+                at_command_template=config['at_command_template'],
+                validation_rules=validation_rules,
+                group=config['group']
+            )
+        
+        return definitions
     
     def get_parameter_definition(self, param_name: str) -> Optional[ParameterDefinition]:
         """Get parameter definition by name."""
         return self.parameter_definitions.get(param_name)
     
-    def get_all_parameter_names(self) -> List[str]:
-        """Get all available parameter names."""
-        return list(self.parameter_definitions.keys())
+    def create_parameter(self, param_name: str) -> Optional[BaseParameter]:
+        """Create a parameter instance by name."""
+        definition = self.get_parameter_definition(param_name)
+        if not definition:
+            return None
+        
+        return self._create_parameter_from_definition(definition)
+    
+    def get_all_groups(self) -> List[str]:
+        """Get all unique group names from parameter definitions."""
+        groups = set()
+        for definition in self.parameter_definitions.values():
+            groups.add(definition.group)
+        return sorted(list(groups))
+    
+    def get_parameters_by_group(self, group_name: str) -> List[str]:
+        """Get all parameter names that belong to a specific group."""
+        parameters = []
+        for param_name, definition in self.parameter_definitions.items():
+            if definition.group == group_name:
+                parameters.append(param_name)
+        return parameters
+
+
+
+
+

@@ -6,6 +6,7 @@ import re
 import queue
 from typing import Dict, Any, List, Optional, Callable
 import datetime
+from services.configuration_reader_service import ConfigurationReaderService
 
 class SerialService:
     """Handles all serial communication in a separate thread."""
@@ -18,7 +19,8 @@ class SerialService:
         self.stop_thread = False
         self.device_info = {
             'imei': None,
-            'iccid': None
+            'iccid': None,
+            'version': None
         }
         self.response_buffer = []
         self.waiting_for_response = False
@@ -37,6 +39,14 @@ class SerialService:
         self.connection_monitor_thread = None
         self.stop_monitor = False
         self.connection_timeout = 30  # seconds without activity before checking connection
+        
+        # Configuration reader service
+        self.configuration_reader = None
+
+    def initialize_configuration_reader(self):
+        """Initialize the configuration reader service with i18n support."""
+        if hasattr(self.app, 'i18n') and self.configuration_reader is None:
+            self.configuration_reader = ConfigurationReaderService(self.app, self.app.i18n)
 
     @staticmethod
     def list_com_ports():
@@ -44,7 +54,7 @@ class SerialService:
         ports = serial.tools.list_ports.comports()
         return [port.device for port in ports] if ports else ["N/A"]
 
-    def connect(self, port, baudrate=9600):
+    def connect(self, port, baudrate=115200):
         """Connects to the specified serial port."""
         if self.is_connected:
             self.disconnect()
@@ -57,7 +67,8 @@ class SerialService:
             # Reset device info when connecting
             self.device_info = {
                 'imei': None,
-                'iccid': None
+                'iccid': None,
+                'version': None
             }
             
             # Initialize connection monitoring
@@ -182,7 +193,7 @@ class SerialService:
             command_type: Optional type of command for response processing
         """
         if self.is_connected and self.serial_port:
-            encoded_command = f"{command}\r".encode('utf-8')
+            encoded_command = f"{command}\r\n".encode('utf-8')
             self.app.log_frame.log_message(f"DEBUG: Sending bytes: {encoded_command!r}\n")
             self.serial_port.write(encoded_command)
             self.app.log_frame.log_message(f"APP: {command}\n")
@@ -198,139 +209,43 @@ class SerialService:
         Args:
             response: The response string from the device
         """
+        # Notify ConfigurationReaderService if it's waiting for a response
+        if hasattr(self.app, 'configuration_reader_service'):
+            self.app.configuration_reader_service.capture_device_response(response)
         # Store the current command type for processing
         command_type = self.current_command_type
         
         # Parse the response using the device command mapper if available
-        parsed_data = {}
         if hasattr(self.app, 'device_command_mapper') and command_type:
             try:
                 parsed_data = self.app.device_command_mapper.parse_device_response(response, command_type)
-                
+
                 # Store results for bulk operations
                 if self.queue_processing and parsed_data:
                     # Merge with existing results
                     self.queue_results.update(parsed_data)
+                    self.app.log_frame.log_message(f"INFO: Parsed data: {parsed_data}\n")
+
+                # Handle specific UI updates for IMEI, ICCID, and version
+                if 'imei' in parsed_data:
+                    self.device_info['imei'] = parsed_data['imei']
+                    self.app.after(0, self.update_device_info)
+                if 'iccid' in parsed_data:
+                    self.device_info['iccid'] = parsed_data['iccid']
+                    self.app.after(0, self.update_device_info)
+                if 'version' in parsed_data:
+                    self.device_info['version'] = parsed_data['version']
+                    self.app.after(0, self.update_device_info)
+
             except Exception as e:
                 self.app.log_frame.log_message(f"ERROR: Failed to parse response: {str(e)}\n")
         
-        # Check for IMEI information
-        if command_type == 'get_imei' or 'IMEI' in response:
-            imei_match = re.search(r'IMEI[=:]\s*(\d+)', response)
-            if imei_match:
-                self.device_info['imei'] = imei_match.group(1)
-                self.app.after(0, self.update_device_info)
-                self.app.log_frame.log_message(f"INFO: IMEI detected: {self.device_info['imei']}\n")
-        
-        # Check for ICCID information
-        elif command_type == 'get_iccid' or 'ICCID' in response:
-            iccid_match = re.search(r'ICCID[=:]\s*(\d+)', response)
-            if iccid_match:
-                self.device_info['iccid'] = iccid_match.group(1)
-                self.app.after(0, self.update_device_info)
-                self.app.log_frame.log_message(f"INFO: ICCID detected: {self.device_info['iccid']}\n")
-        
-        # Process APN responses
-        elif 'APN:' in response:
-            # Example: "APN:cmnet,,"
-            parts = response.replace('APN:', '').split(',')
-            if len(parts) >= 1:
-                server = parts[0].strip()
-                if server:
-                    self.queue_results['apn_server'] = server
-                    self.app.log_frame.log_message(f"INFO: APN server detected: {server}\n")
-            if len(parts) >= 2:
-                user = parts[1].strip()
-                if user:
-                    self.queue_results['apn_user'] = user
-                    self.app.log_frame.log_message(f"INFO: APN user detected: {user}\n")
-            if len(parts) >= 3:
-                password = parts[2].strip().rstrip('#')
-                if password:
-                    self.queue_results['apn_password'] = password
-                    self.app.log_frame.log_message(f"INFO: APN password detected\n")
-        
-        # Process SERVER responses
-        elif 'SERVER:' in response:
-            # Example: "SERVER:0,58.61.154.247,7018,0"
-            parts = response.replace('SERVER:', '').split(',')
-            if len(parts) >= 4:
-                server_type = parts[0].strip()  # 0 for IP, 1 for domain
-                address = parts[1].strip()
-                port = parts[2].strip()
-                protocol = parts[3].strip()  # 0 for TCP
-                
-                if server_type == '0':  # IP address
-                    self.queue_results['server_ip'] = address
-                    self.app.log_frame.log_message(f"INFO: Server IP detected: {address}\n")
-                elif server_type == '1':  # Domain
-                    self.queue_results['server_domain'] = address
-                    self.app.log_frame.log_message(f"INFO: Server domain detected: {address}\n")
-                
-                self.queue_results['server_port'] = port
-                self.app.log_frame.log_message(f"INFO: Server port detected: {port}\n")
-                
-                if protocol == '0':
-                    self.queue_results['transmission_mode'] = 'TCP'
-                elif protocol == '1':
-                    self.queue_results['transmission_mode'] = 'UDP'
-        
-        # Process TIMER responses
-        elif 'TIMER ACC ON:' in response:
-            # Example: "TIMER ACC ON:30s,ACC OFF:300s"
-            match = re.search(r'TIMER ACC ON:(\d+)s,ACC OFF:(\d+)s', response)
-            if match:
-                timer_on = match.group(1)
-                timer_off = match.group(2)
-                self.queue_results['timer_ign_on'] = timer_on
-                self.queue_results['timer_ign_off'] = timer_off
-                self.app.log_frame.log_message(f"INFO: Timer settings detected: ON={timer_on}s, OFF={timer_off}s\n")
-        
-        # Process HBT (Heartbeat) responses
-        elif 'HBT ACC ON:' in response:
-            # Example: "HBT ACC ON:180s,ACC OFF:180s"
-            match = re.search(r'HBT ACC ON:(\d+)s,ACC OFF:(\d+)s', response)
-            if match:
-                hbt_on = match.group(1)
-                hbt_off = match.group(2)
-                self.queue_results['heartbeat_ign_on'] = hbt_on
-                self.queue_results['heartbeat_ign_off'] = hbt_off
-                self.app.log_frame.log_message(f"INFO: Heartbeat settings detected: ON={hbt_on}s, OFF={hbt_off}s\n")
-        
-        # Process DEFENSE responses
-        elif 'DEFENSE:' in response:
-            # Example: "DEFENSE:3"
-            match = re.search(r'DEFENSE:(\d+)', response)
-            if match:
-                defense_time = match.group(1)
-                self.queue_results['defense_time'] = defense_time
-                self.app.log_frame.log_message(f"INFO: Defense time detected: {defense_time}\n")
-        
-        # Process parameter responses
-        elif 'PARAM:' in response or 'READOK:' in response:
-            # Process various parameter responses
-            # This is a simplified approach; in a real implementation, we would parse each parameter
-            self.app.log_frame.log_message(f"INFO: Parameter data received, processing...\n")
-            
-            # Extract parameter values using regex patterns
-            param_patterns = {
-                'vibration': r'VIBL[=:](\d+)',
-                'sensitivity': r'SENSITIVITY[=:](\d+)',
-                'curve_sensor': r'CURVE[=:](\d+)',
-                'ignition_type': r'ACCLINE[=:](\d+)',
-                'lock_type': r'LOCKTYPE[=:](\d+)',
-                'protocol': r'GT06SEL[=:](\d+)',
-                'network_select': r'NETSELECT[=:](\d+)',
-                'sleep_mode': r'SLPDISCONNECT[=:](\d+)',
-                'sleep_time': r'SLEEPT[=:](\d+)'
-            }
-            
-            for param, pattern in param_patterns.items():
-                match = re.search(pattern, response)
-                if match:
-                    value = match.group(1)
-                    self.queue_results[param] = value
-                    self.app.log_frame.log_message(f"INFO: {param} value detected: {value}\n")
+        # Forward response to configuration reader if it's waiting for responses
+        if self.configuration_reader and hasattr(self.configuration_reader, 'capture_device_response'):
+            try:
+                self.configuration_reader.capture_device_response(response)
+            except Exception as e:
+                self.app.log_frame.log_message(f"WARNING: Failed to forward response to configuration reader: {str(e)}\n")
         
         # Reset command type after processing
         self.current_command_type = None
@@ -340,9 +255,11 @@ class SerialService:
         """Update the UI with device information."""
         if hasattr(self.app, 'connection_frame'):
             if self.device_info['imei']:
-                self.app.connection_frame.imei_value_label.configure(text=self.device_info['imei'])
+                self.app.connection_frame.imei_value_var.set(self.device_info['imei'])
             if self.device_info['iccid']:
-                self.app.connection_frame.iccid_value_label.configure(text=self.device_info['iccid'])
+                self.app.connection_frame.iccid_value_var.set(self.device_info['iccid'])
+            if self.device_info['version']:
+                self.app.connection_frame.version_value_var.set(self.device_info['version'])
     
     def retrieve_device_info(self):
         """
@@ -368,6 +285,15 @@ class SerialService:
         if self.is_connected and hasattr(self.app, 'device_command_mapper'):
             iccid_cmd = self.app.device_command_mapper.get_command('get_iccid', None)
             self.send_command(iccid_cmd, 'get_iccid')
+            
+            # Schedule the version command to run after ICCID
+            self.app.after(500, self._send_version_command)
+            
+    def _send_version_command(self):
+        """Helper method to send version command after ICCID."""
+        if self.is_connected and hasattr(self.app, 'device_command_mapper'):
+            version_cmd = self.app.device_command_mapper.get_command('get_version', None)
+            self.send_command(version_cmd, 'get_version')
             
     def queue_command(self, command: str, command_type: str = None) -> None:
         """
@@ -586,30 +512,36 @@ class SerialService:
         if not self.is_connected:
             self.app.log_frame.log_message("ERROR: Not connected to device\n")
             return
-            
-        if not hasattr(self.app, 'device_command_mapper'):
-            self.app.log_frame.log_message("ERROR: Device command mapper not available\n")
+        
+        # Initialize configuration reader if not already done
+        if self.configuration_reader is None:
+            self.initialize_configuration_reader()
+        
+        if self.configuration_reader is None:
+            self.app.log_frame.log_message("ERROR: Configuration reader service not available\n")
             return
-            
-        # Get commands to check device configuration
-        try:
-            commands = self.app.device_command_mapper.get_check_config_commands()
-            
-            if not commands:
-                self.app.log_frame.log_message("WARNING: No configuration check commands available\n")
-                return
+        
+        # Define completion callback
+        def on_completion(result, error_message):
+            if result.success:
+                success_msg = f"Configuration reading completed successfully."
+                self.app.log_frame.log_message(f"INFO: {success_msg}\n")
                 
-            # Queue the commands for sequential processing
-            self.queue_commands(
-                commands, 
-                callback=self._process_config_check_results,
-                delay=1.0  # Longer delay for configuration check commands
+                if hasattr(self.app, 'operation_confirmation_service'):
+                    self.app.operation_confirmation_service.show_success_notification(success_msg)
+            else:
+                error_msg = error_message or "Configuration reading failed"
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+        
+        # Start configuration reading with progress indication
+        try:
+            self.configuration_reader.read_all_configurations(
+                completion_callback=on_completion,
+                show_progress_dialog=True
             )
             
-            self.app.log_frame.log_message(f"INFO: Checking device configuration with {len(commands)} commands\n")
-            
         except Exception as e:
-            self.app.log_frame.log_message(f"ERROR: Failed to check configuration: {str(e)}\n")
+            self.app.log_frame.log_message(f"ERROR: Failed to start configuration reading: {str(e)}\n")
             
     def _collect_parameters_from_ui(self) -> Dict[str, Any]:
         """
@@ -655,24 +587,49 @@ class SerialService:
             return
             
         # Update APN parameters
-        if 'apn_server' in results and hasattr(self.app.parameters_frame, 'apn_server_entry'):
-            self.app.parameters_frame.apn_server_entry.delete(0, 'end')
-            self.app.parameters_frame.apn_server_entry.insert(0, results['apn_server'])
+        if 'apn_server' in results and hasattr(self.app.params_frame, 'apn_server_entry'):
+            self.app.params_frame.apn_server_entry.delete(0, 'end')
+            self.app.params_frame.apn_server_entry.insert(0, results['apn_server'])
+            self.app.log_frame.log_message(f"INFO: Updated APN server to {results['apn_server']}\n")
             
-        if 'apn_user' in results and hasattr(self.app.parameters_frame, 'apn_user_entry'):
-            self.app.parameters_frame.apn_user_entry.delete(0, 'end')
-            self.app.parameters_frame.apn_user_entry.insert(0, results['apn_user'])
+        if 'apn_user' in results and hasattr(self.app.params_frame, 'apn_user_entry'):
+            self.app.params_frame.apn_user_entry.delete(0, 'end')
+            self.app.params_frame.apn_user_entry.insert(0, results['apn_user'])
+            self.app.log_frame.log_message(f"INFO: Updated APN user to {results['apn_user']}\n")
             
-        if 'apn_password' in results and hasattr(self.app.parameters_frame, 'apn_password_entry'):
-            self.app.parameters_frame.apn_password_entry.delete(0, 'end')
-            self.app.parameters_frame.apn_password_entry.insert(0, results['apn_password'])
+        if 'apn_password' in results and hasattr(self.app.params_frame, 'apn_password_entry'):
+            self.app.params_frame.apn_password_entry.delete(0, 'end')
+            self.app.params_frame.apn_password_entry.insert(0, results['apn_password'])
+            self.app.log_frame.log_message(f"INFO: Updated APN password\n")
+        
+        # Update transmission mode
+        if 'transmission_mode' in results and hasattr(self.app.parameters_frame, 'trans_mode_var'):
+            self.app.parameters_frame.trans_mode_var.set(results['transmission_mode'])
+            self.app.log_frame.log_message(f"INFO: Updated transmission mode to {results['transmission_mode']}\n")
             
-        # Update other parameters
-        # This requires the parameter widgets to have a consistent interface
+        # Update all other parameters using the parameter widgets
         if hasattr(self.app.parameters_frame, 'parameter_widgets'):
-            for param_name, widget in self.app.parameters_frame.parameter_widgets.items():
-                if param_name in results and hasattr(widget, 'set_value'):
-                    widget.set_value(results[param_name])
+            # Create a reverse mapping from values to keys for dropdowns/radios
+            reverse_mappings = {}
+            if hasattr(self.app, 'device_command_mapper'):
+                for param, mapping in self.app.device_command_mapper.value_mappings.items():
+                    reverse_mappings[param] = {v: k for k, v in mapping.items()}
+
+            for param_name, value in results.items():
+                if param_name in self.app.parameters_frame.parameter_widgets:
+                    try:
+                        # If a reverse mapping exists, use it to get the display value
+                        if param_name in reverse_mappings and value in reverse_mappings[param_name]:
+                            display_value = reverse_mappings[param_name][value]
+                        else:
+                            display_value = value
+
+                        self.app.parameters_frame.parameter_widgets[param_name].set_value(display_value)
+                        self.app.log_frame.log_message(f"INFO: Updated parameter {param_name} to {display_value}\n")
+                    except Exception as e:
+                        self.app.log_frame.log_message(f"ERROR: Failed to update parameter {param_name}: {str(e)}\n")
+        
+        self.app.log_frame.log_message("INFO: Configuration check complete - UI updated with device values\n")
                     
         self.app.log_frame.log_message("INFO: Device configuration loaded to UI\n")
         
@@ -701,7 +658,7 @@ class SerialService:
                                           "DEBUG: Checking connection status...\n")
                             
                             # Send a status request to check if device is still connected
-                            self.serial_port.write(b"ATSMS:STATUS#\r")
+                            self.serial_port.write(b"ATSMS:STATUS#\r\n")
                             
                             # Wait a short time for response
                             time.sleep(0.5)
@@ -715,7 +672,7 @@ class SerialService:
                                               f"DEBUG: No response from device (attempt {consecutive_failures}/{max_consecutive_failures})\n")
                                 
                                 # Try one more time with a longer timeout
-                                self.serial_port.write(b"ATSMS:STATUS#\r")
+                                self.serial_port.write(b"ATSMS:STATUS#\r\n")
                                 time.sleep(1)
                                 
                                 if self.serial_port.in_waiting == 0:

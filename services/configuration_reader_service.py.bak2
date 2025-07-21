@@ -1,0 +1,1768 @@
+"""
+ConfigurationReaderService - Read and display current device configurations from RS232.
+
+This service provides functionality to query device parameters using appropriate AT commands,
+parse device responses, and populate UI fields with current device values.
+"""
+
+import re
+import time
+import threading
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Callable
+from datetime import datetime
+from services.i18n_service import I18nService
+
+
+@dataclass
+class ParameterReadResult:
+    """Result of reading a single parameter from the device."""
+    parameter_name: str
+    success: bool
+    value: Optional[str]
+    error_message: Optional[str]
+    raw_response: str
+
+
+@dataclass
+class ConfigurationReadResult:
+    """Result of reading multiple parameters from the device."""
+    success: bool
+    parameters_read: List[ParameterReadResult]
+    total_parameters: int
+    failed_parameters: List[str]
+    read_duration: float
+    timestamp: datetime
+
+
+@dataclass
+class ParsedResponse:
+    """Result of parsing a device response."""
+    command: str
+    success: bool
+    parsed_values: Dict[str, Any]
+    raw_response: str
+    error_message: Optional[str]
+
+
+class ConfigurationReaderService:
+    """Service for reading device configurations via RS232 connection."""
+
+    def __init__(self, app_instance, i18n_service: I18nService):
+        """
+        Initialize the configuration reader service.
+        
+        Args:
+            app_instance: Main application instance
+            i18n_service: Internationalization service for error messages
+        """
+        self.app = app_instance
+        self.i18n = i18n_service
+        self.is_reading = False
+        self.read_thread = None
+        self.progress_callback = None
+        self.completion_callback = None
+        self.cancel_requested = False
+        
+        # Response capture mechanism
+        self.waiting_for_response = False
+        self.captured_response = None
+        self.response_timeout = False
+        
+        # Initialize parameter query commands
+        self._init_parameter_query_commands()
+        
+        # Initialize response parsing patterns
+        self._init_response_patterns()
+
+    def _init_parameter_query_commands(self) -> None:
+        """Initialize AT commands for querying device parameters."""
+        self.parameter_query_commands = {
+            # Basic device information
+            'device_info': [
+                ('ATSMS:CXCS#IMEI', 'get_imei'),
+                ('ATSMS:CXCS#ICCID', 'get_iccid'),
+                ('ATSMS:VERSION#', 'get_version'),
+                ('ATSMS:STATUS#', 'get_status')
+            ],
+            
+            # APN and server settings
+            'apn_config': ('ATSMS:APN#', 'get_apn'),
+            'server_config': ('ATSMS:SERVER#', 'get_server'),
+            
+            # Timer and heartbeat settings
+            'timer_settings': ('ATSMS:TIMER#', 'get_timer'),
+            'heartbeat_settings': ('ATSMS:HBT#', 'get_hbt'),
+            
+            # Vibration and sensitivity settings
+            'vibration_settings': ('ATSMS:SZCS#VIBL', 'get_vibl'),
+            'vibration_window': ('ATSMS:SZCS#VIBCHK', 'get_vibchk'),
+            'defense_settings': ('ATSMS:DEFENSE#', 'get_defense'),
+            
+            # Network and protocol settings
+            'protocol_settings': ('ATSMS:CXCS#GT06SEL', 'get_gt06sel'),
+            'network_settings': ('ATSMS:SZCS#NETSELECT', 'get_netselect'),
+            'volte_settings': ('ATSMS:SZCS#VOLTESWITCH', 'get_volteswitch'),
+            
+            # Sleep mode settings
+            'sleep_mode_settings': ('ATSMS:SZCS#SLPDISCONNECT', 'get_slpdisconnect'),
+            'sleep_time_settings': ('ATSMS:SZCS#SLEEPT', 'get_sleept'),
+            
+            # Ignition settings
+            'ignition_settings': ('ATSMS:SZCS#ACCLINE#ACC_CFG', 'get_accline'),
+            
+            # Comprehensive parameter query
+            'all_parameters': ('ATSMS:PARAM#', 'get_all_params')
+        }
+
+    def _init_response_patterns(self) -> None:
+        """Initialize regex patterns for parsing device responses."""
+        self.response_patterns = {
+            # Device information patterns
+            'get_imei': r'IMEI[=:]\s*(\d+)',
+            'get_iccid': r'ICCID[=:]\s*(\d+)',
+            'get_version': r'(.+)',  # Version can be any format
+            'get_status': r'(.+)',   # Status contains multiple key:value pairs
+            
+            # APN configuration pattern
+            'get_apn': r'APN:([^,]*),([^,]*),([^#]*)',
+            
+            # Server configuration pattern
+            'get_server': r'SERVER:(\d+),([^,]*),(\d+),(\d+)',
+            
+            # Timer configuration pattern
+            'get_timer': r'TIMER:(\d+),(\d+)|TIMER ACC ON:(\d+)s,ACC OFF:(\d+)s',
+            
+            # Heartbeat configuration pattern
+            'get_hbt': r'HBT:(\d+),(\d+)|HBT ACC ON:(\d+)s,ACC OFF:(\d+)s',
+            
+            # Vibration settings pattern
+            'get_vibl': r'VIBL=(\d+)',
+            'get_vibchk': r'VIBCHK=(\d+):(\d+)',
+            
+            # Defense settings pattern
+            'get_defense': r'DEFENSE:(\d+)',
+            
+            # Protocol settings pattern
+            'get_gt06sel': r'GT06SEL=(\d+)',
+            
+            # Network settings pattern
+            'get_netselect': r'NETSELECT=(\d+)',
+            'get_volteswitch': r'VOLTESWITCH=(\d+)',
+            
+            # Sleep mode patterns
+            'get_slpdisconnect': r'SLPDISCONNECT=(\d+)',
+            'get_sleept': r'SLEEPT=(\d+)',
+            
+            # Ignition settings pattern
+            'get_accline': r'ACCLINE=(\d+).*ACC_CFG=([^#]*)',
+            
+            # All parameters pattern (complex parsing needed)
+            'get_all_params': r'(.+)'  # Will need special handling
+        }
+
+    def read_all_configurations(self, progress_callback: Optional[Callable] = None,
+                              completion_callback: Optional[Callable] = None,
+                              show_progress_dialog: bool = True) -> None:
+        """
+        Read all device configurations asynchronously.
+        
+        Args:
+            progress_callback: Optional callback for progress updates (current, total, status)
+            completion_callback: Optional callback when reading is complete (result)
+            show_progress_dialog: Whether to show a progress dialog
+        """
+        if self.is_reading:
+            # Debug logging
+            self._log_message("DEBUG: read_all_configurations called")
+
+            error_msg = self.i18n.get('config_read_already_in_progress', 
+                                    'Configuration reading is already in progress')
+            if completion_callback:
+                result = ConfigurationReadResult(
+                    success=False,
+                    parameters_read=[],
+                    total_parameters=0,
+                    failed_parameters=[],
+                    read_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result, error_msg)
+            return
+
+        # Check if device is connected
+        if not hasattr(self.app, 'serial_service') or not self.app.serial_service.is_connected:
+            error_msg = self.i18n.get('config_read_no_connection', 
+                                    'Device connection is required for configuration reading')
+            if completion_callback:
+                result = ConfigurationReadResult(
+                    success=False,
+                    parameters_read=[],
+                    total_parameters=0,
+                    failed_parameters=[],
+                    read_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result, error_msg)
+            return
+
+        self.progress_callback = progress_callback
+        self.completion_callback = completion_callback
+        self.cancel_requested = False
+        self.is_reading = True
+        self.progress_dialog_id = None
+
+        # Create progress dialog if requested and service is available
+        if show_progress_dialog and hasattr(self.app, 'operation_confirmation_service'):
+            try:
+                self.progress_dialog_id = self.app.operation_confirmation_service.create_progress_dialog(
+                    title=self.i18n.get('config_read_dialog_title', 'Reading Configuration'),
+                    operation_name=self.i18n.get('config_read_operation_name', 'Device Configuration Reading'),
+                    progress_type=self.app.operation_confirmation_service.PROGRESS_TYPE_DETERMINATE,
+                    total_steps=100,
+                    cancelable=True
+                )
+                
+                # Set cancel callback
+                self.app.operation_confirmation_service.set_cancel_callback(
+                    self.progress_dialog_id,
+                    self.cancel_reading
+                )
+            except Exception as e:
+                self._log_message(f"WARNING: Failed to create progress dialog: {str(e)}")
+                self.progress_dialog_id = None
+
+        # Disable parameter modification during read operations
+        self._disable_parameter_modification(True)
+
+        # Start reading in a separate thread
+        self.read_thread = threading.Thread(target=self._read_configurations_thread, daemon=True)
+        self.read_thread.start()
+
+    def _read_configurations_thread(self) -> None:
+        """Thread function for reading configurations."""
+        start_time = time.time()
+        parameters_read = []
+        failed_parameters = []
+        success = False
+        completion_message = None
+        error_msg = None
+        
+        try:
+            # Initialize error tracking
+            self.last_read_attempt = datetime.now()
+            self.total_read_attempts = getattr(self, 'total_read_attempts', 0) + 1
+            
+            # Get all parameter commands to execute
+            all_commands = self._get_all_parameter_commands()
+            total_commands = len(all_commands)
+            
+            self._log_message(f"INFO: Starting configuration read with {total_commands} commands (attempt #{self.total_read_attempts})")
+            
+            for i, (param_name, command, command_type) in enumerate(all_commands):
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user")
+                    break
+                
+                # Update progress
+                status_text = self.i18n.get('config_read_progress', 
+                                          'Reading {param_name}...').format(param_name=param_name)
+                
+                # Update progress dialog if available
+                if self.progress_dialog_id and hasattr(self.app, 'operation_confirmation_service'):
+                    try:
+                        progress_step = int((i + 1) * 100 / total_commands)
+                        self.app.after(0, self.app.operation_confirmation_service.update_progress,
+                                      self.progress_dialog_id, progress_step, status_text)
+                    except Exception as e:
+                        self._log_message(f"WARNING: Failed to update progress dialog: {str(e)}")
+                
+                # Call custom progress callback if provided
+                if self.progress_callback:
+                    self.app.after(0, self.progress_callback, i + 1, total_commands, status_text)
+                
+                # Read the parameter with retry logic
+                result = self.read_specific_parameter(param_name, command, command_type, max_retries=2)
+                parameters_read.append(result)
+                
+                if not result.success:
+                    failed_parameters.append(param_name)
+                    error_msg = self._get_specific_error_message(param_name, result.error_message)
+                    self._log_message(f"WARNING: Failed to read {param_name}: {error_msg}")
+                    
+                    # For critical parameters, provide additional guidance
+                    if param_name in ['device_info', 'apn_config', 'server_config']:
+                        self._log_message(f"WARNING: {param_name} is a critical parameter - device may not be fully configured")
+                else:
+                    self._log_message(f"INFO: Successfully read {param_name}: {result.value}")
+                
+                # Add delay between commands to avoid overwhelming the device
+                if i < total_commands - 1:  # Don't delay after the last command
+                    time.sleep(0.8)
+            
+            # Calculate results
+            read_duration = time.time() - start_time
+            successful_reads = len(all_commands) - len(failed_parameters)
+            success = successful_reads > 0  # Success if at least one parameter was read
+            
+            # Set completion message with detailed results
+            if len(failed_parameters) == 0:
+                completion_message = f"Configuration reading completed successfully - all {len(all_commands)} parameters read"
+            elif successful_reads > 0:
+                completion_message = f"Configuration reading partially completed - {successful_reads}/{len(all_commands)} parameters read"
+                # Provide guidance for partial failures
+                self._provide_partial_failure_guidance(failed_parameters, successful_reads, len(all_commands))
+            else:
+                completion_message = "Configuration reading failed - no parameters could be read"
+                # Provide guidance for complete failure
+                self._provide_complete_failure_guidance(failed_parameters)
+            
+            result = ConfigurationReadResult(
+                success=success,
+                parameters_read=parameters_read,
+                total_parameters=total_commands,
+                failed_parameters=failed_parameters,
+                read_duration=read_duration,
+                timestamp=datetime.now()
+            )
+            
+            # Update error statistics
+            self.successful_reads = getattr(self, 'successful_reads', 0) + successful_reads
+            self.failed_reads = getattr(self, 'failed_reads', 0) + len(failed_parameters)
+            
+            # Update UI with read parameters
+            if success:
+                self._log_message("DEBUG: Updating UI with parameters read from device")
+                
+                # Process each successful parameter read
+                for result in parameters_read:
+                    if result.success and result.value is not None:
+                        self._log_message(f"DEBUG: Processing parameter {result.parameter_name} with value {result.value}")
+                        
+                        # Update the UI with this parameter
+                        self._update_ui_with_parameter(result.parameter_name, result.value)
+# Call completion callback
+            if self.completion_callback:
+                error_msg = None
+                if failed_parameters:
+                    error_msg = self._create_detailed_error_summary(failed_parameters, successful_reads, len(all_commands))
+                self.app.after(0, self.completion_callback, result, error_msg)
+            
+            self._log_message(f"INFO: Configuration reading completed in {read_duration:.2f} seconds")
+            self._log_message(f"INFO: Session statistics - Total successful: {self.successful_reads}, Total failed: {self.failed_reads}")
+            
+        except Exception as e:
+            # Handle unexpected errors
+            success = False
+            error_msg = self.i18n.get('config_read_unexpected_error',
+                                    'Unexpected error during configuration reading: {error}').format(error=str(e))
+            completion_message = f"Operation failed: {str(e)}"
+            self._log_message(f"ERROR: {error_msg}")
+            
+            result = ConfigurationReadResult(
+                success=False,
+                parameters_read=parameters_read,
+                total_parameters=0,
+                failed_parameters=[],
+                read_duration=time.time() - start_time,
+                timestamp=datetime.now()
+            )
+            
+            if self.completion_callback:
+                self.app.after(0, self.completion_callback, result, error_msg)
+        
+        finally:
+            self.is_reading = False
+            
+            # Re-enable parameter modification
+            self._disable_parameter_modification(False)
+            
+            # Close progress dialog if it exists
+            if self.progress_dialog_id and hasattr(self.app, 'operation_confirmation_service'):
+                try:
+                    self.app.after(0, self.app.operation_confirmation_service.complete_progress,
+                                  self.progress_dialog_id, success, completion_message or error_msg)
+                except Exception as e:
+                    self._log_message(f"WARNING: Failed to close progress dialog: {str(e)}")
+            
+            self.progress_dialog_id = None
+
+    def read_specific_parameter(self, param_name: str, command: str = None, 
+                              command_type: str = None, max_retries: int = 2) -> ParameterReadResult:
+        """
+        Read a specific parameter from the device with retry logic.
+        
+        Args:
+            param_name: Name of the parameter to read
+            command: AT command to send (optional, will be looked up if not provided)
+            command_type: Type of command for response parsing
+            max_retries: Maximum number of retry attempts for failed reads
+            
+        Returns:
+            ParameterReadResult with the reading result
+        """
+        if command is None:
+            # Look up the command for this parameter
+            if param_name in self.parameter_query_commands:
+                query_info = self.parameter_query_commands[param_name]
+                if isinstance(query_info, tuple):
+                    command, command_type = query_info
+                else:
+                    return ParameterReadResult(
+                        parameter_name=param_name,
+                        success=False,
+                        value=None,
+                        error_message=f"Invalid command configuration for {param_name}",
+                        raw_response=""
+                    )
+            else:
+                return ParameterReadResult(
+                    parameter_name=param_name,
+                    success=False,
+                    value=None,
+                    error_message=f"Unknown parameter: {param_name}",
+                    raw_response=""
+                )
+        
+        last_error = None
+        last_response = ""
+        
+        # Attempt to read the parameter with retries
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    # Log retry attempt
+                    self._log_message(f"INFO: Retrying {param_name} read (attempt {attempt + 1}/{max_retries + 1})")
+                    # Add a small delay between retries
+                    time.sleep(0.5)
+                
+                # Send the command and wait for response
+                response = self._send_command_and_wait(command, timeout=5.0)
+                
+                if response is None:
+                    last_error = self.i18n.get('config_read_timeout', 'Command timeout')
+                    continue
+                
+                last_response = response
+                
+                # Parse the response
+                parsed_response = self.parse_device_response(command, response, command_type)
+                
+                if parsed_response.success and parsed_response.parsed_values:
+                    # Extract the main value for this parameter
+                    value = self._extract_parameter_value(param_name, parsed_response.parsed_values)
+                    
+                    # Log successful read after retries
+                    if attempt > 0:
+                        self._log_message(f"INFO: Successfully read {param_name} after {attempt + 1} attempts")
+                    
+                    return ParameterReadResult(
+                        parameter_name=param_name,
+                        success=True,
+                        value=value,
+                        error_message=None,
+                        raw_response=response
+                    )
+                else:
+                    last_error = parsed_response.error_message or "Failed to parse response"
+                    
+            except Exception as e:
+                last_error = str(e)
+                self._log_message(f"WARNING: Exception during {param_name} read attempt {attempt + 1}: {last_error}")
+        
+        # All attempts failed, return the final error
+        final_error_msg = self._get_specific_error_message(param_name, last_error or "Unknown error")
+        
+        # Log resolution suggestions for failed parameter reads
+        suggestions = self._get_error_resolution_suggestions(param_name, last_error or "")
+        if suggestions:
+            self._log_message(f"INFO: Suggestions for resolving {param_name} read failure:")
+            for i, suggestion in enumerate(suggestions, 1):
+                self._log_message(f"INFO:   {i}. {suggestion}")
+        
+        return ParameterReadResult(
+            parameter_name=param_name,
+            success=False,
+            value=None,
+            error_message=final_error_msg,
+            raw_response=last_response
+        )
+
+    def parse_device_response(self, command: str, response: str, command_type: str) -> ParsedResponse:
+        """
+        Parse device response based on the command type.
+        
+        Args:
+            command: The command that was sent
+            response: The device response string
+            command_type: The type of command for parsing
+            
+        Returns:
+            ParsedResponse with parsed information
+        """
+        parsed_values = {}
+        error_message = None
+        success = False
+        
+        try:
+            # Get the appropriate pattern for this command type
+            pattern = self.response_patterns.get(command_type)
+            
+            if not pattern:
+                error_message = f"No parsing pattern defined for command type: {command_type}"
+                return ParsedResponse(command, False, {}, response, error_message)
+            
+            # Apply pattern matching
+            match = re.search(pattern, response)
+            
+            if match:
+                success = True
+                
+                # Parse based on command type
+                if command_type == 'get_imei':
+                    parsed_values['imei'] = match.group(1)
+                    
+                elif command_type == 'get_iccid':
+                    parsed_values['iccid'] = match.group(1)
+                    
+                elif command_type == 'get_version':
+                    parsed_values['version'] = match.group(1).strip()
+                    
+                elif command_type == 'get_status':
+                    # Parse status response with multiple key:value pairs
+                    status_text = match.group(1)
+                    for section in status_text.split(';'):
+                        if ':' in section:
+                            key, value = section.split(':', 1)
+                            parsed_values[key.strip().lower()] = value.strip()
+                    
+                elif command_type == 'get_apn':
+                    parsed_values['apn_server'] = match.group(1)
+                    parsed_values['apn_user'] = match.group(2)
+                    parsed_values['apn_password'] = match.group(3).rstrip('#')
+                    
+                elif command_type == 'get_server':
+                    parsed_values['server_type'] = match.group(1)
+                    parsed_values['server_address'] = match.group(2)
+                    parsed_values['server_port'] = match.group(3)
+                    parsed_values['server_protocol'] = match.group(4)
+                    
+                elif command_type == 'get_timer':
+                    # Handle both response formats
+                    if match.group(1) and match.group(2):  # TIMER:x,y format
+                        parsed_values['timer_ign_on'] = match.group(1)
+                        parsed_values['timer_ign_off'] = match.group(2)
+                    elif match.group(3) and match.group(4):  # TIMER ACC ON:xs,ACC OFF:ys format
+                        parsed_values['timer_ign_on'] = match.group(3)
+                        parsed_values['timer_ign_off'] = match.group(4)
+                    
+                elif command_type == 'get_hbt':
+                    # Handle both response formats
+                    if match.group(1) and match.group(2):  # HBT:x,y format
+                        parsed_values['heartbeat_ign_on'] = match.group(1)
+                        parsed_values['heartbeat_ign_off'] = match.group(2)
+                    elif match.group(3) and match.group(4):  # HBT ACC ON:xs,ACC OFF:ys format
+                        parsed_values['heartbeat_ign_on'] = match.group(3)
+                        parsed_values['heartbeat_ign_off'] = match.group(4)
+                    
+                elif command_type == 'get_vibl':
+                    parsed_values['vibration'] = match.group(1)
+                    
+                elif command_type == 'get_vibchk':
+                    parsed_values['vibration_window'] = match.group(1)
+                    parsed_values['vibration_threshold'] = match.group(2)
+                    
+                elif command_type == 'get_defense':
+                    parsed_values['defense_time'] = match.group(1)
+                    
+                elif command_type == 'get_gt06sel':
+                    # Map numeric values back to protocol names
+                    protocol_map = {'0': 'GT06-0x60', '1': 'CRX3', '2': 'GT06-0x12'}
+                    protocol_value = match.group(1)
+                    parsed_values['gt06_protocol'] = protocol_map.get(protocol_value, protocol_value)
+                    
+                elif command_type == 'get_netselect':
+                    # Map numeric values back to network names
+                    network_map = {'0': 'AUTO', '1': '4G', '2': '2G'}
+                    network_value = match.group(1)
+                    parsed_values['network_select'] = network_map.get(network_value, network_value)
+                    
+                elif command_type == 'get_volteswitch':
+                    # Map numeric values back to network names
+                    volte_map = {'0': '2G', '1': '4G'}
+                    volte_value = match.group(1)
+                    parsed_values['volte_switch'] = volte_map.get(volte_value, volte_value)
+                    
+                elif command_type == 'get_slpdisconnect':
+                    # Map numeric values back to sleep mode names
+                    sleep_map = {'0': 'Disabled', '1': 'Sleep', '2': 'Deep Sleep'}
+                    sleep_value = match.group(1)
+                    parsed_values['sleep_mode'] = sleep_map.get(sleep_value, sleep_value)
+                    
+                elif command_type == 'get_sleept':
+                    parsed_values['sleep_time'] = match.group(1)
+                    
+                elif command_type == 'get_accline':
+                    # Map ignition type
+                    ignition_map = {'0': 'Digital', '1': 'Analog'}
+                    ignition_value = match.group(1)
+                    parsed_values['ignition_type'] = ignition_map.get(ignition_value, ignition_value)
+                    parsed_values['ignition_config'] = match.group(2)
+                    
+                elif command_type == 'get_all_params':
+                    # Parse comprehensive parameter response
+                    self._parse_all_parameters_response(response, parsed_values)
+                    
+            else:
+                error_message = f"Response does not match expected pattern for {command_type}"
+                
+        except Exception as e:
+            error_message = f"Error parsing response: {str(e)}"
+            
+        return ParsedResponse(command, success, parsed_values, response, error_message)
+
+    def _parse_all_parameters_response(self, response: str, parsed_values: Dict[str, Any]) -> None:
+        """Parse the comprehensive PARAM# response."""
+        # Example: "IMEI:357457040000821;TIMER:20,300;SEMDS:3;HBT:180Sec;Defense:3;"
+        for section in response.split(';'):
+            if ':' in section:
+                key, value = section.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if key == 'IMEI':
+                    parsed_values['imei'] = value
+                elif key == 'TIMER':
+                    parts = value.split(',')
+                    if len(parts) >= 2:
+                        parsed_values['timer_ign_on'] = parts[0]
+                        parsed_values['timer_ign_off'] = parts[1]
+                elif key == 'HBT':
+                    # Handle format like "180Sec"
+                    hbt_value = re.sub(r'[^\d]', '', value)  # Extract only digits
+                    parsed_values['heartbeat_interval'] = hbt_value
+                elif key == 'Defense':
+                    parsed_values['defense_time'] = value
+                # Add more parameter parsing as needed
+
+    def _get_all_parameter_commands(self) -> List[tuple]:
+        """Get all parameter commands to execute during configuration reading."""
+        commands = []
+        
+        # Add device information commands
+        for command, command_type in self.parameter_query_commands['device_info']:
+            commands.append(('device_info', command, command_type))
+        
+        # Add individual parameter commands
+        for param_name, query_info in self.parameter_query_commands.items():
+            if param_name == 'device_info':  # Skip device_info as it's handled above
+                continue
+                
+            if isinstance(query_info, tuple):
+                command, command_type = query_info
+                commands.append((param_name, command, command_type))
+        
+        return commands
+
+    def cancel_reading(self) -> None:
+        """Cancel the current configuration reading operation."""
+        self.cancel_requested = True
+        self._log_message("INFO: Configuration reading cancellation requested")
+
+    def _disable_parameter_modification(self, disable: bool) -> None:
+        """
+        Disable or enable parameter modification during read operations.
+        
+        Args:
+            disable: True to disable modification, False to enable
+        """
+        try:
+            # Disable/enable parameters frame if it exists
+            if hasattr(self.app, 'parameters_frame'):
+                self._set_frame_state(self.app.parameters_frame, not disable)
+            
+            # Disable/enable actions frame buttons except check config
+            if hasattr(self.app, 'actions_frame'):
+                self._set_actions_frame_state(self.app.actions_frame, not disable)
+                
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to {'disable' if disable else 'enable'} parameter modification: {str(e)}")
+
+    def _set_frame_state(self, frame, enabled: bool) -> None:
+        """
+        Recursively set the state of all widgets in a frame.
+        
+        Args:
+            frame: The frame to modify
+            enabled: True to enable widgets, False to disable
+        """
+        try:
+            # Set state for all child widgets
+            for child in frame.winfo_children():
+                widget_class = child.winfo_class()
+                
+                # Handle different widget types
+                if widget_class in ['CTkButton', 'CTkEntry', 'CTkComboBox', 'CTkRadioButton', 'CTkCheckBox']:
+                    if hasattr(child, 'configure'):
+                        child.configure(state='normal' if enabled else 'disabled')
+                elif widget_class in ['CTkFrame']:
+                    # Recursively handle frames
+                    self._set_frame_state(child, enabled)
+                    
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to set frame state: {str(e)}")
+
+    def _set_actions_frame_state(self, actions_frame, enabled: bool) -> None:
+        """
+        Set the state of actions frame buttons, keeping check config enabled.
+        
+        Args:
+            actions_frame: The actions frame
+            enabled: True to enable buttons, False to disable
+        """
+        try:
+            for child in actions_frame.winfo_children():
+                if hasattr(child, 'configure') and child.winfo_class() == 'CTkButton':
+                    # Keep check config button enabled during reading
+                    if hasattr(child, '_text') and 'check' in child._text.lower():
+                        continue
+                    child.configure(state='normal' if enabled else 'disabled')
+                    
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to set actions frame state: {str(e)}")
+
+    def _send_command_and_wait(self, command: str, timeout: float = 5.0) -> Optional[str]:
+        """
+        Send a command and wait for response.
+        
+        Args:
+            command: Command to send
+            timeout: Timeout in seconds
+            
+        Returns:
+            Device response or None if timeout
+        """
+        if not self.app.serial_service.is_connected:
+            return None
+        
+        # Set up response capture mechanism
+        self.waiting_for_response = True
+        self.captured_response = None
+        self.response_timeout = False
+        
+        try:
+            # Send the command through the serial service
+            self.app.serial_service.send_command(command)
+            
+            # Wait for response with timeout
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if self.cancel_requested:
+                    return None
+                    
+                if self.captured_response is not None:
+                    response = self.captured_response
+                    self.captured_response = None
+                    self.waiting_for_response = False
+                    return response
+                    
+                time.sleep(0.1)
+            
+            # Timeout occurred
+            self.waiting_for_response = False
+            self.response_timeout = True
+            return None
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to send command {command}: {str(e)}")
+            self.waiting_for_response = False
+            return None
+
+    def capture_device_response(self, response: str) -> None:
+        """
+        Capture device response for configuration reading.
+        This method should be called by the serial service when a response is received.
+        
+        Args:
+            response: The device response string
+        """
+        if self.waiting_for_response:
+            self.captured_response = response
+
+    def _extract_parameter_value(self, param_name: str, parsed_values: Dict[str, Any]) -> str:
+        """Extract the main value for a parameter from parsed values."""
+        # Map parameter names to their corresponding parsed value keys
+        value_mappings = {
+            'apn_config': 'apn_server',
+            'server_config': 'server_address',
+            'timer_settings': 'timer_ign_on',
+            'heartbeat_settings': 'heartbeat_ign_on',
+            'vibration_settings': 'vibration',
+            'protocol_settings': 'gt06_protocol',
+            'network_settings': 'network_select',
+            'sleep_mode_settings': 'sleep_mode',
+            'ignition_settings': 'ignition_type'
+        }
+        
+        # Get the primary key for this parameter
+        primary_key = value_mappings.get(param_name, param_name)
+        
+        # Return the value or a string representation of all values
+        if primary_key in parsed_values:
+            return str(parsed_values[primary_key])
+        elif parsed_values:
+            # Return the first available value
+            return str(list(parsed_values.values())[0])
+        else:
+            return ""
+
+    def _update_ui_from_results(self, parameters_read: List[ParameterReadResult]) -> None:
+        """
+        Update UI fields with values read from the device.
+        
+        Args:
+            parameters_read: List of parameter read results
+        """
+        try:
+            self._log_message(f"DEBUG: _update_ui_from_results called with {len(parameters_read)} parameters")
+            
+            # Process each successful parameter read
+            for result in parameters_read:
+                if result.success and result.value is not None:
+                    self._log_message(f"DEBUG: Processing successful result: {result.parameter_name} = {result.value}")
+                    # Update the UI parameter
+                    self._update_ui_parameter(result.parameter_name, result.value)
+                else:
+                    if not result.success:
+                        self._log_message(f"DEBUG: Skipping failed result: {result.parameter_name}, error: {result.error_message}")
+                    elif result.value is None:
+                        self._log_message(f"DEBUG: Skipping result with None value: {result.parameter_name}")
+        
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI from results: {str(e)}")
+            import traceback
+            self._log_message(f"ERROR: Traceback: {traceback.format_exc()}")
+
+            # Process each successful parameter read
+            for result in parameters_read:
+                if result.success and result.value is not None:
+                    # Update the UI parameter
+                    self._update_ui_parameter(result.parameter_name, result.value)
+        
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI from results: {str(e)}")
+
+    def _get_command_type_for_parameter(self, param_name: str) -> Optional[str]:
+        """Get the command type for a parameter name."""
+        if param_name in self.parameter_query_commands:
+            query_info = self.parameter_query_commands[param_name]
+            if isinstance(query_info, tuple):
+                return query_info[1]
+            elif isinstance(query_info, list) and query_info:
+                # For device_info which is a list of commands
+                return query_info[0][1] if isinstance(query_info[0], tuple) else None
+        return None
+
+    def _update_ui_field(self, param_name: str, value: str) -> bool:
+        """
+        Update a specific UI field with a value.
+        
+        Args:
+            param_name: Name of the parameter
+            value: Value to set
+            
+        Returns:
+            True if update was successful, False otherwise
+        """
+        try:
+            # Handle device information fields
+            if param_name == 'device_info':
+                # This is handled by multiple fields, so we'll handle it in the calling function
+                return True
+            
+            # Handle APN configuration fields
+            elif param_name == 'apn_config':
+                # This contains multiple values, handle in calling function
+                return True
+                
+            # Handle server configuration fields
+            elif param_name == 'server_config':
+                # This contains multiple values, handle in calling function
+                return True
+                
+            # Handle specific parameter fields
+            elif hasattr(self.app, 'params_frame'):
+                params_frame = self.app.params_frame
+                
+                # Update APN fields
+                if param_name == 'apn_server' and hasattr(params_frame, 'apn_server_entry'):
+                    params_frame.apn_server_entry.delete(0, 'end')
+                    params_frame.apn_server_entry.insert(0, value)
+                    return True
+                    
+                elif param_name == 'apn_user' and hasattr(params_frame, 'apn_user_entry'):
+                    params_frame.apn_user_entry.delete(0, 'end')
+                    params_frame.apn_user_entry.insert(0, value)
+                    return True
+                    
+                elif param_name == 'apn_password' and hasattr(params_frame, 'apn_password_entry'):
+                    params_frame.apn_password_entry.delete(0, 'end')
+                    params_frame.apn_password_entry.insert(0, value)
+                    return True
+                
+                # Update server fields
+                elif param_name == 'server_address' and hasattr(params_frame, 'parameter_widgets'):
+                    if 'server_ip' in params_frame.parameter_widgets:
+                        params_frame.parameter_widgets['server_ip'].set_value(value)
+                        return True
+                        
+                elif param_name == 'server_port' and hasattr(params_frame, 'parameter_widgets'):
+                    if 'server_port' in params_frame.parameter_widgets:
+                        params_frame.parameter_widgets['server_port'].set_value(value)
+                        return True
+                
+                # Update other parameter fields using parameter_widgets
+                elif hasattr(params_frame, 'parameter_widgets'):
+                    widget_mappings = {
+                        'timer_ign_on': 'timer_ign_on',
+                        'timer_ign_off': 'timer_ign_off',
+                        'heartbeat_ign_on': 'heartbeat_ign_on',
+                        'heartbeat_ign_off': 'heartbeat_ign_off',
+                        'vibration': 'vibration',
+                        'defense_time': 'defense_time',
+                        'gt06_protocol': 'gt06_protocol',
+                        'network_select': 'network_select',
+                        'sleep_mode': 'sleep_mode',
+                        'sleep_time': 'sleep_time',
+                        'ignition_type': 'ignition_type'
+                    }
+                    
+                    widget_name = widget_mappings.get(param_name)
+                    if widget_name and widget_name in params_frame.parameter_widgets:
+                        params_frame.parameter_widgets[widget_name].set_value(value)
+                        return True
+            
+            # Handle connection frame fields (IMEI, ICCID)
+            if hasattr(self.app, 'connection_frame'):
+                connection_frame = self.app.connection_frame
+                
+                if param_name == 'imei' and hasattr(connection_frame, 'imei_value_var'):
+                    connection_frame.imei_value_var.set(value)
+                    return True
+                    
+                elif param_name == 'iccid' and hasattr(connection_frame, 'iccid_value_var'):
+                    connection_frame.iccid_value_var.set(value)
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Exception updating UI field {param_name}: {str(e)}")
+            return False
+
+    def cancel_reading(self) -> None:
+        """Cancel the current configuration reading operation."""
+        if self.is_reading:
+            self.cancel_requested = True
+            self._log_message("INFO: Configuration reading cancellation requested")
+
+    def is_reading_in_progress(self) -> bool:
+        """Check if configuration reading is currently in progress."""
+        return self.is_reading
+
+    def get_supported_parameters(self) -> List[str]:
+        """Get list of supported parameters for configuration reading."""
+        return list(self.parameter_query_commands.keys())
+
+    def validate_parameter_support(self, param_name: str) -> bool:
+        """Check if a parameter is supported for reading."""
+        return param_name in self.parameter_query_commands
+
+    def get_parameter_query_command(self, param_name: str) -> Optional[tuple]:
+        """Get the query command for a specific parameter."""
+        if param_name in self.parameter_query_commands:
+            query_info = self.parameter_query_commands[param_name]
+            if isinstance(query_info, tuple):
+                return query_info
+            elif isinstance(query_info, list) and query_info:
+                # Return the first command for device_info
+                return query_info[0]
+        return None
+
+    def _get_specific_error_message(self, param_name: str, original_error: str) -> str:
+        """
+        Get specific error message for failed parameter reads.
+        
+        Args:
+            param_name: Name of the parameter that failed
+            original_error: Original error message
+            
+        Returns:
+            Specific error message based on parameter type and error
+        """
+        # Map parameter names to user-friendly names
+        param_display_names = {
+            'device_info': self.i18n.get('device_information', 'Device Information'),
+            'apn_config': self.i18n.get('apn_configuration', 'APN Configuration'),
+            'server_config': self.i18n.get('server_configuration', 'Server Configuration'),
+            'timer_settings': self.i18n.get('timer_settings', 'Timer Settings'),
+            'heartbeat_settings': self.i18n.get('heartbeat_settings', 'Heartbeat Settings'),
+            'vibration_settings': self.i18n.get('vibration_settings', 'Vibration Settings'),
+            'protocol_settings': self.i18n.get('protocol_settings', 'Protocol Settings'),
+            'network_settings': self.i18n.get('network_settings', 'Network Settings'),
+            'sleep_mode_settings': self.i18n.get('sleep_mode_settings', 'Sleep Mode Settings'),
+            'ignition_settings': self.i18n.get('ignition_settings', 'Ignition Settings')
+        }
+        
+        display_name = param_display_names.get(param_name, param_name)
+        
+        # Provide specific error messages based on error type
+        if 'timeout' in original_error.lower():
+            return self.i18n.get('config_read_timeout_specific', 
+                               'Device did not respond to {param_name} query within expected time').format(
+                param_name=display_name
+            )
+        elif 'parse' in original_error.lower() or 'pattern' in original_error.lower():
+            return self.i18n.get('config_read_parse_error', 
+                               'Device response for {param_name} was in unexpected format').format(
+                param_name=display_name
+            )
+        elif 'connection' in original_error.lower():
+            return self.i18n.get('config_read_connection_error', 
+                               'Connection lost while reading {param_name}').format(
+                param_name=display_name
+            )
+        elif 'unknown parameter' in original_error.lower():
+            return self.i18n.get('config_read_unknown_parameter', 
+                               'Parameter {param_name} is not supported by this device').format(
+                param_name=display_name
+            )
+        else:
+            return self.i18n.get('config_read_generic_error', 
+                               'Failed to read {param_name}: {error}').format(
+                param_name=display_name, 
+                error=original_error
+            )
+
+    def _get_error_resolution_suggestions(self, param_name: str, error_type: str) -> List[str]:
+        """
+        Get resolution suggestions for specific parameter read errors.
+        
+        Args:
+            param_name: Name of the parameter that failed
+            error_type: Type of error that occurred
+            
+        Returns:
+            List of suggested resolution steps
+        """
+        suggestions = []
+        
+        if 'timeout' in error_type.lower():
+            suggestions = [
+                self.i18n.get('suggestion_check_device_power', 'Check if the device is powered on'),
+                self.i18n.get('suggestion_verify_connection', 'Verify the device connection is stable'),
+                self.i18n.get('suggestion_try_again', 'Wait a moment and try reading the configuration again'),
+                self.i18n.get('suggestion_restart_device', 'Try restarting the device if the problem persists')
+            ]
+        elif 'parse' in error_type.lower() or 'pattern' in error_type.lower():
+            suggestions = [
+                self.i18n.get('suggestion_device_compatibility', 'Verify the device is compatible with this software version'),
+                self.i18n.get('suggestion_firmware_version', 'Check if the device firmware is up to date'),
+                self.i18n.get('suggestion_contact_support', 'Contact technical support if the issue persists')
+            ]
+        elif 'connection' in error_type.lower():
+            suggestions = [
+                self.i18n.get('suggestion_check_cable', 'Check the USB cable connection'),
+                self.i18n.get('suggestion_try_different_port', 'Try connecting to a different USB port'),
+                self.i18n.get('suggestion_reconnect_device', 'Disconnect and reconnect the device'),
+                self.i18n.get('suggestion_check_drivers', 'Verify USB drivers are properly installed')
+            ]
+        else:
+            suggestions = [
+                self.i18n.get('suggestion_retry_operation', 'Try the operation again'),
+                self.i18n.get('suggestion_check_device_status', 'Check the device status and connection'),
+                self.i18n.get('suggestion_restart_application', 'Restart the application if problems continue')
+            ]
+        
+        return suggestions
+
+    def _log_message(self, message: str) -> None:
+        """Log a message to the application log."""
+        if hasattr(self.app, 'log_frame') and hasattr(self.app.log_frame, 'log_message'):
+            self.app.after(0, self.app.log_frame.log_message, f"{message}\n")
+
+    def update_ui_from_device_config(self, config_data: Dict[str, Any]) -> None:
+        """
+        Update all UI parameter fields from parsed device configuration data.
+        
+        Args:
+            config_data: Dictionary containing parameter names and their values from device
+        """
+        if not config_data:
+            self._log_message("WARNING: No configuration data provided for UI update")
+            return
+        
+        updated_parameters = []
+        failed_updates = []
+        
+        try:
+            # Get reference to parameters frame
+            params_frame = getattr(self.app, 'parameters_frame', None)
+            if not params_frame:
+                self._log_message("ERROR: Parameters frame not found for UI update")
+                return
+            
+            # Update APN configuration fields
+            self._update_apn_fields(params_frame, config_data, updated_parameters, failed_updates)
+            
+            # Update parameter factory widgets
+            self._update_parameter_widgets(params_frame, config_data, updated_parameters, failed_updates)
+            
+            # Log the update results
+            self._log_parameter_updates(updated_parameters, failed_updates)
+            
+            # Show visual indicators for updated parameters
+            self._show_update_indicators(updated_parameters)
+            
+        except Exception as e:
+            error_msg = f"ERROR: Failed to update UI from device config: {str(e)}"
+            self._log_message(error_msg)
+
+    def _update_apn_fields(self, params_frame, config_data: Dict[str, Any], 
+                          updated_parameters: List[str], failed_updates: List[str]) -> None:
+        """Update APN configuration fields from device data."""
+        try:
+            # Update APN server
+            if 'apn_server' in config_data:
+                if hasattr(params_frame, 'apn_server_entry'):
+                    old_value = params_frame.apn_server_entry.get()
+                    new_value = str(config_data['apn_server'])
+                    
+                    params_frame.apn_server_entry.delete(0, 'end')
+                    params_frame.apn_server_entry.insert(0, new_value)
+                    
+                    # Add visual indicator to show parameter was updated from device
+                    value_changed = old_value != new_value
+                    self._add_update_indicator(params_frame.apn_server_entry, value_changed)
+                    
+                    updated_parameters.append(f"APN Server: {old_value} → {new_value}")
+                    self._log_message(f"INFO: Updated APN Server from '{old_value}' to '{new_value}'")
+            
+            # Update APN user
+            if 'apn_user' in config_data:
+                if hasattr(params_frame, 'apn_user_entry'):
+                    old_value = params_frame.apn_user_entry.get()
+                    new_value = str(config_data['apn_user'])
+                    
+                    params_frame.apn_user_entry.delete(0, 'end')
+                    params_frame.apn_user_entry.insert(0, new_value)
+                    
+                    # Add visual indicator to show parameter was updated from device
+                    value_changed = old_value != new_value
+                    self._add_update_indicator(params_frame.apn_user_entry, value_changed)
+                    
+                    updated_parameters.append(f"APN User: {old_value} → {new_value}")
+                    self._log_message(f"INFO: Updated APN User from '{old_value}' to '{new_value}'")
+            
+            # Update APN password
+            if 'apn_password' in config_data:
+                if hasattr(params_frame, 'apn_password_entry'):
+                    old_value = params_frame.apn_password_entry.get()
+                    new_value = str(config_data['apn_password'])
+                    
+                    params_frame.apn_password_entry.delete(0, 'end')
+                    params_frame.apn_password_entry.insert(0, new_value)
+                    
+                    # Add visual indicator to show parameter was updated from device
+                    value_changed = old_value != new_value
+                    self._add_update_indicator(params_frame.apn_password_entry, value_changed)
+                    
+                    # Don't log actual password values for security
+                    updated_parameters.append(f"APN Password: {'*' * len(old_value)} → {'*' * len(new_value)}")
+                    self._log_message(f"INFO: Updated APN Password (length: {len(old_value)} → {len(new_value)})")
+                    
+        except Exception as e:
+            error_msg = f"Failed to update APN fields: {str(e)}"
+            failed_updates.append(error_msg)
+            self._log_message(f"WARNING: {error_msg}")
+
+    def _update_parameter_widgets(self, params_frame, config_data: Dict[str, Any], 
+                                 updated_parameters: List[str], failed_updates: List[str]) -> None:
+        """Update parameter factory widgets from device data."""
+        try:
+            # Get parameter widgets from the parameters frame
+            parameter_widgets = getattr(params_frame, 'parameter_widgets', {})
+            
+            if not parameter_widgets:
+                self._log_message("WARNING: No parameter widgets found for update")
+                return
+            
+            # Map device response keys to parameter widget names
+            parameter_mapping = {
+                'server_address': 'server_ip',
+                'server_port': 'server_port',
+                'gt06_protocol': 'gt06_protocol',
+                'vibration': 'vibration',
+                'sensitivity': 'sensitivity',
+                'curve_sensor': 'curve_sensor',
+                'ignition_type': 'ignition_type',
+                'timer_ign_on': 'timer_ign_on',
+                'timer_ign_off': 'timer_ign_off',
+                'heartbeat_ign_on': 'heartbeat_ign_on',
+                'heartbeat_ign_off': 'heartbeat_ign_off',
+                'heartbeat_interval': 'heartbeat_interval',
+                'lock_type': 'lock_type'
+            }
+            
+            for device_key, widget_name in parameter_mapping.items():
+                if device_key in config_data and widget_name in parameter_widgets:
+                    try:
+                        parameter_widget = parameter_widgets[widget_name]
+                        old_value = parameter_widget.get_value()
+                        new_value = config_data[device_key]
+                        
+                        # Set the new value
+                        parameter_widget.set_value(new_value)
+                        
+                        # Add visual indicator to show parameter was updated from device
+                        value_changed = old_value != new_value
+                        self._add_parameter_update_indicator(parameter_widget, value_changed)
+                        
+                        # Log the update
+                        param_display_name = parameter_widget.definition.display_label
+                        updated_parameters.append(f"{param_display_name}: {old_value} → {new_value}")
+                        self._log_message(f"INFO: Updated {param_display_name} from '{old_value}' to '{new_value}'")
+                        
+                    except Exception as e:
+                        error_msg = f"Failed to update {widget_name}: {str(e)}"
+                        failed_updates.append(error_msg)
+                        self._log_message(f"WARNING: {error_msg}")
+                        
+        except Exception as e:
+            error_msg = f"Failed to update parameter widgets: {str(e)}"
+            failed_updates.append(error_msg)
+            self._log_message(f"WARNING: {error_msg}")
+
+    def _add_update_indicator(self, widget, value_changed: bool) -> None:
+        """
+        Add visual indicator to show a parameter was updated from device.
+        
+        Args:
+            widget: The UI widget that was updated
+            value_changed: True if the value actually changed, False if it was the same
+        """
+        try:
+            if value_changed:
+                # Add a temporary border color to indicate the field was updated
+                original_border_color = widget.cget("border_color")
+                widget.configure(border_color="#00ff00", border_width=2)  # Green border for updated
+                
+                # Schedule removal of the indicator after 3 seconds
+                self.app.after(3000, lambda: self._remove_update_indicator(widget, original_border_color))
+            else:
+                # Add a blue border to indicate the field was checked but unchanged
+                original_border_color = widget.cget("border_color")
+                widget.configure(border_color="#0066cc", border_width=1)  # Blue border for unchanged
+                
+                # Schedule removal of the indicator after 2 seconds
+                self.app.after(2000, lambda: self._remove_update_indicator(widget, original_border_color))
+                
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to add update indicator: {str(e)}")
+
+    def _add_parameter_update_indicator(self, parameter_widget, value_changed: bool) -> None:
+        """
+        Add visual indicator to a parameter factory widget.
+        
+        Args:
+            parameter_widget: The parameter widget that was updated
+            value_changed: True if the value actually changed, False if it was the same
+        """
+        try:
+            # Get the actual UI widget from the parameter
+            ui_widget = getattr(parameter_widget, 'widget', None)
+            if ui_widget:
+                self._add_update_indicator(ui_widget, value_changed)
+                
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to add parameter update indicator: {str(e)}")
+
+    def _remove_update_indicator(self, widget, original_border_color) -> None:
+        """
+        Remove the visual update indicator from a widget.
+        
+        Args:
+            widget: The UI widget to restore
+            original_border_color: The original border color to restore
+        """
+        try:
+            widget.configure(border_color=original_border_color, border_width=0)
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to remove update indicator: {str(e)}")
+
+    def _show_update_indicators(self, updated_parameters: List[str]) -> None:
+        """
+        Show visual indicators for all updated parameters.
+        
+        Args:
+            updated_parameters: List of parameter update descriptions
+        """
+        if updated_parameters:
+            # Log summary of updates
+            self._log_message(f"INFO: Successfully updated {len(updated_parameters)} parameters from device")
+            
+            # Show a temporary notification in the log
+            update_summary = f"Configuration read completed - {len(updated_parameters)} parameters updated"
+            self._log_message(f"SUCCESS: {update_summary}")
+
+    def _log_parameter_updates(self, updated_parameters: List[str], failed_updates: List[str]) -> None:
+        """
+        Log all parameter updates with timestamps and values.
+        
+        Args:
+            updated_parameters: List of successful parameter updates
+            failed_updates: List of failed parameter updates
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        if updated_parameters:
+            self._log_message(f"INFO: Parameter updates at {timestamp}:")
+            for update in updated_parameters:
+                self._log_message(f"  ✓ {update}")
+        
+        if failed_updates:
+            self._log_message(f"WARNING: Failed parameter updates at {timestamp}:")
+            for failure in failed_updates:
+                self._log_message(f"  ✗ {failure}")
+
+    def _update_ui_from_results(self, parameters_read: List[ParameterReadResult]) -> None:
+        """
+        Update UI fields with values read from the device.
+        
+        Args:
+            parameters_read: List of parameter read results
+        """
+        try:
+            self._log_message(f"DEBUG: _update_ui_from_results called with {len(parameters_read)} parameters")
+            
+            # Process each successful parameter read
+            for result in parameters_read:
+                if result.success and result.value is not None:
+                    self._log_message(f"DEBUG: Processing successful result: {result.parameter_name} = {result.value}")
+                    # Update the UI parameter
+                    self._update_ui_parameter(result.parameter_name, result.value)
+                else:
+                    if not result.success:
+                        self._log_message(f"DEBUG: Skipping failed result: {result.parameter_name}, error: {result.error_message}")
+                    elif result.value is None:
+                        self._log_message(f"DEBUG: Skipping result with None value: {result.parameter_name}")
+        
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI from results: {str(e)}")
+            import traceback
+            self._log_message(f"ERROR: Traceback: {traceback.format_exc()}")
+
+            # Process each successful parameter read
+            for result in parameters_read:
+                if result.success and result.value is not None:
+                    # Update the UI parameter
+                    self._update_ui_parameter(result.parameter_name, result.value)
+        
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI from results: {str(e)}")
+
+    def show_read_progress(self, progress: float, current_param: str) -> None:
+        """
+        Show progress indication for configuration reading operations.
+        
+        Args:
+            progress: Progress percentage (0.0 to 100.0)
+            current_param: Name of the parameter currently being read
+        """
+        try:
+            # Update progress dialog if available
+            if self.progress_dialog_id and hasattr(self.app, 'operation_confirmation_service'):
+                status_text = self.i18n.get('config_read_progress', 
+                                          'Reading {param_name}...').format(param_name=current_param)
+                
+                self.app.operation_confirmation_service.update_progress(
+                    self.progress_dialog_id, int(progress), status_text
+                )
+            
+            # Call custom progress callback if provided
+            if self.progress_callback:
+                self.progress_callback(progress, 100.0, current_param)
+                
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to show read progress: {str(e)}")
+
+    def handle_read_error(self, error: Exception, param_name: str) -> None:
+        """
+        Handle errors that occur during parameter reading.
+        
+        Args:
+            error: The exception that occurred
+            param_name: Name of the parameter that failed to read
+        """
+        try:
+            error_msg = self._get_specific_error_message(param_name, str(error))
+            self._log_message(f"ERROR: Failed to read {param_name}: {error_msg}")
+            
+            # Show user-friendly error message if this is a critical parameter
+            critical_params = ['device_info', 'apn_config', 'server_config']
+            if param_name in critical_params:
+                self._log_message(f"WARNING: Critical parameter {param_name} could not be read")
+                
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to handle read error: {str(e)}")
+
+    def _provide_partial_failure_guidance(self, failed_parameters: List[str], successful_reads: int, total_parameters: int) -> None:
+        """
+        Provide guidance when some parameters failed to read.
+        
+        Args:
+            failed_parameters: List of parameters that failed to read
+            successful_reads: Number of parameters successfully read
+            total_parameters: Total number of parameters attempted
+        """
+        try:
+            self._log_message(f"INFO: Partial configuration read completed:")
+            self._log_message(f"INFO:   ✓ Successfully read: {successful_reads} parameters")
+            self._log_message(f"INFO:   ✗ Failed to read: {len(failed_parameters)} parameters")
+            
+            # Categorize failed parameters
+            critical_failures = []
+            non_critical_failures = []
+            critical_params = ['device_info', 'apn_config', 'server_config']
+            
+            for param in failed_parameters:
+                if param in critical_params:
+                    critical_failures.append(param)
+                else:
+                    non_critical_failures.append(param)
+            
+            if critical_failures:
+                self._log_message(f"WARNING: Critical parameters that failed: {', '.join(critical_failures)}")
+                self._log_message(f"WARNING: Device may not be fully configured without these parameters")
+            
+            if non_critical_failures:
+                self._log_message(f"INFO: Optional parameters that failed: {', '.join(non_critical_failures)}")
+                self._log_message(f"INFO: These parameters can be configured manually if needed")
+            
+            # Provide general guidance
+            self._log_message(f"INFO: Recommendations:")
+            self._log_message(f"INFO:   • Review the successfully read parameters above")
+            self._log_message(f"INFO:   • Manually configure any critical parameters that failed")
+            self._log_message(f"INFO:   • Try reading individual parameters if needed")
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to provide partial failure guidance: {str(e)}")
+
+    def _provide_complete_failure_guidance(self, failed_parameters: List[str]) -> None:
+        """
+        Provide guidance when all parameters failed to read.
+        
+        Args:
+            failed_parameters: List of all parameters that failed to read
+        """
+        try:
+            self._log_message(f"ERROR: Complete configuration read failure - no parameters could be read")
+            self._log_message(f"ERROR: This indicates a serious communication issue with the device")
+            
+            # Provide comprehensive troubleshooting steps
+            self._log_message(f"INFO: Troubleshooting steps:")
+            self._log_message(f"INFO:   1. Check device power and connection status")
+            self._log_message(f"INFO:   2. Verify the USB cable is properly connected")
+            self._log_message(f"INFO:   3. Try disconnecting and reconnecting the device")
+            self._log_message(f"INFO:   4. Check if the device is in configuration mode")
+            self._log_message(f"INFO:   5. Verify the correct COM port is selected")
+            self._log_message(f"INFO:   6. Try restarting the device")
+            self._log_message(f"INFO:   7. Check if other applications are using the COM port")
+            
+            # Suggest alternative approaches
+            self._log_message(f"INFO: Alternative approaches:")
+            self._log_message(f"INFO:   • Try reading individual parameters one at a time")
+            self._log_message(f"INFO:   • Use manual configuration if device reading is not working")
+            self._log_message(f"INFO:   • Contact technical support if the problem persists")
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to provide complete failure guidance: {str(e)}")
+
+    def _categorize_error_type(self, error_message: str) -> str:
+        """
+        Categorize the type of error based on the error message.
+        
+        Args:
+            error_message: The error message to categorize
+            
+        Returns:
+            Error category string
+        """
+        error_msg_lower = error_message.lower()
+        
+        if 'timeout' in error_msg_lower:
+            return 'timeout'
+        elif 'invalid' in error_msg_lower or 'unexpected' in error_msg_lower:
+            return 'invalid_response'
+        elif 'parse' in error_msg_lower or 'pattern' in error_msg_lower or 'format' in error_msg_lower:
+            return 'parse_error'
+        elif 'connection' in error_msg_lower or 'disconnect' in error_msg_lower:
+            return 'connection_error'
+        elif 'unknown' in error_msg_lower:
+            return 'unknown_parameter'
+        else:
+            return 'generic_error'
+
+    def get_error_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about configuration reading errors.
+        
+        Returns:
+            Dictionary containing error statistics
+        """
+        return {
+            'is_reading': self.is_reading,
+            'last_read_attempt': getattr(self, 'last_read_attempt', None),
+            'total_read_attempts': getattr(self, 'total_read_attempts', 0),
+            'successful_reads': getattr(self, 'successful_reads', 0),
+            'failed_reads': getattr(self, 'failed_reads', 0)
+        }
+
+    def _create_detailed_error_summary(self, failed_parameters: List[str], successful_reads: int, total_parameters: int) -> str:
+        """
+        Create a detailed error summary for failed configuration reads.
+        
+        Args:
+            failed_parameters: List of parameters that failed to read
+            successful_reads: Number of parameters successfully read
+            total_parameters: Total number of parameters attempted
+            
+        Returns:
+            Detailed error summary string
+        """
+        try:
+            if len(failed_parameters) == total_parameters:
+                # Complete failure
+                return self.i18n.get('config_read_complete_failure',
+                                   'Configuration reading failed completely. No parameters could be read from the device. '
+                                   'Please check device connection and try again.')
+            else:
+                # Partial failure
+                failure_rate = (len(failed_parameters) / total_parameters) * 100
+                
+                if failure_rate <= 25:
+                    severity = self.i18n.get('config_read_minor_issues', 'minor issues')
+                elif failure_rate <= 50:
+                    severity = self.i18n.get('config_read_moderate_issues', 'moderate issues')
+                else:
+                    severity = self.i18n.get('config_read_major_issues', 'major issues')
+                
+                return self.i18n.get('config_read_partial_failure_detailed',
+                                   'Configuration reading completed with {severity}. '
+                                   'Successfully read {successful}/{total} parameters. '
+                                   'Failed parameters: {failed_list}').format(
+                    severity=severity,
+                    successful=successful_reads,
+                    total=total_parameters,
+                    failed_list=', '.join(failed_parameters)
+                )
+        except Exception as e:
+            # Fallback to simple error message
+            return self.i18n.get('config_read_partial_failure',
+                               'Failed to read {count} parameters: {params}').format(
+                count=len(failed_parameters),
+                params=', '.join(failed_parameters)
+            )
+
+
+    def _update_ui_parameter(self, param_name: str, value: Any) -> None:
+        """
+        Update a specific UI parameter with a value read from the device.
+        
+        Args:
+            param_name: Name of the parameter to update
+            value: Value to set in the UI
+        """
+        try:
+            # Log the parameter update
+            self._log_message(f"DEBUG: Updating UI parameter {param_name} with value: {value}")
+            
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame'):
+                self._log_message(f"WARNING: Cannot update UI parameter {param_name} - parameters_frame not found")
+                return
+            
+            # Parameter name mapping from service to UI
+            parameter_name_mapping = {
+                # Protocol settings
+                'gt06_protocol': 'gt06_protocol',
+                'protocol': 'gt06_protocol',  # Alternative name
+                
+                # Server settings
+                'server_address': 'server_ip',
+                'server_port': 'server_port',
+                
+                # Timer settings
+                'timer_ign_on': 'timer_ign_on',
+                'timer_ign_off': 'timer_ign_off',
+                
+                # Heartbeat settings
+                'heartbeat_ign_on': 'heartbeat_ign_on',
+                'heartbeat_ign_off': 'heartbeat_ign_off',
+                'heartbeat_interval': 'heartbeat_interval',
+                
+                # APN settings
+                'apn_server': 'apn_server',
+                'apn_user': 'apn_user',
+                'apn_password': 'apn_password',
+                
+                # Other settings
+                'vibration': 'vibration',
+                'sensitivity': 'sensitivity',
+                'curve_sensor': 'curve_sensor',
+                'ignition_type': 'ignition_type',
+                'lock_type': 'lock_type',
+                'sleep_mode': 'sleep_mode',
+                'sleep_time': 'sleep_time',
+                'network_select': 'network_select',
+                'volte_switch': 'volte_switch'
+            }
+            
+            # Map parameter name if needed
+            ui_param_name = parameter_name_mapping.get(param_name, param_name)
+            
+            # Get the parameter widget from the parameters frame
+            parameter_widget = self.app.parameters_frame.get_parameter_widget(ui_param_name)
+            
+            if parameter_widget:
+                # Get the current value to check if it changed
+                current_value = parameter_widget.get_value()
+                
+                # Update the parameter value - ensure this happens on the main thread
+                def update_widget():
+                    try:
+                        parameter_widget.set_value(value)
+                        
+                        # Highlight the parameter to show it was updated
+                        value_changed = current_value != value
+                        self.app.parameters_frame.highlight_updated_parameter(ui_param_name, value_changed)
+                        
+                        self._log_message(f"DEBUG: Successfully updated UI parameter {ui_param_name} from {current_value} to {value}")
+                    except Exception as e:
+                        self._log_message(f"ERROR: Exception in update_widget for {ui_param_name}: {str(e)}")
+                
+                # Schedule the update on the main thread
+                self.app.after(0, update_widget)
+            else:
+                self._log_message(f"WARNING: Parameter widget not found for {ui_param_name} (original: {param_name})")
+                
+                # List available parameter widgets for debugging
+                if hasattr(self.app.parameters_frame, 'parameter_widgets'):
+                    available_widgets = list(self.app.parameters_frame.parameter_widgets.keys())
+                    self._log_message(f"DEBUG: Available parameter widgets: {available_widgets}")
+        
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI parameter {param_name}: {str(e)}")
+    
+    def _update_ui_from_results(self, parameters_read: List[ParameterReadResult]) -> None:
+        """
+        Update UI fields with values read from the device.
+        
+        Args:
+            parameters_read: List of parameter read results
+        """
+        try:
+            self._log_message(f"DEBUG: _update_ui_from_results called with {len(parameters_read)} parameters")
+            
+            # Process each successful parameter read
+            for result in parameters_read:
+                if result.success and result.value is not None:
+                    self._log_message(f"DEBUG: Processing successful result: {result.parameter_name} = {result.value}")
+                    # Update the UI parameter
+                    self._update_ui_parameter(result.parameter_name, result.value)
+                else:
+                    if not result.success:
+                        self._log_message(f"DEBUG: Skipping failed result: {result.parameter_name}, error: {result.error_message}")
+                    elif result.value is None:
+                        self._log_message(f"DEBUG: Skipping result with None value: {result.parameter_name}")
+        
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI from results: {str(e)}")
+            import traceback
+            self._log_message(f"ERROR: Traceback: {traceback.format_exc()}")
+    
+    def _map_parameter_to_ui_field(self, param_name: str) -> str:
+        """
+        Map a parameter name from the service to the corresponding UI field name.
+        
+        Args:
+            param_name: Parameter name from the service
+            
+        Returns:
+            The corresponding UI field name
+        """
+        # Direct mapping for specific parameters
+        direct_mapping = {
+            'apn_config': 'apn_server',
+            'server_config': 'server_ip',
+            'protocol_settings': 'gt06_protocol',
+            'timer_settings': 'timer_ign_on',
+            'heartbeat_settings': 'heartbeat_ign_on',
+            'defense_settings': 'defense_time'
+        }
+        
+        # Check if we have a direct mapping
+        if param_name in direct_mapping:
+            return direct_mapping[param_name]
+        
+        # Otherwise return the original name
+        return param_name
+    
+    def _update_ui_with_parameter(self, param_name: str, value: str) -> None:
+        """
+        Update a UI field with a parameter value read from the device.
+        
+        Args:
+            param_name: Parameter name from the service
+            value: Value to set in the UI
+        """
+        try:
+            # Map the parameter name to a UI field
+            ui_field = self._map_parameter_to_ui_field(param_name)
+            
+            self._log_message(f"DEBUG: Mapping parameter {param_name} to UI field {ui_field}")
+            
+            # Check if we have access to the parameters frame
+            if hasattr(self.app, 'parameters_frame'):
+                # Get the parameter widget
+                parameter_widget = self.app.parameters_frame.get_parameter_widget(ui_field)
+                
+                if parameter_widget:
+                    # Get the current value to check if it changed
+                    current_value = parameter_widget.get_value()
+                    
+                    # Update the widget on the main thread
+                    def update_widget():
+                        try:
+                            parameter_widget.set_value(value)
+                            value_changed = current_value != value
+                            self.app.parameters_frame.highlight_updated_parameter(ui_field, value_changed)
+                            self._log_message(f"DEBUG: Successfully updated UI field {ui_field} from {current_value} to {value}")
+                        except Exception as e:
+                            self._log_message(f"ERROR: Failed to update widget: {str(e)}")
+                    
+                    # Schedule the update on the main thread
+                    self.app.after(0, update_widget)
+                else:
+                    self._log_message(f"WARNING: Parameter widget not found for {ui_field}")
+            else:
+                self._log_message(f"WARNING: Cannot update UI - parameters_frame not found")
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI with parameter {param_name}: {str(e)}")
+        def reset_error_statistics(self) -> None:
+            """Reset error statistics for a fresh start."""
+        self.total_read_attempts = 0
+        self.successful_reads = 0
+        self.failed_reads = 0
+        self.last_read_attempt = None
+        self._log_message("INFO: Configuration reading error statistics reset")

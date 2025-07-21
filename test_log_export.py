@@ -8,255 +8,178 @@ from collections import deque
 # Add the project root to the path so we can import the modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Create a mock version of the LogFrame class g
+# Mock necessary modules that might cause issues in a test environment
+sys.modules['tkinter'] = MagicMock()
+sys.modules['tkinter.filedialog'] = MagicMock()
+sys.modules['pyperclip'] = MagicMock()
+
 class MockLogFrame:
-    def __init__(self, master, i18n, svice):
+    def __init__(self, master, i18n, serial_service):
         self.master = master
-i18n
-        self.serial_service = serial_sevice
-        self.log_entries = deque(maxlen=1000
-()
-        self.log_buf []
-        
-    def log_message(self, mes):
-        """Mock implementation of
-        timestamp = datetime.da
+        self.i18n = i18n
+        self.serial_service = serial_service
+        self.log_entries = deque(maxlen=1000)
+        self.log_buffer = [] # This is not used in the original code, but keeping it for consistency
+
+    def log_message(self, message):
+        """Mock implementation of log_message."""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log_entries.append((timestamp, message))
-        
-    def format_log_for_export(self, log_cont):
+
+    def format_log_for_export(self, log_content):
         """
-        Format the log content for export w.
-        T.
+        Format the log content for export with timestamps and categories.
+        This is a simplified version for testing.
         """
-        lines = log_content.split('\n')
         formatted_lines = []
-        
-        # Usilable
-        if self.log_entries:
-            for timestamp, message in self.
-                if not message.strip():
-                    continue
-                
-                # Extract category from the message
-                if message.startswith("APP:"):
-        PP"
-                    content ()
-                elif message.startswith("DEV:"):
-                    category = "DEV"
-                    content = message[4:].strip()
-                elif message.startswith("INFO:"):
-        NFO"
-                    content = message[5:].strip()
-                elif message.startswith("ERR"):
-                    category = "ERROR"
-                    content = message[6:].sp()
-                elif message.startswith("WARNING:"):
-                    category = "WARNING"
-        trip()
-                elif message.startswith("DEBUG:"):
-                    category = 
-                    content = message[6:].strip()
-           else:
-                    category = "SYST
-                    content = messae.strip()
-        
-                # Format with full date and time
-                full_timestamp = f"{datetime."
-        "
-                formatted_lines.append(formatted_lin
-        else:
-        ailable
-            current_time = datetime.datetime.now()
+        for timestamp, message in self.log_entries:
+            category = "APP" # Default category
+            content = message.strip()
+
+            if message.startswith("DEV:"):
+                category = "DEV"
+                content = message[4:].strip()
+            elif message.startswith("INFO:"):
+                category = "INFO"
+                content = message[5:].strip()
+            elif message.startswith("ERROR:"):
+                category = "ERROR"
+                content = message[6:].strip()
+            elif message.startswith("WARNING:"):
+                category = "WARNING"
+                content = message[9:].strip()
+            elif message.startswith("DEBUG:"):
+                category = "DEBUG"
+                content = message[6:].strip()
             
-        
-                if not line.strip():
-                    continue
-                
-                # Extract category from the formatted log line
-                category = "APP"  # Defaulory
-        trip()
-                
-                # Add timestamp to e
-        ")
-                
-                # Format the line with timestry
-        
-                formatted_lines.append(formatted_line)
-                
-        tries
-                current_time += datetime.nds=100)
-        
-        return '\n'.join(formats)
-    
-    def 
+            formatted_lines.append(f"[{timestamp}] [{category}] {content}")
+        return "\n".join(formatted_lines)
+
+    def export_log(self):
         """Mock implementation of export_log."""
         from tkinter import filedialog
-        
-        # Get the log content
-        -1c")
+
+        log_content = self.format_log_for_export(self.log_entries)
         if not log_content:
             self.log_message("WARNING: No log content to export\n")
-        rn
-        
-        # Format the log content with timeon
-        formatted_log = self.format_log_for_export(log_content)
-        
-        # Open file dialog to select save location
-        default_filename = f"LT32Pro_Log_{datxt"
-        file_path = filedialog.asksaveasfilen(
+            return
+
+        default_filename = f"LT32Pro_Log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        file_path = filedialog.asksaveasfilename(
             defaultextension=".txt",
-        
             title=self.i18n.get("export_log"),
             initialfile=default_filename
         )
-        
+
         if not file_path:
-            return  # User cancelled the dialog
-        
+            return # User cancelled the dialog
+
         try:
-            with open(file_path, 'w', encoding='utf-8' as f:
-        
-                current_time = datetime.datetime.n")
-                f.write(f"LT32Pro Device Configurator - Log
-        \n")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write("LT32Pro Device Configurator - Log Export\n")
+                f.write(f"Export Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 
-                # Add device informle
-        :
-                    if self.serial_service.devic
+                if self.serial_service and self.serial_service.device_info:
+                    if self.serial_service.device_info.get('imei'):
                         f.write(f"Device IMEI: {self.serial_service.device_info['imei']}\n")
-        
-                        f.write(f"Den")
-                
+                    if self.serial_service.device_info.get('iccid'):
+                        f.write(f"Device ICCID: {self.serial_service.device_info['iccid']}\n")
                 f.write("-" * 50 + "\n\n")
-                
-        nt
-                f.write(formatted_log)
-            
-        e
-            self.log_message(f"INFO: Log exported)
-            
+                f.write(log_content)
+            self.log_message(f"INFO: Log exported successfully to {os.path.basename(file_path)}\n")
+        except Exception as e:
+            self.log_message(f"ERROR: Failed to export log: {str(e)}\n")
 
-            # Log error mee
-            self.lotest.main()    unitn__':
-= '__mai__ =if __name")
 
-t\nto exporcontent g  No loRNING:d_with("WAert_calleage.assg_messme.loelf.log_fra  s    ed
-  was loggng message that a warniheck  # C
-       )
-        g(rt_loexpog_frame.f.lo   sel    
- log methodexport_# Call the        
+class TestLogExport(unittest.TestCase):
+    def setUp(self):
+        """Set up the test environment."""
+        self.mock_master = MagicMock()
+        self.mock_i18n = MagicMock()
+        self.mock_i18n.get.return_value = "Export Log" # Default return for i18n.get
+        self.mock_serial_service = MagicMock()
+        self.mock_serial_service.device_info = {'imei': '123456789012345', 'iccid': '98765432109876543210'}
+
+        self.log_frame = MockLogFrame(self.mock_master, self.mock_i18n, self.mock_serial_service)
+
+    @patch('tkinter.filedialog.asksaveasfilename')
+    def test_export_log_success(self, mock_asksaveasfilename):
+        """Test successful log export."""
+        mock_asksaveasfilename.return_value = "test_log.txt"
         
- lue="")vaturn_ck(reicMo.get = Magboxxte.log_telog_fram       self.y string
-  emptan return textbox to the log_    # Mock
-    g.""" empty loexporting an """Test ):
-       _log(selftyempport_test_ex   def  
- 
-       on\n")st exceptit log: Teexpor to R: Failed("ERROlled_witht_caser_message.asframe.logself.log_   
-      loggedsage wasrror mesthat an eheck # C
-            log()
-    ame.export_elf.log_fr     sod
-   ethort_log mCall the exp #     
-         ion")
-   except"Testception(ect = Exe_effn.sidock_ope        m exception
- to raise an openleMock the fi  #     
-      txt"
-    st_log. = "teturn_valuelog.re_diaave_s  mockh
-      at pileturn a f reialog toe file dthock  M"
-        #""ort.expog ons during lti excepingt handlTes" "":
-       _dialog)ock_save_open, melf, mockption(s_excet_log_withf test_expor  de=True)
-  en', createiltins.opbuatch('   @p
- asfilename')g.asksave.filedialoch('tkinterpat  
-    @     {2}\]")
- 2}:\d}:\d{{2} \d{2{2}-\d}-\d\[\d{4 r"atted_log,ormssertRegex(f     self.aed
-   ncludps are ihat timestamCheck t        #    
-og)
-     _l, formattedAPP]"assertIn("[self.        egories
-atd ctehe expecs tintall contied log sormatthat the f   # Check t      
-  
-     tbox.get())exme.log_tg_fra(self.lo_for_exportat_log.formlf.log_framelog = seormatted_
-        f()lear_entries.cog_frame.log     self.l
-    entriesogithout l wst    # Te      
-    ")
-  }\]\d{2}:\d{2} \d{2}:{2\d}--\d{2r"\[\d{4}_log, rmattedtRegex(foser.as   self
-     ncludedre is aat timestamp th # Check 
-           g)
-   ted_lo format]",tIn("[ERRORelf.asser
-        sted_log) formatV]","[DEertIn( self.ass    ed_log)
-   , formatt"[APP]"f.assertIn(    selies
-     categore expectedtains thted log conformatck that the      # Che   
-        ")
-_export("og_format_lore.f_framelf.logg = sormatted_lo  fs
-      log entrieh Test wit
-        # ""port."for extent ting log conmatTest for"     ""  
- :xport(self)_for_eformat_log test_ef   d
-       called()
-  assert_not_e.essaglog_mf.log_frame.  sel     d
- e was loggeror messag erccess oro suk that n     # Chec
-           once()
-led_cal.assert_save_dialog     mock_
-   was calledog e file dialthat th# Check          
-      log()
- ort_e.expframog_ self.l
-       g method_lo the export   # Call           
-  ""
-alue = urn_v_dialog.retmock_save        ancelled)
-er crn None (usto retuog  file dial # Mock the
-       og."""alg dirt loing the expoancellest c"""T        log):
-e_dia, mock_savncel(self_caort_logf test_expde
-    filename')sksaveasiledialog.aer.fnt@patch('tki   
-    \n")
-     txto test_log.cessfully tted sucg exporLo(f"INFO: withed_sert_callssage.aslog_meme.ra self.log_f
-       edge was loggessasuccess mhat a k t  # Chec   
-      )
-     tf-8' encoding='u'w',g.txt", est_lonce_with("td_ole.assert_calpenck_o      mo writing
-  opened fore file was hat theck t # Ch      
-  
-       once()rt_called_og.asseialsave_d    mock_d
-     was callealog file dick that the # Che      
+        # Mock open for writing
+        mock_open = MagicMock(spec=open)
+        mock_file = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_file
+
+        with patch('builtins.open', mock_open):
+            self.log_frame.log_message("INFO: Test log entry 1\n")
+            self.log_frame.log_message("DEV: Device response\n")
+            self.log_frame.export_log()
+
+            self.mock_i18n.get.assert_called_with("export_log")
+            mock_asksaveasfilename.assert_called_once()
+            mock_open.assert_called_once_with("test_log.txt", 'w', encoding='utf-8')
+            mock_file.write.assert_called()
+            self.log_frame.log_entries.clear() # Clear entries after export
+
+    @patch('tkinter.filedialog.asksaveasfilename')
+    def test_export_log_cancel(self, mock_asksaveasfilename):
+        """Test log export when user cancels the dialog."""
+        mock_asksaveasfilename.return_value = "" # User cancels
         
- ()e.export_log.log_framlf
-        se_log methodhe export   # Call t        
-file
-     ock_n_value = m__.returter.__enreturn_value_open.ock     m  ()
- MagicMockock_file =      mons
-   eratirite ope open and w the fil    # Mock   
-    t"
-     .tx "test_log_value =ialog.returne_d    mock_save path
-    urn a filret dialog to ock the file # M"
-       ""le.fi a ting log tot expor"""Tes :
-       dialog)save_k_n, moc_ope, mocklfrt_log(seexpodef test_ue)
-    ', create=Trenins.opbuilt  @patch('lename')
-  asfisave.askdialog.filetch('tkinter    @pa      
-e"))
-  ssagOR: Error meERRmestamp, "append((tig_entries.me.lof.log_fra       sel
- se"))esponevice r "DEV: Damp,d((timestppen.alog_entries.log_frame.   self))
-     essage": Test mmp, "APPd((timestaries.appen.log_entf.log_frame     sel
-   )S"me("%H:%M:%).strftiow(etime.natetime.d= datstamp     time   entries
- et up log  # S
-           )
-    or message"n[ERROR] Errnse\ce respo Devin[DEV]t message\"[APP] Tes_value=urnicMock(ret= Magx.get log_textbog_frame.loself.     ck()
-   MagicMosage = ame.log_mesfrlog_self.        ce)
-l_servi.seriaf.i18n, selfelster, self.maFrame(sckLoge = Moramg_f    self.lo    nstance
-Frame ik LogmocCreate a 
-        #       }
-        '
-  4321065876543210987'iccid': '9            012345',
-123456789 '':    'imei       {
- vice_info = vice.deal_ser self.serik()
-        = MagicMocal_servicef.seri  sel     ")
- port Logalue="Exturn_vock(reMagicM.i18n.get =     self   Mock()
- Magicself.i18n = )
-        agicMock(er = M   self.mastcts
-      mock obje # Create"
-       nment.""irotest env"Set up the   ""
-      self):etUp( def s
-   y."""
-itfunctional export Test the log   """stCase):
- ittest.Tet(unxporestLogEs T()
+        self.log_frame.log_message("INFO: Test log entry 1\n")
+        self.log_frame.export_log()
 
-clasckMagicMo'] = edialoginter.filtk['modules
-sys.k()icMoc = Magpyperclip']les['()
-sys.moduMagicMock = tomtkinter']uss['c
-sys.moduletestsin e issues t caus modules tha)
+        self.mock_i18n.get.assert_called_with("export_log")
+        mock_asksaveasfilename.assert_called_once()
+        # Ensure no file operations were attempted
+        with patch('builtins.open') as mock_open:
+            self.log_frame.export_log()
+            mock_open.assert_not_called()
 
-# Mockstr(e)}\n"log: {port led to exai Fe(f"ERROR:sagg_mes
+    @patch('tkinter.filedialog.asksaveasfilename')
+    def test_export_log_no_content(self, mock_asksaveasfilename):
+        """Test exporting an empty log."""
+        mock_asksaveasfilename.return_value = "empty_log.txt"
+
+        self.log_frame.export_log()
+        self.log_frame.log_message.assert_called_with("WARNING: No log content to export\n")
+        mock_asksaveasfilename.assert_not_called() # Dialog should not be opened
+
+    @patch('tkinter.filedialog.asksaveasfilename')
+    def test_export_log_with_exception(self, mock_asksaveasfilename):
+        """Test handling exceptions during log export."""
+        mock_asksaveasfilename.return_value = "error_log.txt"
+        
+        # Mock open to raise an exception
+        with patch('builtins.open', side_effect=IOError("Disk full")):
+            self.log_frame.log_message("INFO: Test log entry\n")
+            self.log_frame.export_log()
+            self.log_frame.log_message.assert_called_with("ERROR: Failed to export log: Disk full\n")
+
+    def test_format_log_for_export(self):
+        """Test the log formatting for export."""
+        self.log_frame.log_entries.clear() # Clear any existing entries
+        self.log_frame.log_message("INFO: App started\n")
+        self.log_frame.log_message("DEV: Device data\n")
+        self.log_frame.log_message("ERROR: Something went wrong\n")
+        self.log_frame.log_message("WARNING: Low battery\n")
+        self.log_frame.log_message("DEBUG: Debug info\n")
+        self.log_frame.log_message("Plain message\n")
+
+        formatted_log = self.log_frame.format_log_for_export(self.log_frame.log_entries)
+        
+        # Check that timestamps are included
+        self.assertRegex(formatted_log, r"^\\[\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\]")
+        
+        # Check that all categories are included and content is correct
+        self.assertIn("[INFO] App started", formatted_log)
+        self.assertIn("[DEV] Device data", formatted_log)
+        self.assertIn("[ERROR] Something went wrong", formatted_log)
+        self.assertIn("[WARNING] Low battery", formatted_log)
+        self.assertIn("[DEBUG] Debug info", formatted_log)
+        self.assertIn("[APP] Plain message", formatted_log) # Default category
+
+if __name__ == '__main__':
+    unittest.main()

@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import serial
+import time
 from services.i18n_service import I18nService
 from PIL import Image, ImageTk
 # Import the new helper function
@@ -15,11 +16,13 @@ from services.serial_service import SerialService
 from services.config_service import ConfigService
 from services.theme_service import ThemeService
 from services.device_command_mapper import DeviceCommandMapper
+from services.operation_confirmation_service import OperationConfirmationService
 from ui.connection_frame import ConnectionFrame
 from ui.parameters_frame import ParametersFrame
 from ui.actions_frame import ActionsFrame
 from ui.log_frame import LogFrame
 from ui.toolbar_frame import ToolbarFrame
+from ui.splash_screen import SplashScreen
 
 class App(ctk.CTk):
     def __init__(self):
@@ -30,12 +33,30 @@ class App(ctk.CTk):
         self.title(self.i18n.get("app_title"))
         self.geometry("1200x700")
         ctk.set_default_color_theme("blue")
+        
+        # Set application icon
+        try:
+            # You can change this path to point to your custom icon
+            icon_path = resource_path("assets/icons/my_custom_icon.ico")
+            self.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Failed to set application icon: {str(e)}")
+            # Fallback to default icon if custom icon fails
+            try:
+                fallback_icon_path = resource_path("assets/icons/app_icon.ico")
+                self.iconbitmap(fallback_icon_path)
+            except:
+                pass  # No icon if both fail
 
         # --- Services ---
         self.device_command_mapper = DeviceCommandMapper()  # Initialize device command mapper
         self.serial_service = SerialService(self)
         self.config_service = ConfigService(self)
         self.theme_service = ThemeService(self)  # Initialize theme service (loads saved theme)
+        self.operation_confirmation_service = OperationConfirmationService(self)  # Initialize operation confirmation service
+        
+        # Initialize configuration reader service in serial service
+        self.serial_service.initialize_configuration_reader()
 
         # --- Window Grid Layout ---
         # Configure the main grid - add row for toolbar
@@ -84,6 +105,9 @@ class App(ctk.CTk):
         # Parameters Frame (Center)
         self.params_frame = ParametersFrame(self, self.i18n)
         self.params_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
+        
+        # Add reference for ConfigurationReaderService
+        self.parameters_frame = self.params_frame
 
         # Log Frame (Right)
         self.log_frame = LogFrame(self, self.i18n, self.serial_service)
@@ -102,6 +126,108 @@ class App(ctk.CTk):
         self.destroy()
 
 
-if __name__ == "__main__":
+def start_app():
+    """
+    Function to initialize and start the main application.
+    This is called after the splash screen is displayed.
+    """
     app = App()
     app.mainloop()
+
+if __name__ == "__main__":
+    # Use a simpler approach for the splash screen to avoid image issues
+    try:
+        # Create a simple splash window
+        splash_root = tk.Tk()
+        splash_root.overrideredirect(True)  # Remove window decorations
+        splash_root.attributes('-topmost', True)  # Keep on top
+        
+        # Set a fixed size for the splash window
+        width, height = 500, 300
+        splash_root.geometry(f"{width}x{height}")
+        
+        # Center the window on the screen
+        x = (splash_root.winfo_screenwidth() // 2) - (width // 2)
+        y = (splash_root.winfo_screenheight() // 2) - (height // 2)
+        splash_root.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Create a frame with a blue background
+        splash_frame = tk.Frame(splash_root, bg="#0066cc", width=width, height=height)
+        splash_frame.pack(fill="both", expand=True)
+        
+        # Add application name
+        title_label = tk.Label(
+            splash_frame,
+            text="LT32Pro Configurator",
+            font=("Arial", 24, "bold"),
+            bg="#0066cc",
+            fg="white"
+        )
+        title_label.pack(pady=(60, 5))
+        
+        # Add version number
+        version_label = tk.Label(
+            splash_frame,
+            text="v1.0",
+            font=("Arial", 12),
+            bg="#0066cc",
+            fg="#e0e0e0"
+        )
+        version_label.pack(pady=(0, 20))
+        
+        # Add loading text
+        loading_label = tk.Label(
+            splash_frame,
+            text="Loading...",
+            font=("Arial", 14),
+            bg="#0066cc",
+            fg="white"
+        )
+        loading_label.pack(pady=10)
+        
+        # Add company name at the bottom
+        company_label = tk.Label(
+            splash_frame,
+            text="Lumini Tracker",
+            font=("Arial", 10),
+            bg="#0066cc",
+            fg="#e0e0e0"
+        )
+        company_label.pack(side="bottom", pady=10)
+        
+        # Add a progress bar
+        progress_bg = tk.Frame(splash_frame, bg="#003366", height=10)
+        progress_bg.pack(fill="x", side="bottom", padx=20, pady=20)
+        
+        progress_bar = tk.Frame(progress_bg, bg="#00ccff", width=0, height=10)
+        progress_bar.place(x=0, y=0, width=0)
+        
+        # Function to animate the progress bar
+        def update_progress_bar(current=0):
+            if current <= 100:
+                # Calculate width based on percentage
+                bar_width = int((width - 40) * (current / 100))
+                progress_bar.place(width=bar_width)
+                
+                # Schedule next update with increasing speed
+                delay = 30 if current > 80 else 40
+                splash_root.after(delay, lambda: update_progress_bar(current + 2))
+            else:
+                # When progress reaches 100%, close splash and start app
+                splash_root.after(200, finish_splash)
+        
+        # Function to close the splash screen and start the app
+        def finish_splash():
+            splash_root.destroy()
+            start_app()
+        
+        # Start the progress animation
+        update_progress_bar()
+        
+        # Start the splash screen
+        splash_root.mainloop()
+        
+    except Exception as e:
+        print(f"Error with splash screen: {e}")
+        # If splash screen fails, start the main app directly
+        start_app()
