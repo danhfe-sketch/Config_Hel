@@ -69,7 +69,9 @@ class ActionsFrame(ctk.CTkFrame):
         # Get the actual reboot command from the device command mapper
         try:
             if hasattr(self.serial_service.app, 'device_command_mapper'):
-                reboot_cmd = self.serial_service.app.device_command_mapper.get_command('reset_device', None)
+                reboot_cmd = self.serial_service.app.device_command_mapper.get_command(
+                    'reset_device', None, confirm_destructive=True, validate_command=True
+                )
                 self.serial_service.send_command(reboot_cmd, 'reset_device')
                 self.serial_service.app.log_frame.log_message("INFO: Reboot command sent to device\n")
             else:
@@ -92,7 +94,9 @@ class ActionsFrame(ctk.CTkFrame):
             # Get the actual factory reset command from the device command mapper
             try:
                 if hasattr(self.serial_service.app, 'device_command_mapper'):
-                    factory_cmd = self.serial_service.app.device_command_mapper.get_command('factory_reset', None)
+                    factory_cmd = self.serial_service.app.device_command_mapper.get_command(
+                        'factory_reset', None, confirm_destructive=True, validate_command=True
+                    )
                     self.serial_service.send_command(factory_cmd, 'factory_reset')
                     self.serial_service.app.log_frame.log_message("INFO: Factory reset command sent to device\n")
                 else:

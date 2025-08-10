@@ -21,7 +21,7 @@ The existing architecture will be preserved and extended:
 - **DeviceCommandMapper**: Map UI parameters to specific LT32Pro AT commands with proper device information retrieval
 - **ValidationService**: Centralized input validation with localized error messages and range checking
 - **LogExportService**: Handle log export functionality and enhanced logging capabilities
-- **ProfileManager**: Manage configuration profile save/load operations
+- **ProfileManager**: Manage bidirectional configuration profile operations (device-to-file and file-to-device)
 
 ## Components and Interfaces
 
@@ -274,6 +274,67 @@ class ConfigurationReaderService:
     def handle_read_error(self, error: Exception, param_name: str) -> None
 ```
 
+### 9. ProfileManager
+
+**Purpose**: Manage bidirectional configuration profile operations (per Requirements 8 and 9)
+**Features**:
+- Load complete configuration from device and save to profile file
+- Load configuration from profile file and deploy to device
+- Progress indication for both operations
+- Error handling with detailed feedback
+- Profile file format validation
+- Partial profile creation/deployment support
+- Integration with ConfigurationReaderService and DeviceCommandMapper
+
+**Interface**:
+```python
+class ProfileManager:
+    def load_from_device_to_profile(self, profile_path: str) -> ProfileOperationResult
+    def load_from_profile_to_device(self, profile_path: str) -> ProfileOperationResult
+    def validate_profile_file(self, profile_path: str) -> ValidationResult
+    def create_profile_from_device_config(self, config_data: dict) -> str  # Returns INI text
+    def deploy_profile_to_device(self, profile_text: str) -> DeploymentResult
+    def parse_profile_file(self, profile_path: str) -> dict
+    def write_profile_file(self, profile_path: str, profile_text: str) -> bool
+    def show_operation_progress(self, operation: str, progress: float) -> None
+    def handle_partial_operation(self, failed_params: List[str], operation: str) -> None
+```
+
+**Profile File Format Benefits**:
+- **Human-readable**: Can be opened and edited in any text editor
+- **Comments supported**: Profile metadata and parameter explanations
+- **Section organization**: Logical grouping of related parameters
+- **Easy troubleshooting**: Technicians can manually verify and edit values
+- **Version control friendly**: Text format works well with diff tools
+- **Cross-platform compatible**: Standard INI format works on all systems
+
+**Profile Operation Workflow**:
+```python
+# Device to Profile Workflow (Requirement 8)
+1. Validate device connection
+2. Use ConfigurationReaderService to read all parameters
+3. Create INI-formatted text from device responses with comments and metadata
+4. Save to .lt32config text file with proper section organization
+5. Provide confirmation and file location feedback
+6. Handle partial profile creation if some parameters fail
+
+# Profile to Device Workflow (Requirement 9)  
+1. Parse and validate INI-formatted profile file
+2. Validate device connection and profile content
+3. Convert profile sections to AT commands using DeviceCommandMapper
+4. Send commands in correct sequence with response validation
+5. Update UI fields to reflect deployed configuration
+6. Log all operations with detailed feedback
+7. Handle deployment errors with retry options
+
+# Profile File Processing
+- Use Python's configparser module for INI file handling
+- Support comments for parameter documentation
+- Validate section structure and required parameters
+- Handle missing parameters gracefully with defaults
+- Preserve user comments when possible during updates
+```
+
 **Configuration Reading Commands**:
 ```python
 # Parameter Query Commands (to be sent with ATSMS: prefix)
@@ -308,28 +369,56 @@ RESPONSE_PATTERNS = {
 ## Data Models
 
 ### Configuration Profile Structure
-Extend the existing `.lt32config` format to include all parameters:
+Use a human-readable INI-style text format for `.lt32config` files:
 
-```json
-{
-  "version": "1.0",
-  "apn_config": {
-    "server": "internet.provider.com",
-    "user": "username", 
-    "password": "password",
-    "transmission_mode": "TCP"
-  },
-  "device_parameters": {
-    "vibration": 128,
-    "heartbeat_interval": "1min",
-    "sensitivity": 5,
-    "lock_type": "PIN",
-    "ignition_type": "Digital"
-  },
-  "sensor_config": {
-    "curve_sensor": "Auto"
-  }
-}
+```ini
+# LT32Pro Configuration Profile
+# Generated: 2025-01-16 10:30:00
+# Device IMEI: 123456789012345
+
+[Profile_Info]
+version=1.0
+created_date=2025-01-16 10:30:00
+device_imei=123456789012345
+profile_name=Default Configuration
+
+[APN_Configuration]
+apn_server=internet.provider.com
+apn_user=username
+apn_password=password
+transmission_mode=TCP
+
+[Server_Configuration]
+main_server_ip=192.168.1.100
+main_server_port=8080
+server_protocol=GT06-0x60
+backup_server_ip=192.168.1.101
+backup_server_port=8081
+
+[Timer_Settings]
+ignition_on_interval=30
+ignition_off_interval=300
+heartbeat_ignition_on=60
+heartbeat_ignition_off=300
+
+[Device_Parameters]
+vibration_level=128
+sensitivity_level=5
+lock_type=PIN
+ignition_type=Digital
+curve_sensor=Auto
+
+[Alert_Settings]
+movement_alert=ON
+power_alert=ON
+battery_alert=ON
+speed_limit=80
+
+[Advanced_Settings]
+sleep_mode=Disabled
+network_selection=AUTO
+protocol_selection=GT06-0x60
+```
 ```
 
 ### Theme Configuration
@@ -402,6 +491,30 @@ class ParsedResponse:
     error_message: Optional[str]
 ```
 
+### Profile Management Models
+```python
+@dataclass
+class ProfileOperationResult:
+    success: bool
+    operation_type: str  # 'device_to_profile' or 'profile_to_device'
+    profile_path: str
+    parameters_processed: int
+    failed_parameters: List[str]
+    error_message: Optional[str]
+    operation_duration: float
+    timestamp: datetime
+
+@dataclass
+class DeploymentResult:
+    success: bool
+    commands_sent: int
+    successful_commands: int
+    failed_commands: List[str]
+    deployment_log: List[str]
+    ui_updates_applied: bool
+    error_details: Optional[dict]
+```
+
 ## Error Handling
 
 ### Enhanced Error Categories
@@ -423,6 +536,8 @@ class ParsedResponse:
 2. **Theme Switching**: Verify theme persistence and application
 3. **Configuration Profiles**: Test save/load with various parameter combinations
 4. **AT Command Mapping**: Verify correct command generation for all parameters
+5. **Profile Management**: Test device-to-profile and profile-to-device operations
+6. **Configuration Reading**: Test parameter parsing and UI population from device responses
 
 ### Integration Testing
 1. **UI Component Integration**: Test toolbar interactions with main application
@@ -435,6 +550,9 @@ class ParsedResponse:
 2. **Theme Switching**: Change themes and verify persistence across restarts
 3. **Error Handling**: Test various error conditions and recovery
 4. **Internationalization**: Test application in all supported languages
+5. **Profile Management Workflow**: Load configuration from device to profile, then deploy profile to different device
+6. **Configuration Reading**: Read current device settings and verify UI field population
+7. **Partial Operation Handling**: Test profile operations with some failed parameters
 
 ## Implementation Approach
 
@@ -471,9 +589,20 @@ class ParsedResponse:
 - Integrate configuration reading with "Checar configuração" button
 - Add visual indicators for parameters updated from device
 
-### Phase 6: Polish and Testing
+### Phase 6: Profile Management Implementation
+- Implement ProfileManager for bidirectional profile operations
+- Add "Load from Device" functionality to create profiles from current device configuration
+- Add "Load Profile to Device" functionality to deploy saved configurations
+- Implement progress indicators for profile operations
+- Add error handling and retry mechanisms for failed profile operations
+- Integrate profile management with toolbar Configuration Profiles dropdown
+- Add validation for profile file format and content
+
+### Phase 7: Polish and Testing
 - Add comprehensive input validation
 - Implement remaining UI enhancements
 - Test configuration reading with various device states
+- Test profile management workflows (device-to-file and file-to-device)
 - Conduct thorough testing of read/write parameter workflows
+- Test error handling and recovery scenarios for profile operations
 - Update documentation and build process

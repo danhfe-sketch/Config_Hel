@@ -75,9 +75,10 @@ class BaseParameter(ABC):
                 # Get the command mapper from the factory
                 command_mapper = getattr(self, 'command_mapper', None)
                 
-                # If we have access to the command mapper, use it
+                # If we have access to the command mapper, use it with validation
                 if command_mapper:
-                    command = command_mapper.get_command(self.definition.name, value)
+                    command = command_mapper.get_command(self.definition.name, value, 
+                                                       confirm_destructive=True, validate_command=True)
                 else:
                     # Handle special cases for server parameters
                     if self.definition.name in ['server_ip', 'server_port']:
@@ -90,9 +91,34 @@ class BaseParameter(ABC):
                         command = self.definition.at_command_template.format(value=value)
                 
                 self.send_command_callback(command)
+                
+                # Show success message if command was sent successfully
+                self._log_success(f"Command sent successfully: {self.definition.name}")
+                
             except ValueError as e:
-                self._show_error(str(e))
+                error_msg = str(e)
+                
+                # Check if this is a validation error and provide better feedback
+                if "Command validation failed" in error_msg:
+                    # Extract the core error message and suggestions
+                    if "Suggestions:" in error_msg:
+                        parts = error_msg.split("Suggestions:")
+                        core_error = parts[0].replace("Command validation failed for " + self.definition.name + ":", "").strip()
+                        suggestions = parts[1].strip()
+                        
+                        # Show the core error in the UI
+                        self._show_error(f"Validation failed: {core_error}")
+                        
+                        # Log suggestions for the user
+                        if hasattr(self, '_log_message'):
+                            self._log_message(f"Suggestions for {self.definition.name}: {suggestions}")
+                    else:
+                        core_error = error_msg.replace("Command validation failed for " + self.definition.name + ":", "").strip()
+                        self._show_error(f"Validation failed: {core_error}")
+                else:
+                    self._show_error(str(e))
                 return
+                
             except KeyError as e:
                 # Handle missing format keys
                 missing_key = str(e).strip("'")
@@ -108,6 +134,36 @@ class BaseParameter(ABC):
         """Clear validation error message."""
         if self.error_label:
             self.error_label.configure(text="", text_color="gray")
+    
+    def _log_success(self, message: str) -> None:
+        """Log a success message."""
+        # Try to access the app's log frame if available
+        try:
+            # This is a bit of a hack, but we need to access the app somehow
+            import tkinter as tk
+            root = self.widget
+            while root and not isinstance(root, tk.Tk):
+                root = root.master
+            
+            if root and hasattr(root, 'app') and hasattr(root.app, 'log_frame'):
+                root.app.log_frame.log_message(f"SUCCESS: {message}\n")
+        except:
+            pass  # Ignore errors in logging
+    
+    def _log_message(self, message: str) -> None:
+        """Log a general message."""
+        # Try to access the app's log frame if available
+        try:
+            # This is a bit of a hack, but we need to access the app somehow
+            import tkinter as tk
+            root = self.widget
+            while root and not isinstance(root, tk.Tk):
+                root = root.master
+            
+            if root and hasattr(root, 'app') and hasattr(root.app, 'log_frame'):
+                root.app.log_frame.log_message(f"INFO: {message}\n")
+        except:
+            pass  # Ignore errors in logging
     
     def update_language_display(self, i18n_service) -> None:
         """Update the parameter widget's language display."""
@@ -583,7 +639,7 @@ class ParameterFactory:
         self.validation_service = validation_service
         self.i18n_service = i18n_service
         self.send_command_callback = send_command_callback
-        self.command_mapper = DeviceCommandMapper()
+        self.command_mapper = DeviceCommandMapper(validation_service, i18n_service)
         self.parameter_definitions = self._init_parameter_definitions()
     
     def _create_parameter_from_definition(self, definition: ParameterDefinition) -> BaseParameter:

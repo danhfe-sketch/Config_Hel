@@ -38,48 +38,42 @@ class ConfigService:
         # Get a reference to the parameters frame for easier access
         params_frame = self.app.params_frame
         
-        # Create the base configuration structure with version
-        config_data = {
-            "version": self.CONFIG_VERSION,
-            "created_at": datetime.datetime.now().isoformat(),
-            "apn_config": {
-                "server": params_frame.apn_server_entry.get(),
-                "user": params_frame.apn_user_entry.get(),
-                "password": params_frame.apn_password_entry.get(),
-            },
-            "communication": {
-                "transmission_mode": params_frame.trans_mode_var.get(),
-            },
-            "device_parameters": {},
-            "sensors": {},
-            "timers": {},
-            "security": {}
-        }
-        
+        import configparser
+        from datetime import datetime
         # Get all parameter values from factory-created widgets
         all_parameters = params_frame.get_all_parameter_values()
-        
-        # Map parameters to their respective categories based on parameter factory definitions
+
+        config = configparser.ConfigParser()
+        config.optionxform = str  # Preserve case
+
+        # Add profile info section
+        config.add_section('Profile_Info')
+        config.set('Profile_Info', 'version', self.CONFIG_VERSION)
+        config.set('Profile_Info', 'created_date', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        config.set('Profile_Info', 'profile_name', f"LT32Pro_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+
+        # Organize parameters into sections and flatten all values
+        # APN section
+        apn_values = params_frame._get_apn_values_from_section()
+        config.add_section('APN_Configuration')
+        config.set('APN_Configuration', 'apn', apn_values.get('apn', ''))
+        config.set('APN_Configuration', 'user', apn_values.get('user', ''))
+        config.set('APN_Configuration', 'password', apn_values.get('password', ''))
+
+        # Transmission mode section
+        config.add_section('Server_Configuration')
+        config.set('Server_Configuration', 'transmission_mode', all_parameters.get('transmission_mode', 'TCP'))
+
+        # Device parameters section (device format: dict strings for complex values)
+        import json
+        config.add_section('Device_Parameters')
         for param_name, value in all_parameters.items():
-            # Skip empty values
-            if value is None or (isinstance(value, str) and not value.strip()):
-                continue
-                
-            # Get parameter definition to determine its group
-            param_def = params_frame.parameter_factory.get_parameter_definition(param_name)
-            if param_def:
-                group_name = param_def.group
-                
-                # Ensure the group exists in config_data
-                if group_name not in config_data:
-                    config_data[group_name] = {}
-                
-                # Add parameter to its group
-                config_data[group_name][param_name] = value
-        
-        # Special handling for transmission_mode which might be in both places
-        if "transmission_mode" in all_parameters:
-            config_data["communication"]["transmission_mode"] = all_parameters["transmission_mode"]
+            if param_name not in ['apn', 'user', 'password', 'transmission_mode']:
+                if isinstance(value, dict):
+                    # Store as dict string (use json for safe serialization)
+                    config.set('Device_Parameters', param_name, json.dumps(value, ensure_ascii=False))
+                else:
+                    config.set('Device_Parameters', param_name, str(value))
 
         filepath = filedialog.asksaveasfilename(
             defaultextension=".lt32config",
@@ -90,7 +84,7 @@ class ConfigService:
             return
 
         with open(filepath, 'w') as f:
-            json.dump(config_data, f, indent=4)
+            config.write(f)
         self.app.log_frame.log_message(f"Profile '{os.path.basename(filepath)}' saved.\n")
 
     def load_profile(self):
@@ -109,94 +103,53 @@ class ConfigService:
         try:
             # Validate the configuration file before loading
             is_valid, error_message, config_data = self.validate_config_file(filepath)
-            
             if not is_valid:
                 messagebox.showerror("Profile Validation Error", error_message)
                 self.app.log_frame.log_message(f"Profile validation error: {error_message}\n")
                 return
-            
-            # Show warning if there is one but file is still valid
             if error_message:
                 if not messagebox.askyesno("Version Warning", error_message + " Do you want to continue?"):
                     return
-
-            # Get a reference to the parameters frame for easier access
             params_frame = self.app.params_frame
-
-            # Check if this is a new format config file with version
-            is_new_format = "version" in config_data
-            
             # --- Handle APN Configuration ---
-            if is_new_format and "apn_config" in config_data:
-                apn_config = config_data["apn_config"]
-                params_frame.apn_server_entry.delete(0, "end")
-                params_frame.apn_server_entry.insert(0, apn_config.get("server", ""))
-                
-                params_frame.apn_user_entry.delete(0, "end")
-                params_frame.apn_user_entry.insert(0, apn_config.get("user", ""))
-                
-                params_frame.apn_password_entry.delete(0, "end")
-                params_frame.apn_password_entry.insert(0, apn_config.get("password", ""))
-            else:
-                # Legacy format - direct keys
-                params_frame.apn_server_entry.delete(0, "end")
-                params_frame.apn_server_entry.insert(0, config_data.get("apn_server", ""))
-                
-                params_frame.apn_user_entry.delete(0, "end")
-                params_frame.apn_user_entry.insert(0, config_data.get("apn_user", ""))
-                
-                params_frame.apn_password_entry.delete(0, "end")
-                params_frame.apn_password_entry.insert(0, config_data.get("apn_password", ""))
-            
+            apn_config = config_data.get('APN_Configuration', {})
+            params_frame.apn_server_entry.delete(0, "end")
+            params_frame.apn_server_entry.insert(0, apn_config.get("apn", ""))
+            params_frame.apn_user_entry.delete(0, "end")
+            params_frame.apn_user_entry.insert(0, apn_config.get("user", ""))
+            params_frame.apn_password_entry.delete(0, "end")
+            params_frame.apn_password_entry.insert(0, apn_config.get("password", ""))
             # --- Handle Transmission Mode ---
-            if is_new_format and "communication" in config_data:
-                comm_config = config_data["communication"]
-                params_frame.trans_mode_var.set(comm_config.get("transmission_mode", "TCP"))
-            else:
-                # Legacy format - direct key
-                params_frame.trans_mode_var.set(config_data.get("transmission_mode", "TCP"))
-            
+            server_config = config_data.get('Server_Configuration', {})
+            params_frame.trans_mode_var.set(server_config.get("transmission_mode", "TCP"))
             # --- Handle all other parameters from factory-created widgets ---
-            if is_new_format:
-                # Collect all parameters from all categories
-                all_params = {}
-                invalid_params = []
-                
-                # Process each category in the config file
-                for category, params in config_data.items():
-                    # Skip non-dictionary categories and special categories
-                    if not isinstance(params, dict) or category == "version" or category == "created_at":
-                        continue
-                    
-                    # Process each parameter in this category
-                    for param_name, param_value in params.items():
-                        # Check if parameter exists in the UI
-                        param_def = params_frame.parameter_factory.get_parameter_definition(param_name)
-                        if param_def:
+            all_params = {}
+            for section, params in config_data.items():
+                if section in ['APN_Configuration', 'Server_Configuration', 'Profile_Info']:
+                    continue
+                for param_name, param_value in params.items():
+                    # Attempt to deserialize JSON strings for complex parameters
+                    if isinstance(param_value, str):
+                        try:
+                            # Only parse if it looks like a JSON object or array
+                            if param_value.strip().startswith('{') or param_value.strip().startswith('['):
+                                all_params[param_name] = json.loads(param_value)
+                            else:
+                                all_params[param_name] = param_value
+                        except Exception:
                             all_params[param_name] = param_value
-                        else:
-                            # Track unknown parameters for logging
-                            invalid_params.append(f"{category}.{param_name}")
-                
-                # Log any invalid parameters found
-                if invalid_params:
-                    self.app.log_frame.log_message(f"WARNING: Skipped unknown parameters in profile: {', '.join(invalid_params)}\n")
-                
-                # Set values in the UI with validation
-                try:
-                    params_frame.set_all_parameter_values(all_params)
-                    
-                    # Log which parameters were successfully loaded
-                    loaded_params = list(all_params.keys())
-                    if loaded_params:
-                        self.app.log_frame.log_message(f"INFO: Loaded {len(loaded_params)} parameters from profile\n")
-                except Exception as e:
-                    self.app.log_frame.log_message(f"ERROR: Error setting parameter values: {str(e)}\n")
-                    messagebox.showerror("Parameter Error", f"Error setting some parameter values: {str(e)}")
-            
+                    else:
+                        all_params[param_name] = param_value
+            try:
+                params_frame.set_all_parameter_values(all_params)
+                loaded_params = list(all_params.keys())
+                if loaded_params:
+                    self.app.log_frame.log_message(f"INFO: Loaded {len(loaded_params)} parameters from profile\n")
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Error setting parameter values: {str(e)}\n")
+                messagebox.showerror("Parameter Error", f"Error setting some parameter values: {str(e)}")
             self.app.log_frame.log_message(f"Profile '{os.path.basename(filepath)}' loaded successfully.\n")
-
-        except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        except Exception as e:
             error_message = f"Error loading profile: {e}\n"
             self.app.log_frame.log_message(error_message)
             messagebox.showerror("Load Profile Error", f"Failed to load or parse the profile file.\n\n{e}")
@@ -323,35 +276,30 @@ class ConfigService:
             Tuple of (is_valid, error_message, config_data)
         """
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            
-            # Check if this is a new format config file with version
-            is_new_format = "version" in config_data
-            
-            if is_new_format:
-                # Check version compatibility
-                file_version = config_data.get("version", "0.0")
-                if self._compare_versions(file_version, self.CONFIG_VERSION) > 0:
-                    warning_message = (
-                        f"Warning: The profile was created with a newer version ({file_version}) "
-                        f"than the current application version ({self.CONFIG_VERSION}). "
-                        "Some settings may not be loaded correctly."
-                    )
-                    return (True, warning_message, config_data)  # Valid but with warning
-                
-                # Validate profile data structure using ValidationService if available
-                params_frame = self.app.params_frame
-                if hasattr(params_frame, 'validation_service'):
-                    validation_result = params_frame.validation_service.validate_profile_data(config_data)
-                    if not validation_result.is_valid:
-                        return (False, validation_result.error_message, None)
-            
+            import configparser
+            config = configparser.ConfigParser()
+            config.optionxform = str
+            config.read(filepath, encoding='utf-8')
+            config_data = {}
+            for section in config.sections():
+                config_data[section] = dict(config.items(section))
+            # Check for required Profile_Info section and version key
+            if 'Profile_Info' not in config_data or 'version' not in config_data['Profile_Info']:
+                return (False, "Profile is missing required section or key: Profile_Info/version", None)
+            file_version = config_data['Profile_Info']['version']
+            if self._compare_versions(file_version, self.CONFIG_VERSION) > 0:
+                warning_message = (
+                    f"Warning: The profile was created with a newer version ({file_version}) "
+                    f"than the current application version ({self.CONFIG_VERSION}). "
+                    "Some settings may not be loaded correctly."
+                )
+                return (True, warning_message, config_data)
+            # Validate profile data structure using ValidationService if available
+            params_frame = self.app.params_frame
+            if hasattr(params_frame, 'validation_service'):
+                validation_result = params_frame.validation_service.validate_profile_data(config_data)
+                if not validation_result.is_valid:
+                    return (False, validation_result.error_message, None)
             return (True, "", config_data)
-            
-        except json.JSONDecodeError:
-            return (False, "Invalid JSON format in configuration file.", None)
-        except FileNotFoundError:
-            return (False, "Configuration file not found.", None)
         except Exception as e:
             return (False, f"Error validating configuration file: {str(e)}", None)

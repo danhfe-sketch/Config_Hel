@@ -91,3 +91,28 @@ This feature spec addresses the completion of the LT32Pro Device Configurator v1
 3. WHEN device operations complete successfully THEN the system SHALL provide confirmation feedback in the log
 4. WHEN I perform factory reset THEN the system SHALL require explicit confirmation and provide clear warnings about data loss
 5. WHEN configuration profiles fail to load THEN the system SHALL display detailed error information and maintain current settings
+
+### Requirement 8
+
+**User Story:** As a technician, I want to load complete configuration from the device and save it in a profile file, so that I can backup device configurations and create reusable configuration templates.
+
+#### Acceptance Criteria
+
+1. WHEN I select "Load from Device" or similar profile management option THEN the system SHALL read all current device parameters and save them to a new profile file
+2. WHEN loading configuration from device THEN the system SHALL query all parameter categories including APN, server settings, timers, sensitivity, and protocol configurations
+3. WHEN saving device configuration to profile THEN the system SHALL create a .lt32config file containing all retrieved parameter values with proper formatting
+4. WHEN the profile save operation completes THEN the system SHALL provide confirmation and display the saved profile file location
+5. WHEN device communication fails during profile creation THEN the system SHALL provide specific error messages and allow partial profile creation with available data
+
+### Requirement 9
+
+**User Story:** As a technician, I want to save the configurations in the profile file to the device, so that I can quickly deploy standardized configurations and restore previous device settings.
+
+#### Acceptance Criteria
+
+1. WHEN I select "Load Profile to Device" or similar option THEN the system SHALL read the selected .lt32config file and send all contained parameters to the connected device
+2. WHEN loading profile to device THEN the system SHALL send AT commands for all parameters in the correct sequence and validate each command response
+3. WHEN profile deployment is in progress THEN the system SHALL display progress indicators and prevent other operations until completion
+4. WHEN profile deployment completes successfully THEN the system SHALL update all UI fields to reflect the deployed configuration and log the operation
+5. WHEN profile deployment encounters errors THEN the system SHALL provide detailed feedback about which parameters failed and allow retry of failed operations
+6. WHEN no device is connected during profile deployment THEN the system SHALL prevent the operation and display appropriate connection warnings

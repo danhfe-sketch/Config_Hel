@@ -90,6 +90,8 @@ class SerialService:
             # Update connection status with visual indicator
             if hasattr(self.app, 'connection_frame'):
                 self.app.connection_frame.update_connection_indicator(True)
+            
+            return True  # Return True on success
                 
         except serial.SerialException as e:
             # Use error handling service if available
@@ -116,6 +118,8 @@ class SerialService:
             # Update connection status with visual indicator
             if hasattr(self.app, 'connection_frame'):
                 self.app.connection_frame.update_connection_indicator(False)
+            
+            return False  # Return False on failure
 
     def disconnect(self):
         """Disconnects from the serial port."""
@@ -184,15 +188,56 @@ class SerialService:
                 break
             time.sleep(0.1)
 
-    def send_command(self, command, command_type=None):
+    def send_command(self, command, command_type=None, bypass_validation=False):
         """
-        Sends a command to the serial port.
+        Sends a command to the serial port with optional validation.
         
         Args:
             command: The command string to send
             command_type: Optional type of command for response processing
+            bypass_validation: If True, skip command validation (for debugging/testing)
         """
-        if self.is_connected and self.serial_port:
+        if not self.is_connected or not self.serial_port:
+            self.app.log_frame.log_message("ERROR: Not connected to device\n")
+            return False
+        
+        # Validate command before sending (unless bypassed)
+        if not bypass_validation and hasattr(self.app, 'command_validation_gateway'):
+            from services.command_validation_gateway import ValidationContext
+            
+            # Create validation context
+            context = ValidationContext(
+                command_type=command_type or 'unknown',
+                source='serial_service',
+                timestamp=datetime.datetime.now()
+            )
+            
+            # Validate the command
+            validation_result = self.app.command_validation_gateway.validate_command_before_send(command, context)
+            
+            if not validation_result.is_valid:
+                # Command failed validation - block it
+                error_msg = f"Command blocked by validation: {validation_result.error_message}"
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+                # Log detailed information about the blocked command
+                self.app.command_validation_gateway.log_blocked_command(validation_result, context)
+                
+                # Show suggestions if available
+                if validation_result.suggestions:
+                    suggestions_text = "; ".join(validation_result.suggestions)
+                    self.app.log_frame.log_message(f"SUGGESTIONS: {suggestions_text}\n")
+                
+                return False
+            
+            # Log successful validation
+            if validation_result.extracted_parameters:
+                param_info = ", ".join([f"{k}={v}" for k, v in validation_result.extracted_parameters.items() if not k.startswith('_')])
+                if param_info:
+                    self.app.log_frame.log_message(f"INFO: Command validated - Parameters: {param_info}\n")
+        
+        # Send the command
+        try:
             encoded_command = f"{command}\r\n".encode('utf-8')
             self.app.log_frame.log_message(f"DEBUG: Sending bytes: {encoded_command!r}\n")
             self.serial_port.write(encoded_command)
@@ -202,6 +247,12 @@ class SerialService:
             self.current_command_type = command_type
             self.waiting_for_response = True
             
+            return True
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to send command: {str(e)}\n")
+            return False
+            
     def process_device_response(self, response):
         """
         Process device responses and extract relevant information.
@@ -209,9 +260,20 @@ class SerialService:
         Args:
             response: The response string from the device
         """
-        # Notify ConfigurationReaderService if it's waiting for a response
-        if hasattr(self.app, 'configuration_reader_service'):
-            self.app.configuration_reader_service.capture_device_response(response)
+        # Always forward response to configuration_reader if set
+        if self.configuration_reader and hasattr(self.configuration_reader, 'capture_device_response'):
+            try:
+                self.configuration_reader.capture_device_response(response)
+            except Exception as e:
+                self.app.log_frame.log_message(f"WARNING: Failed to forward response to configuration reader: {str(e)}\n")
+        elif hasattr(self.app, 'configuration_reader_service'):
+            # Fallback: support legacy app attribute if present
+            try:
+                self.app.configuration_reader_service.capture_device_response(response)
+            except Exception as e:
+                self.app.log_frame.log_message(f"WARNING: Failed to forward response to app.configuration_reader_service: {str(e)}\n")
+        else:
+            self.app.log_frame.log_message("WARNING: No configuration reader available to capture device response\n")
         # Store the current command type for processing
         command_type = self.current_command_type
         
@@ -293,7 +355,11 @@ class SerialService:
         """Helper method to send version command after ICCID."""
         if self.is_connected and hasattr(self.app, 'device_command_mapper'):
             version_cmd = self.app.device_command_mapper.get_command('get_version', None)
+            self.app.log_frame.log_message("DEBUG: Sending VERSION command...")
             self.send_command(version_cmd, 'get_version')
+            
+            # Introduce a final delay after sending all commands
+            time.sleep(1)
             
     def queue_command(self, command: str, command_type: str = None) -> None:
         """

@@ -214,9 +214,13 @@ class OperationConfirmationService:
         """
         if dialog_id not in self.progress_dialogs:
             return
-            
+
         dialog_info = self.progress_dialogs[dialog_id]
-        
+        dialog = dialog_info["dialog"]
+        # Check if dialog and widgets still exist
+        if not dialog.winfo_exists() or not dialog_info["progress_bar"].winfo_exists() or not dialog_info["status_label"].winfo_exists():
+            return
+
         # Update step if provided
         if step is not None:
             dialog_info["current_step"] = min(step, dialog_info["total_steps"])
@@ -225,14 +229,15 @@ class OperationConfirmationService:
                 dialog_info["current_step"] + increment,
                 dialog_info["total_steps"]
             )
-        
+
         # Calculate progress value (0.0 to 1.0)
         if dialog_info["progress_type"] == self.PROGRESS_TYPE_DETERMINATE:
             progress_value = dialog_info["current_step"] / dialog_info["total_steps"]
-            dialog_info["progress_bar"].set(progress_value)
-        
+            if dialog_info["progress_bar"].winfo_exists():
+                dialog_info["progress_bar"].set(progress_value)
+
         # Update status text if provided
-        if status_text:
+        if status_text and dialog_info["status_label"].winfo_exists():
             dialog_info["status_label"].configure(text=status_text)
     
     def complete_progress(self, dialog_id: str, success: bool = True, 
@@ -247,25 +252,30 @@ class OperationConfirmationService:
         """
         if dialog_id not in self.progress_dialogs:
             return
-            
+
         dialog_info = self.progress_dialogs[dialog_id]
-        
+        dialog = dialog_info["dialog"]
+        # Check if dialog and widgets still exist
+        if not dialog.winfo_exists() or not dialog_info["progress_bar"].winfo_exists() or not dialog_info["status_label"].winfo_exists():
+            return
+
         # Stop any animation
         if dialog_id in self.stop_progress:
             self.stop_progress[dialog_id] = True
-        
+
         # Set progress to 100% if successful
         if success and dialog_info["progress_type"] == self.PROGRESS_TYPE_DETERMINATE:
-            dialog_info["progress_bar"].set(1.0)
-        
+            if dialog_info["progress_bar"].winfo_exists():
+                dialog_info["progress_bar"].set(1.0)
+
         # Update status text
-        if completion_message:
+        if completion_message and dialog_info["status_label"].winfo_exists():
             dialog_info["status_label"].configure(text=completion_message)
-        elif success:
+        elif success and dialog_info["status_label"].winfo_exists():
             dialog_info["status_label"].configure(text="Operation completed successfully.")
-        else:
+        elif dialog_info["status_label"].winfo_exists():
             dialog_info["status_label"].configure(text="Operation failed or was canceled.")
-        
+
         # Show completion message in log
         operation_name = dialog_info["operation_name"]
         if success:
@@ -273,7 +283,7 @@ class OperationConfirmationService:
         else:
             if hasattr(self.app, 'log_frame'):
                 self.app.log_frame.log_message(f"WARNING: {operation_name} was not completed\n")
-        
+
         # Close the dialog after a short delay
         self.app.after(1500, lambda: self._close_progress_dialog(dialog_id))
     

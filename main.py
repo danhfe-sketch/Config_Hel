@@ -17,6 +17,7 @@ from services.config_service import ConfigService
 from services.theme_service import ThemeService
 from services.device_command_mapper import DeviceCommandMapper
 from services.operation_confirmation_service import OperationConfirmationService
+from services.universal_profile_manager import UniversalProfileManager
 from ui.connection_frame import ConnectionFrame
 from ui.parameters_frame import ParametersFrame
 from ui.actions_frame import ActionsFrame
@@ -54,6 +55,7 @@ class App(ctk.CTk):
         self.config_service = ConfigService(self)
         self.theme_service = ThemeService(self)  # Initialize theme service (loads saved theme)
         self.operation_confirmation_service = OperationConfirmationService(self)  # Initialize operation confirmation service
+        self.profile_manager = UniversalProfileManager(self.serial_service, "Parameter UI List.md")  # Initialize profile manager
         
         # Initialize configuration reader service in serial service
         self.serial_service.initialize_configuration_reader()
@@ -69,7 +71,7 @@ class App(ctk.CTk):
         # --- Create UI Frames ---
 
         # Toolbar Frame (Top - spans all columns)
-        self.toolbar_frame = ToolbarFrame(self, self.i18n, self.config_service, self.theme_service)
+        self.toolbar_frame = ToolbarFrame(self, self.i18n, self.config_service, self.theme_service, self.profile_manager)
         self.toolbar_frame.grid(row=0, column=0, columnspan=3, sticky="ew", padx=10, pady=(10, 0))
 
         # Left Sidebar (container for Logo, Connection and Actions)

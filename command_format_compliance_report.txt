@@ -1,0 +1,47 @@
+================================================================================
+COMMAND FORMAT COMPLIANCE VALIDATION REPORT
+================================================================================
+
+1. COMMAND TEMPLATE VALIDATION
+----------------------------------------
+Total parameters checked: 19
+Compliant parameters: 19
+Non-compliant parameters: 0
+
+2. COMMAND GENERATION VALIDATION
+----------------------------------------
+Total test cases: 7
+Passed tests: 5
+Failed tests: 2
+
+Failed test cases:
+  - apn_settings: Missing required context parameter: apn for apn_settings. Available parameters: ['value']
+  - server_settings: Missing required context parameter: type for server_settings. Available parameters: ['value']
+
+3. PROFILE DATA VALIDATION
+----------------------------------------
+Total parameters in profile: 18
+Successful command generation: 11
+Failed command generation: 7
+
+Command generation errors:
+  - Failed to generate command for apn_settings: Missing required context parameter: apn for apn_settings. Available parameters: ['value']
+  - Failed to generate command for server_settings: Missing required context parameter: type for server_settings. Available parameters: ['value']
+  - Failed to generate command for report_intervals: Missing required context parameter: moving_time for report_intervals. Available parameters: ['value']
+  - Failed to generate command for heartbeat_intervals: Missing required context parameter: moving_heartbeat for heartbeat_intervals. Available parameters: ['value']
+  - Failed to generate command for ignition_type: Error mapping value for ignition_type: Failed to map value '{'ignition_mode': 'Física (Physical)'}' for parameter ignition_type: unhashable type: 'dict'
+  ... and 2 more errors
+
+4. OVERALL COMPLIANCE STATUS
+----------------------------------------
+Template compliance: 100.0%
+Command generation compliance: 71.4%
+Profile data compliance: 61.1%
+Overall compliance: 85.7%
+
+5. RECOMMENDATIONS
+----------------------------------------
+- Review and fix command generation logic for failed test cases
+- Investigate command generation failures with actual profile data
+
+================================================================================

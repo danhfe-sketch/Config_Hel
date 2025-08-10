@@ -64,6 +64,8 @@ To create a single executable file for distribution on Windows 11 (as per PRD se
    python -m PyInstaller --name="LT32Pro_Configurator_v1" --windowed --onefile --add-data "assets;assets" main.py
    ```
 
+   python build_with_icon.py
+
    Command options explained:
    * `--name`: Sets the name of the executable.
    * `--windowed`: Prevents a console window from appearing when the application is run.

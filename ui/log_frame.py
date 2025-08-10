@@ -417,6 +417,7 @@ class LogFrame(ctk.CTkFrame):
         # Update buttons
         self.copy_button.configure(text=self.i18n.get("copy_log"))
         self.export_button.configure(text=self.i18n.get("export_log"))
+        self.export_profile_button.configure(text=self.i18n.get("export_profile_ops", "Export Profile Ops"))
         self.clear_button.configure(text=self.i18n.get("clear_log", "Clear"))
         
         # Update free command section

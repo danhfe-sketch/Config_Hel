@@ -6,6 +6,7 @@ import os
 import subprocess
 import platform
 import json
+from ui.custom_dialogs import show_info, show_error, show_warning, ask_yes_no
 
 class ToolbarFrame(ctk.CTkFrame):
     """
@@ -13,11 +14,12 @@ class ToolbarFrame(ctk.CTkFrame):
     help resources, restore defaults, and personalization options.
     """
     
-    def __init__(self, master, i18n, config_service, theme_service):
+    def __init__(self, master, i18n, config_service, theme_service, profile_manager=None):
         super().__init__(master)
         self.i18n = i18n
         self.config_service = config_service
         self.theme_service = theme_service
+        self.profile_manager = profile_manager
         self.app = master  # Reference to the main app
         
         self._create_toolbar_elements()
@@ -37,10 +39,12 @@ class ToolbarFrame(ctk.CTkFrame):
             left_frame,
             values=[
                 self.i18n.get("save_profile", "Save Profile"),
-                self.i18n.get("load_profile", "Load Profile")
+                self.i18n.get("load_profile", "Load Profile"),
+                self.i18n.get("load_from_device", "Load from Device"),
+                self.i18n.get("load_profile_to_device", "Load Profile to Device")
             ],
             command=self._on_profile_action,
-            width=120,
+            width=140,
             height=28
         )
         self.profiles_dropdown.pack(side="left", padx=5)
@@ -62,10 +66,20 @@ class ToolbarFrame(ctk.CTkFrame):
         
         # Set the dropdown to the current language
         language_display_map = {
-            "pt_BR": "Português",
-            "en_US": "English",
-            "es_ES": "Español"
+            "pt": "Português",
+            "en": "English",
+            "es": "Español"
         }
+        # Fixed dictionary definition
+        language_display_map = {
+            "pt": "Português",
+            "en": "English",
+            "es": "Español"
+        }
+        # Set language dropdown to current language
+        current_language = self.i18n.get_current_language()
+        display_language = language_display_map.get(current_language, "Português")
+        self.language_dropdown.set(display_language)
         current_language = self.i18n.get_current_language()
         display_language = language_display_map.get(current_language, "Português")
         self.language_dropdown.set(display_language)
@@ -114,9 +128,14 @@ class ToolbarFrame(ctk.CTkFrame):
         """Handle configuration profile dropdown actions."""
         try:
             if choice == self.i18n.get("save_profile", "Save Profile"):
-                self.config_service.save_profile()
+                # Correctly call the profile manager to save the UI state
+                self._save_profile_from_ui()
             elif choice == self.i18n.get("load_profile", "Load Profile"):
-                self.config_service.load_profile()
+                self._load_profile_to_ui()
+            elif choice == self.i18n.get("load_from_device", "Load from Device"):
+                self._load_from_device_to_profile()
+            elif choice == self.i18n.get("load_profile_to_device", "Load Profile to Device"):
+                self._load_profile_to_device()
             
             # Reset dropdown to default text
             self.profiles_dropdown.set(self.i18n.get("profiles", "Profiles"))
@@ -125,7 +144,7 @@ class ToolbarFrame(ctk.CTkFrame):
             error_msg = f"Profile operation failed: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Profile Error", error_msg)
+            show_error(self.app, "Profile Error", error_msg)
     
     def _on_language_change(self, choice):
         """Handle language selection changes."""
@@ -153,7 +172,7 @@ class ToolbarFrame(ctk.CTkFrame):
             error_msg = f"Language change failed: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Language Error", error_msg)
+            show_error(self.app, "Language Error", error_msg)
     
     def _on_help_action(self, choice):
         """Handle help menu actions."""
@@ -170,7 +189,7 @@ class ToolbarFrame(ctk.CTkFrame):
             error_msg = f"Help action failed: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Help Error", error_msg)
+            show_error(self.app, "Help Error", error_msg)
     
     def _show_driver_installation_guide(self):
         """Show driver installation guidance."""
@@ -190,7 +209,7 @@ Common driver sources:
 After installation, restart the application and check available COM ports.
         """
         
-        messagebox.showinfo("Driver Installation", driver_info.strip())
+        show_info(self.app, "Driver Installation", driver_info.strip())
         
         if hasattr(self.app, 'log_frame') and self.app.log_frame:
             self.app.log_frame.log_message("Driver installation guide displayed.\n")
@@ -234,7 +253,7 @@ Please check for:
 
 For technical support, contact Lumini Tracker support team.
                 """
-                messagebox.showinfo("Manual", manual_info.strip())
+                show_info(self.app, "Manual", manual_info.strip())
                 
                 if hasattr(self.app, 'log_frame') and self.app.log_frame:
                     self.app.log_frame.log_message("Manual file not found - info dialog shown.\n")
@@ -243,18 +262,18 @@ For technical support, contact Lumini Tracker support team.
             error_msg = f"Failed to open manual: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Manual Error", error_msg)
+            show_error(self.app, "Manual Error", error_msg)
     
     def _on_restore_defaults(self):
         """Handle restore defaults button click."""
         try:
             # Show confirmation dialog
-            result = messagebox.askyesno(
+            result = ask_yes_no(
+                self.app,
                 "Restore Defaults",
                 "This will reset all UI fields to their default values.\n\n"
                 "This action will not affect device settings.\n\n"
-                "Are you sure you want to continue?",
-                icon="warning"
+                "Are you sure you want to continue?"
             )
             
             if result:
@@ -264,13 +283,13 @@ For technical support, contact Lumini Tracker support team.
                 if hasattr(self.app, 'log_frame') and self.app.log_frame:
                     self.app.log_frame.log_message("UI fields restored to default values.\n")
                 
-                messagebox.showinfo("Restore Complete", "UI fields have been restored to default values.")
+                show_info(self.app, "Restore Complete", "UI fields have been restored to default values.")
         
         except Exception as e:
             error_msg = f"Restore defaults failed: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Restore Error", error_msg)
+            show_error(self.app, "Restore Error", error_msg)
     
     def _reset_ui_to_defaults(self):
         """Reset all UI fields to their default values."""
@@ -280,9 +299,9 @@ For technical support, contact Lumini Tracker support team.
                 params_frame = self.app.params_frame
                 
                 # Reset APN fields
-                if hasattr(params_frame, 'apn_server_entry'):
-                    params_frame.apn_server_entry.delete(0, "end")
-                    params_frame.apn_server_entry.insert(0, "internet.provider.com")
+                if hasattr(params_frame, 'apn_widgets') and 'apn' in params_frame.apn_widgets:
+                    params_frame.apn_widgets['apn'].delete(0, "end")
+                    params_frame.apn_widgets['apn'].insert(0, "internet.provider.com")
                 
                 if hasattr(params_frame, 'apn_user_entry'):
                     params_frame.apn_user_entry.delete(0, "end")
@@ -334,7 +353,7 @@ For technical support, contact Lumini Tracker support team.
             error_msg = f"Personalization failed: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Personalization Error", error_msg)
+            show_error(self.app, "Personalization Error", error_msg)
     
     def _apply_theme(self, theme):
         """Apply the selected theme."""
@@ -350,7 +369,7 @@ For technical support, contact Lumini Tracker support team.
             error_msg = f"Failed to set theme: {str(e)}"
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            messagebox.showerror("Theme Error", error_msg)
+            show_error(self.app, "Theme Error", error_msg)
     
     def _get_timestamp(self):
         """Get current timestamp in ISO format."""
@@ -393,7 +412,9 @@ For technical support, contact Lumini Tracker support team.
             # Update dropdown options
             self.profiles_dropdown.configure(values=[
                 self.i18n.get("save_profile", "Save Profile"),
-                self.i18n.get("load_profile", "Load Profile")
+                self.i18n.get("load_profile", "Load Profile"),
+                self.i18n.get("load_from_device", "Load from Device"),
+                self.i18n.get("load_profile_to_device", "Load Profile to Device")
             ])
             self.profiles_dropdown.set(self.i18n.get("profiles", "Profiles"))
             
@@ -408,3 +429,662 @@ For technical support, contact Lumini Tracker support team.
             
         except Exception as e:
             print(f"Error updating toolbar language display: {e}")
+    
+    def _load_from_device_to_profile(self):
+        """Load configuration from device and save to profile file."""
+        try:
+            # Check if ProfileManager is available
+            if not hasattr(self.app, 'profile_manager'):
+                show_error(
+                    self.app,
+                    "Profile Manager Error",
+                    "Profile manager is not available. Please ensure the application is properly initialized."
+                )
+                return
+            
+            # Show file save dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.asksaveasfilename(
+                title=self.i18n.get("save_device_profile", "Save Device Configuration Profile"),
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Show confirmation dialog
+            result = ask_yes_no(
+                self.app,
+                self.i18n.get("load_from_device", "Load from Device"),
+                self.i18n.get("load_from_device_confirmation", "This will read the current device configuration and save it to:\n\n{profile_path}\n\nThe device must be connected and responding.\n\nContinue?").format(profile_path=profile_path)
+            )
+            
+            if not result:
+                return
+            
+            # Run the async operation in a separate thread
+            import threading
+            thread = threading.Thread(target=self._load_from_device_to_profile_worker, args=(profile_path,))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Load from device failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load from Device Error", error_msg)
+    
+    def _load_from_device_to_profile_worker(self, profile_path):
+        """Worker method to load from device and save to profile file."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Load configuration from device
+            load_result = loop.run_until_complete(self.app.profile_manager.load_from_device())
+            
+            if not load_result.success:
+                # Handle load failure
+                self.app.after(0, self._handle_load_from_device_completion, load_result)
+                return
+            
+            # Save the loaded profile to file
+            save_result = loop.run_until_complete(self.app.profile_manager.save_to_file(profile_path))
+            
+            # Handle completion on the main thread
+            self.app.after(0, self._handle_load_from_device_completion, save_result)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.LOAD_FROM_DEVICE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_load_from_device_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+
+    def _handle_load_from_device_completion(self, result):
+        """Handle the completion of loading from device, ensuring UI updates are on the main thread."""
+        try:
+            if result.success:
+                # Show success message
+                success_msg = self.i18n.get("load_from_device_success", "Device configuration loaded successfully!\n\nProfile name: {profile_name}\nParameters processed: {parameters_processed}\nProfile saved to: {file_path}").format(
+                    profile_name=result.profile.name if hasattr(result, 'profile') and result.profile else 'N/A',
+                    parameters_processed=result.parameters_processed if hasattr(result, 'parameters_processed') else 'N/A',
+                    file_path=result.details.get('file_path', 'N/A') if hasattr(result, 'details') and result.details else 'N/A'
+                )
+
+                # Localized title
+                title = self.i18n.get("load_from_device", "Load from Device")
+                show_info(self.app, title, success_msg)
+
+                # Populate UI with the values from the current profile
+                try:
+                    ui_field_values = {}
+                    populate_result = self.app.profile_manager.populate_ui_fields(ui_field_values)
+                    self.app.after(0, self._update_ui_with_values, ui_field_values, populate_result)
+                except Exception as populate_err:
+                    # Log but do not break user flow
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message(f"ERROR: Failed to populate UI after device load: {populate_err}\n")
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"Device configuration loaded to profile successfully\n")
+            else:
+                # Show error message
+                error_msg = "Failed to load device configuration:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                error_title = self.i18n.get("operation_failed", "Operation failed")
+                show_error(self.app, error_title, error_msg)
+                
+                # Log error
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    log_msg = "ERROR: Device configuration load failed"
+                    if result.errors:
+                        log_msg += f": {result.errors[0]}"
+                    self.app.log_frame.log_message(f"{log_msg}\n")
+        
+        except Exception as e:
+            print(f"Error in completion callback: {e}")
+    
+    def _load_profile_to_device(self):
+        """Load configuration from profile file and deploy to device."""
+        try:
+            # Check if ProfileManager is available
+            if not hasattr(self.app, 'profile_manager'):
+                show_error(
+                    self.app,
+                    "Profile Manager Error",
+                    "Profile manager is not available. Please ensure the application is properly initialized."
+                )
+                return
+            
+            # Show file open dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.askopenfilename(
+                title=self.i18n.get("load_profile_to_device", "Load Profile to Device"),
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Show confirmation dialog
+            result = ask_yes_no(
+                self.app,
+                "Load Profile to Device",
+                f"This will load the profile from:\n\n{profile_path}\n\n"
+                "and deploy it to the device.\n\n"
+                "Continue?"
+            )
+            
+            if not result:
+                return
+            
+            # Run the async operation in a separate thread
+            import threading
+            thread = threading.Thread(target=self._load_profile_to_device_worker, args=(profile_path,))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Load profile to device failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile to Device Error", error_msg)
+    
+    def _load_profile_to_device_worker(self, profile_path):
+        """Worker method to load profile from file and deploy to device."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Load profile from file
+            load_result = loop.run_until_complete(self.app.profile_manager.load_from_file(profile_path))
+            
+            if not load_result.success:
+                # Handle load failure
+                self.app.after(0, self._handle_load_to_device_completion, load_result)
+                return
+            
+            # Mark all parameters as modified so they will be written to device
+            # This is necessary because save_to_device only writes modified parameters
+            if hasattr(self.app.profile_manager, '_current_profile') and self.app.profile_manager._current_profile:
+                for param_name, param_value in self.app.profile_manager._current_profile.parameters.items():
+                    param_value.is_modified = True
+                    param_value.source = "user"  # Mark as user-initiated to ensure deployment
+            
+            # Save the loaded profile to device
+            save_result = loop.run_until_complete(self.app.profile_manager.save_to_device())
+            
+            # Add profile path to result details for display purposes
+            if save_result.success:
+                save_result.add_detail('profile_path', profile_path)
+            
+            # Handle completion on the main thread
+            self.app.after(0, self._handle_load_to_device_completion, save_result)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.SAVE_TO_DEVICE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_load_to_device_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+
+    def _handle_load_to_device_completion(self, result):
+        """Handle the completion of loading to device, ensuring UI updates are on the main thread."""
+        try:
+            # Get recovery context from ProfileManager if available
+            recovery_context = getattr(result, 'recovery_context', {})
+            
+            if result.success:
+                # Check if this was a complete success or partial success
+                failed_parameters = result.get_failed_parameters()
+                if failed_parameters and len(failed_parameters) > 0:
+                    # Partial success - show recovery summary
+                    recovery_summary = self.app.profile_manager.create_recovery_summary(recovery_context)
+                    
+                    # Show partial success dialog with recovery details
+                    # TODO: Fix profile_error_handler access - should be imported or accessed through app
+                    # user_feedback = profile_error_handler.create_recovery_summary_dialog(recovery_summary)
+                    
+                    from ui.profile_success_dialog import show_profile_success_dialog
+                    success_msg = f"Profile deployment partially successful!\n\n"
+                    
+                    # Get profile path from details or profile name
+                    profile_path = result.details.get('profile_path', '')
+                    if not profile_path and result.profile:
+                        profile_path = result.profile.name
+                    if profile_path:
+                        success_msg += f"Profile: {os.path.basename(profile_path)}\n"
+                    
+                    success_msg += f"Parameters configured: {result.parameters_processed}\n"
+                    success_msg += f"Parameters failed: {len(failed_parameters)}\n"
+                    success_msg += f"Success rate: {recovery_summary.get('success_rate_percent', 0):.1f}%\n\n"
+                    
+                    if failed_parameters:
+                        success_msg += "Failed parameters:\n"
+                        for failed_param in failed_parameters[:5]:  # Show first 5
+                            success_msg += f"• {failed_param.parameter_name}\n"
+                        if len(failed_parameters) > 5:
+                            success_msg += f"... and {len(failed_parameters) - 5} more\n"
+                        success_msg += "\nThese parameters may need to be configured manually."
+                    
+                    show_profile_success_dialog(self.app, "Profile Deployment Partially Complete", success_msg)
+                    
+                    # Update recovery statistics
+                    self.app.profile_manager.update_recovery_statistics(recovery_summary)
+                else:
+                    # Complete success
+                    from ui.profile_success_dialog import show_profile_success_dialog
+                    success_msg = f"Profile deployed successfully!\n\n"
+                    
+                    # Get profile path from details or profile name
+                    profile_path = result.details.get('profile_path', '')
+                    if not profile_path and result.profile:
+                        profile_path = result.profile.name
+                    if profile_path:
+                        success_msg += f"Profile: {os.path.basename(profile_path)}\n"
+                    
+                    success_msg += f"Parameters configured: {result.parameters_processed}"
+                    
+                    show_profile_success_dialog(self.app, "Profile Deployment Complete", success_msg)
+                
+                # Log success with recovery details
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    profile_path = result.details.get('profile_path', '')
+                    if not profile_path and result.profile:
+                        profile_path = result.profile.name
+                    
+                    log_msg = f"Profile deployed to device"
+                    if profile_path:
+                        log_msg += f": {profile_path}"
+                    if failed_parameters:
+                        log_msg += f" (with {len(failed_parameters)} failed parameters)"
+                    self.app.log_frame.log_message(f"INFO: {log_msg}\n")
+            else:
+                # Handle deployment failure with comprehensive error recovery
+                recovery_summary = self.app.profile_manager.create_recovery_summary(recovery_context)
+                
+                # Create detailed error report
+                # TODO: Fix profile_error_handler access - should be imported or accessed through app
+                # error_report = profile_error_handler.create_error_report(
+                #     ProfileOperationType.DEPLOY_PROFILE,
+                #     result.errors if result.errors else []
+                # )
+                
+                # Show recovery summary dialog for failed operations
+                if recovery_summary.get('partial_success', False):
+                    # Some parameters were successful despite overall failure
+                    # TODO: Fix profile_error_handler access - should be imported or accessed through app
+                    # user_feedback = profile_error_handler.create_recovery_summary_dialog(recovery_summary)
+                    
+                    from ui.profile_error_dialog import show_profile_error_dialog
+                    error_msg = f"Profile deployment failed but some parameters were configured:\n\n"
+                    error_msg += f"Successful parameters: {recovery_summary.get('successful_parameters', 0)}\n"
+                    error_msg += f"Failed parameters: {recovery_summary.get('failed_parameters', 0)}\n"
+                    error_msg += f"Success rate: {recovery_summary.get('success_rate_percent', 0):.1f}%\n\n"
+                    error_msg += f"Primary error: {result.errors[0] if result.errors else 'Unknown error'}\n\n"
+                    error_msg += "Check the log for detailed recovery information."
+                    
+                    show_profile_error_dialog(self.app, "Profile Deployment Partially Failed", error_msg)
+                else:
+                    # Complete failure - check error type for appropriate dialog
+                    if result.details and result.details.get('error_code') in ['DEVICE_NOT_CONNECTED', 'NO_SERIAL_SERVICE']:
+                        # Show connection error dialog
+                        from ui.profile_connection_error_dialog import show_profile_connection_error_dialog
+                        error_msg = f"Failed to deploy profile to device:\n\n{result.errors[0] if result.errors else 'Unknown error'}"
+                        show_profile_connection_error_dialog(self.app, "Connection Error", error_msg)
+                    else:
+                        # Show general error dialog with recovery information
+                        from ui.profile_error_dialog import show_profile_error_dialog
+                        error_msg = f"Failed to deploy profile to device:\n\n{result.errors[0] if result.errors else 'Unknown error'}"
+                        
+                        if recovery_summary.get('recovery_actions', 0) > 0:
+                            error_msg += f"\n\nRecovery attempts made: {recovery_summary.get('recovery_actions', 0)}"
+                            error_msg += "\nCheck the log for detailed recovery information."
+                        
+                        show_profile_error_dialog(self.app, "Profile Deployment Failed", error_msg)
+                
+                # Update recovery statistics
+                self.app.profile_manager.update_recovery_statistics(recovery_summary)
+                
+                # Log error with recovery context
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    log_msg = f"Profile deployment failed: {result.errors[0] if result.errors else 'Unknown error'}"
+                    if recovery_summary.get('recovery_actions', 0) > 0:
+                        log_msg += f" (after {recovery_summary.get('recovery_actions', 0)} recovery attempts)"
+                    self.app.log_frame.log_message(f"ERROR: {log_msg}\n")
+
+        except Exception as e:
+            # Handle callback errors gracefully
+            error_msg = f"Error in completion callback: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            print(error_msg)
+    
+    def _load_profile_to_ui(self):
+        """Load configuration from profile file and populate UI fields."""
+        try:
+            # Check if ProfileManager is available
+            if not hasattr(self.app, 'profile_manager'):
+                show_error(
+                    self.app,
+                    "Profile Manager Error",
+                    "Profile manager is not available. Please ensure the application is properly initialized."
+                )
+                return
+            
+            # Show file open dialog
+            from tkinter import filedialog
+            profile_path = filedialog.askopenfilename(
+                title=self.i18n.get("load_profile", "Load Profile"),
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Run the async operation in a separate thread
+            import threading
+            thread = threading.Thread(target=self._load_profile_to_ui_worker, args=(profile_path,))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Load profile to UI failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile to UI Error", error_msg)
+    
+    def _load_profile_to_ui_worker(self, profile_path):
+        """Worker method to load profile from file and populate UI fields."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Load profile from file
+            load_result = loop.run_until_complete(self.app.profile_manager.load_from_file(profile_path))
+            
+            if not load_result.success:
+                # Handle load failure
+                self.app.after(0, self._handle_load_profile_to_ui_completion, load_result)
+                return
+            
+            # Populate UI fields from the loaded profile
+            ui_field_values = {}
+            populate_result = self.app.profile_manager.populate_ui_fields(ui_field_values)
+            
+            # Update UI with the field values
+            self.app.after(0, self._update_ui_with_values, ui_field_values, populate_result)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.LOAD_FROM_FILE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_load_profile_to_ui_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+    
+    def _update_ui_with_values(self, ui_field_values, populate_result):
+        """Update UI fields with values from profile."""
+        try:
+            # Update UI fields with the values
+            if hasattr(self.app, 'params_frame'):
+                self.app.params_frame.update_fields_from_dict(ui_field_values)
+            
+            # Log success
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message("INFO: Profile loaded to UI successfully via toolbar\n")
+        except Exception as e:
+            error_msg = f"Failed to update UI with profile values: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile to UI Error", error_msg)
+    
+    def _handle_load_profile_to_ui_completion(self, result):
+        """Handle the completion of loading profile to UI."""
+        try:
+            if result.success:
+                # Show success message
+                success_msg = "Profile loaded to UI successfully!"
+                show_info(self.app, "Load Profile to UI", success_msg)
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("INFO: Profile loaded to UI successfully via toolbar\n")
+            else:
+                # Show error message
+                error_msg = "Failed to load profile to UI:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                show_error(self.app, "Load Profile to UI Failed", error_msg)
+                
+                # Log error
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    log_msg = "ERROR: Profile load to UI failed"
+                    if result.errors:
+                        log_msg += f": {result.errors[0]}"
+                    self.app.log_frame.log_message(f"{log_msg}\n")
+        
+        except Exception as e:
+            print(f"Error in completion callback: {e}")
+    
+    def _save_profile_from_ui(self):
+        """Save the current UI state to a profile file."""
+        try:
+            # Check if ProfileManager is available
+            if not hasattr(self.app, 'profile_manager'):
+                show_error(
+                    self.app,
+                    "Profile Manager Error",
+                    "Profile manager is not available. Please ensure the application is properly initialized."
+                )
+                return
+            
+            # Show file save dialog
+            from tkinter import filedialog
+            profile_path = filedialog.asksaveasfilename(
+                title=self.i18n.get("save_profile", "Save Profile"),
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Run the async operation in a separate thread
+            import threading
+            thread = threading.Thread(target=self._save_profile_from_ui_worker, args=(profile_path,))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Save profile from UI failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Save Profile Error", error_msg)
+    
+    def _save_profile_from_ui_worker(self, profile_path):
+        """Worker method to save profile from UI."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Extract UI field values
+            ui_field_values = {}
+            if hasattr(self.app, 'params_frame'):
+                # Get values from UI fields
+                ui_field_values = self.app.params_frame.get_all_field_values()
+            
+            # Extract values using profile manager
+            extract_result = self.app.profile_manager.extract_ui_field_values(ui_field_values)
+            
+            if not extract_result.is_valid:
+                # Handle extraction failure
+                from models.operation_result import OperationType
+                error_result = ProfileOperationResult(
+                    operation_type=OperationType.SAVE_TO_FILE,
+                    success=False
+                )
+                error_result.add_error("Failed to extract UI field values: " + "; ".join(extract_result.errors))
+                self.app.after(0, self._handle_save_profile_completion, error_result)
+                return
+            
+            # Save the profile to file
+            save_result = loop.run_until_complete(self.app.profile_manager.save_to_file(profile_path))
+            
+            # Handle completion on the main thread
+            self.app.after(0, self._handle_save_profile_completion, save_result)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.SAVE_TO_FILE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_save_profile_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+    
+    def _handle_save_profile_completion(self, result):
+        """Handle the completion of saving profile from UI."""
+        try:
+            if result.success:
+                # Show success message
+                success_msg = "Profile saved successfully!"
+                if hasattr(result, 'details') and result.details:
+                    if 'file_path' in result.details:
+                        success_msg += f"\nProfile saved to: {result.details['file_path']}"
+                show_info(self.app, "Save Profile", success_msg)
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("INFO: Profile saved from UI successfully\n")
+            else:
+                # Show error message
+                error_msg = "Failed to save profile:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                show_error(self.app, "Save Profile Failed", error_msg)
+                
+                # Log error
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    log_msg = "ERROR: Profile save from UI failed"
+                    if result.errors:
+                        log_msg += f": {result.errors[0]}"
+                    self.app.log_frame.log_message(f"{log_msg}\n")
+        
+        except Exception as e:
+            print(f"Error in completion callback: {e}")
+    
+    def _create_progress_dialog(self, title, initial_message):
+        """Create a progress dialog for long-running operations."""
+        try:
+            import tkinter as tk
+            from tkinter import ttk
+            
+            # Create progress window
+            progress_window = tk.Toplevel(self.app)
+            progress_window.title(title)
+            progress_window.geometry("400x150")
+            progress_window.resizable(False, False)
+            progress_window.transient(self.app)
+            progress_window.grab_set()
+            
+            # Center the window
+            progress_window.update_idletasks()
+            x = (progress_window.winfo_screenwidth() // 2) - (400 // 2)
+            y = (progress_window.winfo_screenheight() // 2) - (150 // 2)
+            progress_window.geometry(f"400x150+{x}+{y}")
+            
+            # Create progress elements
+            frame = tk.Frame(progress_window, padx=20, pady=20)
+            frame.pack(fill="both", expand=True)
+            
+            # Status label
+            status_label = tk.Label(frame, text=initial_message, wraplength=360)
+            status_label.pack(pady=(0, 10))
+            
+            # Progress bar
+            progress_bar = ttk.Progressbar(frame, mode='determinate', length=360)
+            progress_bar.pack(pady=(0, 10))
+            
+            # Percentage label
+            percent_label = tk.Label(frame, text="0%")
+            percent_label.pack()
+            
+            # Add methods to update progress
+            def update_progress(percentage, status_text):
+                try:
+                    if progress_window.winfo_exists():
+                        progress_bar['value'] = percentage
+                        percent_label.config(text=f"{percentage:.1f}%")
+                        status_label.config(text=status_text)
+                        progress_window.update()
+                except:
+                    pass
+            
+            progress_window.update_progress = update_progress
+            
+            # Show the dialog
+            progress_window.update()
+            
+            return progress_window
+            
+        except Exception as e:
+            print(f"Error creating progress dialog: {e}")
+            return None
