@@ -519,12 +519,8 @@ For technical support, contact Lumini Tracker support team.
         """Handle the completion of loading from device, ensuring UI updates are on the main thread."""
         try:
             if result.success:
-                # Show success message
-                success_msg = self.i18n.get("load_from_device_success", "Device configuration loaded successfully!\n\nProfile name: {profile_name}\nParameters processed: {parameters_processed}\nProfile saved to: {file_path}").format(
-                    profile_name=result.profile.name if hasattr(result, 'profile') and result.profile else 'N/A',
-                    parameters_processed=result.parameters_processed if hasattr(result, 'parameters_processed') else 'N/A',
-                    file_path=result.details.get('file_path', 'N/A') if hasattr(result, 'details') and result.details else 'N/A'
-                )
+                # Show simple success message without profile details
+                success_msg = self.i18n.get("load_from_device_success_simple", "Configuração do dispositivo carregada com sucesso!")
 
                 # Localized title
                 title = self.i18n.get("load_from_device", "Load from Device")

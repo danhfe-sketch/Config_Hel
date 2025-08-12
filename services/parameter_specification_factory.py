@@ -578,6 +578,30 @@ class ParameterSpecificationFactory:
                 self._send_tcp_ack_command(param_values)
             elif param_name == 'ignition_type':
                 self._send_ignition_command(param_values)
+            elif param_name == 'speed_alert':
+                self._send_speed_alert_command(param_values)
+            elif param_name == 'speed_buzzer':
+                self._send_speed_buzzer_command(param_values)
+            elif param_name == 'sleep_mode':
+                self._send_sleep_mode_command(param_values)
+            elif param_name == 'sleep_time':
+                self._send_sleep_time_command(param_values)
+            elif param_name == 'angle_report':
+                self._send_angle_report_command(param_values)
+            elif param_name == 'backup_battery_alert':
+                self._send_backup_battery_alert_command(param_values)
+            elif param_name == 'main_power_alert':
+                self._send_main_power_alert_command(param_values)
+            elif param_name == 'vibration_sensitivity':
+                self._send_vibration_sensitivity_command(param_values)
+            elif param_name == 'jammer_detection':
+                self._send_jammer_detection_command(param_values)
+            elif param_name == 'jammer_relay_action':
+                self._send_jammer_relay_action_command(param_values)
+            elif param_name == 'odometer':
+                self._send_odometer_command(param_values)
+            elif param_name == 'hourmeter':
+                self._send_hourmeter_command(param_values)
             else:
                 # Generic parameter sending
                 self._send_generic_parameter_command(param_name, param_values)
@@ -587,6 +611,60 @@ class ParameterSpecificationFactory:
                 self.i18n_service.get("error", "Error"),
                 f"{self.i18n_service.get('send_command_error', 'Error sending command')}: {str(e)}"
             )
+    
+    def _get_current_parameter_values(self, param_name: str) -> dict:
+        """Get current parameter values from UI for sending commands"""
+        if not hasattr(self, 'section_widgets') or not self.section_widgets:
+            return {}
+        
+        # First, try to find the parameter directly in section widgets
+        for section_name, section_widget in self.section_widgets.items():
+            if param_name in section_widget.parameters:
+                param_widget = section_widget.parameters[param_name]
+                values = {}
+                
+                # Extract values from UI elements
+                for field_name, ui_element in param_widget.ui_elements.items():
+                    try:
+                        value = ui_element.get_value()
+                        values[field_name] = value
+                    except Exception as e:
+                        print(f"WARNING: Failed to get value for {param_name}.{field_name}: {e}")
+                        values[field_name] = None
+                
+                # If this is a simple parameter with only one field, also add it with the parameter name as key
+                if len(param_widget.ui_elements) == 1:
+                    single_value = list(values.values())[0]
+                    values[param_name] = single_value
+                
+                return values
+        
+        # If not found directly, try to use the existing get_parameter_value method
+        # This handles the case where we need to get values from section.parameter structure
+        try:
+            # Map common parameter names to their section locations
+            section_mapping = {
+                'protocol': ('service_parameters', 'protocol'),
+                'tcp_ack': ('service_parameters', 'tcp_ack'),
+                'speed_buzzer': ('speed', 'speed_buzzer'),
+                'sleep_mode': ('power_saving', 'sleep_mode'),
+                'sleep_time': ('power_saving', 'sleep_time'),
+                'backup_battery_alert': ('battery_alerts', 'backup_battery_alert'),
+                'odometer': ('miscellaneous', 'odometer'),
+                'hourmeter': ('miscellaneous', 'hourmeter')
+            }
+            
+            if param_name in section_mapping:
+                section_name, param_key = section_mapping[param_name]
+                if hasattr(self, 'get_parameter_value'):
+                    value = self.get_parameter_value(section_name, param_key, self.section_widgets)
+                    if value is not None:
+                        # Return the value in the expected format
+                        return {param_name: value}
+        except Exception as e:
+            print(f"WARNING: Failed to get parameter value using section mapping for {param_name}: {e}")
+        
+        return {}
     
     def _get_parameter_values_for_command(self, param_name: str) -> dict:
         """Get parameter values from UI for sending commands"""
@@ -599,23 +677,11 @@ class ParameterSpecificationFactory:
         """Set reference to section widgets for getting parameter values"""
         self.section_widgets = section_widgets
     
-    def _get_current_parameter_values(self, param_name: str) -> dict:
-        """Get current parameter values from UI for the specified parameter"""
-        if not hasattr(self, 'section_widgets'):
-            return {}
-        
-        # Find the parameter in all sections
-        for section_name, section_widget in self.section_widgets.items():
-            if param_name in section_widget.parameters:
-                return self.get_parameter_value(section_name, param_name, self.section_widgets) or {}
-        
-        return {}
-    
     def _send_apn_command(self, values: dict):
         """Send APN configuration command"""
-        server = values.get('apn', '').strip()
-        user = values.get('user', '').strip()
-        password = values.get('password', '').strip()
+        server = str(values.get('apn', '')).strip()
+        user = str(values.get('user', '')).strip()
+        password = str(values.get('password', '')).strip()
         
         if not server:
             messagebox.showerror(
@@ -634,8 +700,8 @@ class ParameterSpecificationFactory:
     
     def _send_server_command(self, values: dict):
         """Send server configuration command"""
-        address = values.get('address', '').strip()
-        port = values.get('port', '').strip()
+        address = str(values.get('address', '')).strip()
+        port = str(values.get('port', '')).strip()
         
         if not address or not port:
             messagebox.showerror(
@@ -659,8 +725,8 @@ class ParameterSpecificationFactory:
     
     def _send_timer_command(self, values: dict):
         """Send timer intervals command"""
-        moving_time = values.get('moving_time', '').strip()
-        stopped_time = values.get('stopped_time', '').strip()
+        moving_time = str(values.get('moving_time', '')).strip()
+        stopped_time = str(values.get('stopped_time', '')).strip()
         
         if not moving_time or not stopped_time:
             messagebox.showerror(
@@ -679,8 +745,8 @@ class ParameterSpecificationFactory:
     
     def _send_heartbeat_command(self, values: dict):
         """Send heartbeat intervals command"""
-        moving_heartbeat = values.get('moving_heartbeat', '').strip()
-        stopped_heartbeat = values.get('stopped_heartbeat', '').strip()
+        moving_heartbeat = str(values.get('moving_heartbeat', '')).strip()
+        stopped_heartbeat = str(values.get('stopped_heartbeat', '')).strip()
         
         if not moving_heartbeat or not stopped_heartbeat:
             messagebox.showerror(
@@ -699,7 +765,7 @@ class ParameterSpecificationFactory:
     
     def _send_protocol_command(self, values: dict):
         """Send protocol configuration command"""
-        protocol = values.get('protocol', '').strip()
+        protocol = str(values.get('protocol', '')).strip()
         
         if not protocol:
             messagebox.showerror(
@@ -716,7 +782,7 @@ class ParameterSpecificationFactory:
         }
         
         protocol_value = protocol_mapping.get(protocol, '0')
-        command = f"ATSMS:SZCS#GT06SEL={protocol_value}#"
+        command = f"ATSMS:SZCS#GT06SEL={protocol_value}"
         self.serial_service.send_command(command)
         
         messagebox.showinfo(
@@ -726,7 +792,7 @@ class ParameterSpecificationFactory:
     
     def _send_tcp_ack_command(self, values: dict):
         """Send TCP ACK configuration command"""
-        tcp_ack = values.get('tcp_ack', '').strip()
+        tcp_ack = str(values.get('tcp_ack', '')).strip()
         
         if not tcp_ack:
             messagebox.showerror(
@@ -737,7 +803,7 @@ class ParameterSpecificationFactory:
         
         # Map boolean to command value
         ack_value = '1' if tcp_ack.lower() in ['true', 'enabled', '1'] else '0'
-        command = f"ATSMS:SZCS#TCPACK={ack_value}#"
+        command = f"ATSMS:SZCS#POSBYACK={ack_value}"
         self.serial_service.send_command(command)
         
         messagebox.showinfo(
@@ -747,19 +813,20 @@ class ParameterSpecificationFactory:
     
     def _send_ignition_command(self, values: dict):
         """Send ignition configuration command"""
-        ignition_type = values.get('ignition_type', '').strip()
+        # The ignition parameter has multiple fields, get the ignition_mode field
+        ignition_mode = str(values.get('ignition_mode', '')).strip()
         
-        if not ignition_type:
+        if not ignition_mode:
             messagebox.showerror(
                 self.i18n_service.get("error", "Error"),
                 self.i18n_service.get("ignition_type_required", "Ignition type is required")
             )
             return
         
-        if ignition_type == 'Virtual por bateria':
+        if ignition_mode == 'Virtual por bateria (Virtual by battery)':
             # Battery-based ignition requires voltage values
-            on_voltage = values.get('on_voltage', '').strip()
-            off_voltage = values.get('off_voltage', '').strip()
+            on_voltage = str(values.get('on_voltage', '')).strip()
+            off_voltage = str(values.get('off_voltage', '')).strip()
             
             if not on_voltage or not off_voltage:
                 messagebox.showerror(
@@ -769,18 +836,18 @@ class ParameterSpecificationFactory:
                 return
             
             commands = [
-                "ATSMS:SZCS#ACCLINE=1#",
-                f"ATSMS:SZCS#ACC_CFG=1-{on_voltage}-{off_voltage}#"
+                "ATSMS:SZCS#ACCLINE=1",
+                f"ATSMS:SZCS#ACC_CFG=1-{on_voltage}-{off_voltage}"
             ]
-        elif ignition_type == 'Físico':
+        elif ignition_mode == 'Física (Physical)':
             commands = [
-                "ATSMS:SZCS#ACCLINE=1#",
-                "ATSMS:SZCS#ACC_CFG=0-000-000#"
+                "ATSMS:SZCS#ACCLINE=1",
+                "ATSMS:SZCS#ACC_CFG=0-000-000"
             ]
-        elif ignition_type == 'Acelerômetro':
+        elif ignition_mode == 'Virtual por acelerômetro (Virtual by accelerometer)':
             commands = [
-                "ATSMS:SZCS#ACCLINE=0#",
-                "ATSMS:SZCS#ACC_CFG=0-000-000#"
+                "ATSMS:SZCS#ACCLINE=0",
+                "ATSMS:SZCS#ACC_CFG=0-000-000"
             ]
         else:
             messagebox.showerror(
@@ -798,6 +865,259 @@ class ParameterSpecificationFactory:
             self.i18n_service.get("ignition_command_sent", "Ignition configuration sent to device")
         )
     
+    def _send_speed_alert_command(self, values: dict):
+        """Send speed alert configuration command"""
+        enabled = values.get('enabled', False)
+        detection_time = str(values.get('detection_time', '')).strip()
+        speed_limit = str(values.get('speed_limit', '')).strip()
+        alert_type = str(values.get('alert_type', '')).strip()
+        
+        if enabled and (not detection_time or not speed_limit):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("speed_alert_values_required", "Detection time and speed limit are required when speed alert is enabled")
+            )
+            return
+        
+        # Map alert type to command value
+        alert_type_mapping = {
+            'Apenas GPRS': '0',
+            'GPRS+SMS': '1'
+        }
+        alert_value = alert_type_mapping.get(alert_type, '0')
+        
+        if enabled:
+            command = f"ATSMS:SPEED,ON,{detection_time},{speed_limit},{alert_value}#"
+        else:
+            command = "ATSMS:SPEED,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("speed_alert_sent", "Speed alert configuration sent to device")
+        )
+    
+    def _send_speed_buzzer_command(self, values: dict):
+        """Send speed buzzer configuration command"""
+        enabled = values.get('speed_buzzer', False)
+        value = '1' if enabled else '0'
+        
+        command = f"ATSMS:SZCS#SPD_LED_SHOW={value}"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("speed_buzzer_sent", "Speed buzzer configuration sent to device")
+        )
+    
+    def _send_sleep_mode_command(self, values: dict):
+        """Send sleep mode configuration command"""
+        sleep_mode = str(values.get('sleep_mode', '')).strip()
+        
+        # Map sleep mode to command value
+        sleep_mode_mapping = {
+            'Desabilitado (Disabled)': '0',
+            'Sleep (Habilitado)': '1',
+            'Deep Sleep (Ultra-baixo)': '2'
+        }
+        
+        mode_value = sleep_mode_mapping.get(sleep_mode, '0')
+        command = f"ATSMS:SZCS#SLPDISCONNECT={mode_value}"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("sleep_mode_sent", "Sleep mode configuration sent to device")
+        )
+    
+    def _send_sleep_time_command(self, values: dict):
+        """Send sleep time configuration command"""
+        sleep_time = str(values.get('sleep_time', '')).strip()
+        
+        if not sleep_time:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("sleep_time_required", "Sleep time value is required")
+            )
+            return
+        
+        command = f"ATSMS:SZCS#SLEEPT={sleep_time}"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("sleep_time_sent", "Sleep time configuration sent to device")
+        )
+    
+    def _send_angle_report_command(self, values: dict):
+        """Send angle report configuration command"""
+        enabled = values.get('enabled', False)
+        min_speed = str(values.get('min_speed', '')).strip()
+        angle_variation = str(values.get('angle_variation', '')).strip()
+        
+        if enabled:
+            if not min_speed or not angle_variation:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("angle_values_required", "Minimum speed and angle variation are required when angle report is enabled")
+                )
+                return
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed}-{angle_variation}"
+        else:
+            command = "ATSMS:SZCS#ANGLEVALUE=0-0"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("angle_report_sent", "Angle report configuration sent to device")
+        )
+    
+    def _send_backup_battery_alert_command(self, values: dict):
+        """Send backup battery alert configuration command"""
+        enabled = values.get('backup_battery_alert', False)
+        
+        if enabled:
+            command = "ATSMS:BATALM,ON,0#"
+        else:
+            command = "ATSMS:BATALM,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("backup_battery_sent", "Backup battery alert configuration sent to device")
+        )
+    
+    def _send_main_power_alert_command(self, values: dict):
+        """Send main power alert configuration command"""
+        enabled = values.get('enabled', False)
+        alert_type = str(values.get('alert_type', '')).strip()
+        detection_time = str(values.get('detection_time', '')).strip()
+        min_charge_time = str(values.get('min_charge_time', '')).strip()
+        
+        if enabled and (not detection_time or not min_charge_time):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("main_power_values_required", "Detection time and minimum charge time are required when main power alert is enabled")
+            )
+            return
+        
+        # Map alert type to command value
+        alert_type_mapping = {
+            'Apenas GPRS': '0',
+            'GPRS+SMS': '1'
+        }
+        alert_value = alert_type_mapping.get(alert_type, '0')
+        
+        if enabled:
+            command = f"ATSMS:POWERALM,ON,{alert_value},{detection_time},{min_charge_time}#"
+        else:
+            command = "ATSMS:POWERALM,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("main_power_sent", "Main power alert configuration sent to device")
+        )
+    
+    def _send_vibration_sensitivity_command(self, values: dict):
+        """Send vibration sensitivity configuration command"""
+        enabled = values.get('enabled', False)
+        level = str(values.get('level', '1')).strip()
+        
+        if enabled:
+            command = f"ATSMS:SZCS#VIBL={level}"
+        else:
+            command = "ATSMS:SZCS#VIBL=0"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("vibration_sent", "Vibration sensitivity configuration sent to device")
+        )
+    
+    def _send_jammer_detection_command(self, values: dict):
+        """Send jammer detection configuration command"""
+        enabled = values.get('jammer_detection', False)
+        
+        if enabled:
+            command = "ATSMS:JAMMER,ON,0#"
+        else:
+            command = "ATSMS:JAMMER,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("jammer_detection_sent", "Jammer detection configuration sent to device")
+        )
+    
+    def _send_jammer_relay_action_command(self, values: dict):
+        """Send jammer relay action configuration command"""
+        enabled = values.get('enabled', False)
+        output_operation = str(values.get('output_operation', '')).strip()
+        confirmation_time = str(values.get('confirmation_time', '')).strip()
+        speed_limit = str(values.get('speed_limit', '')).strip()
+        
+        if enabled and (not confirmation_time or not speed_limit):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("jammer_relay_values_required", "Confirmation time and speed limit are required when jammer relay action is enabled")
+            )
+            return
+        
+        # Map output operation to command value
+        operation_mapping = {
+            'Sem Ação': '0',
+            'Ativar e Manter': '1',
+            'Ativar e Desativar com Jammer': '2'
+        }
+        op_value = operation_mapping.get(output_operation, '0')
+        
+        if enabled:
+            # JAMRELAY command format: op,time,speed,d,e,f,g
+            command = f"ATSMS:JAMRELAY,{op_value},{confirmation_time},{speed_limit},0,0,0,0"
+        else:
+            command = "ATSMS:JAMRELAY,0,0,0,0,0,0,0"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("jammer_relay_sent", "Jammer relay action configuration sent to device")
+        )
+    
+    def _send_odometer_command(self, values: dict):
+        """Send odometer configuration command"""
+        odometer_value = str(values.get('odometer', '')).strip()
+        
+        if not odometer_value:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("odometer_required", "Odometer value is required")
+            )
+            return
+        
+        command = f"ATSMS:MILEAGE={odometer_value}"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("odometer_sent", "Odometer configuration sent to device")
+        )
+    
+    def _send_hourmeter_command(self, values: dict):
+        """Send hourmeter configuration command"""
+        hourmeter_value = str(values.get('hourmeter', '')).strip()
+        
+        if not hourmeter_value:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("hourmeter_required", "Hourmeter value is required")
+            )
+            return
+        
+        command = f"ATSMS:ACCONT,{hourmeter_value}"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("hourmeter_sent", "Hourmeter configuration sent to device")
+        )
+
     def _send_generic_parameter_command(self, param_name: str, values: dict):
         """Send generic parameter command"""
         messagebox.showinfo(
