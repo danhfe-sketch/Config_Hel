@@ -521,6 +521,148 @@ class DeviceCommunicationManager:
             if "POSBYACK=" in clean_response:
                 value = clean_response.split("=")[1]
                 return {"tcp_ack": value}
+        elif param_spec.name == "odometer":
+            # Odometer formats:
+            # - "MILEAGE=XXXXX" (direct format)
+            # - "Cur Mileage Value:XXXXKM" (verbose format)
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"DEBUG: Parsing odometer response: '{clean_response}'\n"
+                )
+            
+            if clean_response.startswith("MILEAGE="):
+                value = clean_response[8:]  # Remove "MILEAGE=" prefix
+                # Validate that it's numeric
+                try:
+                    int(value)
+                    result = {"odometer": value}
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed odometer from MILEAGE format: {result}\n"
+                        )
+                    return result
+                except ValueError:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Invalid odometer value in MILEAGE format: '{value}'\n"
+                        )
+                    return {"odometer": "0"}  # Default to 0 for invalid values
+            elif "Cur Mileage Value:" in clean_response:
+                # Extract value from "Cur Mileage Value:XXXXKM"
+                parts = clean_response.split(":")
+                if len(parts) >= 2:
+                    value_part = parts[1]
+                    # Remove "KM" suffix if present
+                    value = value_part.replace("KM", "").strip()
+                    # Validate that it's numeric
+                    try:
+                        int(value)
+                        result = {"odometer": value}
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Parsed odometer from verbose format: {result}\n"
+                            )
+                        return result
+                    except ValueError:
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Invalid odometer value in verbose format: '{value}'\n"
+                            )
+                        return {"odometer": "0"}  # Default to 0 for invalid values
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Malformed odometer response in verbose format: '{clean_response}'\n"
+                        )
+                    return {"odometer": "0"}  # Default to 0
+            else:
+                # Try to extract any numeric value
+                import re
+                numbers = re.findall(r'\d+', clean_response)
+                if numbers:
+                    result = {"odometer": numbers[-1]}  # Use last number found
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed odometer using fallback extraction: {result}\n"
+                        )
+                    return result
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: No numeric values found in odometer response: '{clean_response}'\n"
+                        )
+                    return {"odometer": "0"}  # Default to 0
+        elif param_spec.name == "hourmeter":
+            # Hourmeter formats:
+            # - "ACCONT=XXXXX" (direct format)
+            # - "Get ACC ON Time:XXXX Minute" (verbose format)
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"DEBUG: Parsing hourmeter response: '{clean_response}'\n"
+                )
+            
+            if clean_response.startswith("ACCONT="):
+                value = clean_response[7:]  # Remove "ACCONT=" prefix
+                # Validate that it's numeric
+                try:
+                    int(value)
+                    result = {"hourmeter": value}
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed hourmeter from ACCONT format: {result}\n"
+                        )
+                    return result
+                except ValueError:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Invalid hourmeter value in ACCONT format: '{value}'\n"
+                        )
+                    return {"hourmeter": "0"}  # Default to 0 for invalid values
+            elif "Get ACC ON Time:" in clean_response:
+                # Extract value from "Get ACC ON Time:XXXX Minute"
+                parts = clean_response.split(":")
+                if len(parts) >= 2:
+                    value_part = parts[1]
+                    # Remove "Minute" suffix if present
+                    value = value_part.replace("Minute", "").strip()
+                    # Validate that it's numeric
+                    try:
+                        int(value)
+                        result = {"hourmeter": value}
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Parsed hourmeter from verbose format: {result}\n"
+                            )
+                        return result
+                    except ValueError:
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Invalid hourmeter value in verbose format: '{value}'\n"
+                            )
+                        return {"hourmeter": "0"}  # Default to 0 for invalid values
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Malformed hourmeter response in verbose format: '{clean_response}'\n"
+                        )
+                    return {"hourmeter": "0"}  # Default to 0
+            else:
+                # Try to extract any numeric value
+                import re
+                numbers = re.findall(r'\d+', clean_response)
+                if numbers:
+                    result = {"hourmeter": numbers[-1]}  # Use last number found
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed hourmeter using fallback extraction: {result}\n"
+                        )
+                    return result
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: No numeric values found in hourmeter response: '{clean_response}'\n"
+                        )
+                    return {"hourmeter": "0"}  # Default to 0
         
         # Default: return the whole response as a single value
         return {"value": clean_response}

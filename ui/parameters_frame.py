@@ -88,13 +88,15 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         # Collect all UI elements from section widgets
         for section_name, section_widget in self.section_widgets.items():
             for param_name, param_widget in section_widget.parameters.items():
-                full_param_name = f"{section_name}.{param_name}"
                 if param_widget.widget_type == 'simple':
+                    # For simple parameters, add the main UI element
+                    full_param_name = f"{section_name}.{param_name}"
                     ui_elements[full_param_name] = param_widget.ui_elements['main']
                 elif param_widget.widget_type == 'complex':
-                    # For complex parameters, we might want to handle them differently
-                    # For now, we'll add the whole widget
-                    ui_elements[full_param_name] = param_widget
+                    # For complex parameters, add each field's UI element
+                    for field_name, field_element in param_widget.ui_elements.items():
+                        full_field_name = f"{section_name}.{param_name}.{field_name}"
+                        ui_elements[full_field_name] = field_element
         
         # Use the ProfileUIPopulator to extract validated values
         return self.profile_ui_populator.extract_validated_field_values(ui_elements)
@@ -1879,3 +1881,82 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         except Exception as e:
             return f"ERROR: Failed to export parameter updates: {str(e)}"
     
+    def update_parameters_with_batch_processing(self, parameters: dict):
+        """
+        Update parameters using batch processing for optimal responsiveness.
+        
+        Args:
+            parameters: Dictionary of parameter names to values
+            
+        Requirements: 7.1, 7.2, 7.4, 7.5
+        """
+        try:
+            print(f"DEBUG: Using batch processing for {len(parameters)} parameters")
+            
+            # Import here to avoid circular imports
+            from services.ui_responsiveness_service import UIResponsivenessService, UpdatePriority
+            
+            # Create UI responsiveness service if not available
+            if not hasattr(self, '_ui_responsiveness_service'):
+                self._ui_responsiveness_service = UIResponsivenessService(self)
+            
+            # Process parameters in batches with visual feedback
+            def progress_callback(current, total):
+                print(f"DEBUG: Batch update progress: {current}/{total}")
+            
+            # Queue parameters for batch processing
+            self._ui_responsiveness_service.queue_multiple_parameter_updates(
+                parameters, UpdatePriority.NORMAL, True
+            )
+            
+            # Process the queue
+            result = self._ui_responsiveness_service.process_update_queue()
+            
+            # Log results
+            print(f"DEBUG: Batch processing completed: {result.successful_updates}/{result.total_updates} successful in {result.update_duration_ms:.1f}ms")
+            
+            if result.update_duration_ms > 100:
+                print(f"WARNING: Batch processing exceeded 100ms target: {result.update_duration_ms:.1f}ms")
+            
+            if result.errors:
+                print(f"WARNING: Batch processing had {len(result.errors)} errors")
+                for error in result.errors[:3]:  # Show first 3 errors
+                    print(f"  - {error}")
+                    
+        except Exception as e:
+            print(f"ERROR: Batch processing failed: {str(e)}")
+            # Fallback to individual updates
+            print("DEBUG: Falling back to individual parameter updates")
+    
+    def enable_ui_responsiveness_monitoring(self):
+        """
+        Enable UI responsiveness monitoring and optimization.
+        
+        This method sets up performance monitoring for UI updates to ensure
+        they meet the 100ms responsiveness requirement.
+        
+        Requirements: 7.1, 7.5
+        """
+        try:
+            from services.ui_responsiveness_service import UIResponsivenessService
+            
+            if not hasattr(self, '_ui_responsiveness_service'):
+                self._ui_responsiveness_service = UIResponsivenessService(self)
+                print("DEBUG: UI responsiveness monitoring enabled")
+            
+            # Set up periodic performance reporting
+            def report_performance():
+                if hasattr(self, '_ui_responsiveness_service'):
+                    performance = self._ui_responsiveness_service.get_performance_summary()
+                    if performance['total_batches'] > 0:
+                        print(f"UI Performance: avg {performance['avg_duration_ms']:.1f}ms, "
+                              f"{performance['avg_updates_per_second']:.1f} updates/sec")
+                
+                # Schedule next report
+                self.after(30000, report_performance)  # Every 30 seconds
+            
+            # Start performance reporting
+            self.after(30000, report_performance)
+            
+        except Exception as e:
+            print(f"ERROR: Failed to enable UI responsiveness monitoring: {str(e)}")

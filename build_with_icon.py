@@ -33,6 +33,7 @@ def build_executable_with_icon():
         icon_arg,                       # Icon argument
         "--add-data=assets;assets",     # Include assets folder
         "--add-data=assets\locales;assets\locales",   # Include locales folder
+        "--add-data=Parameter UI List.md;.",  # Include Parameter UI List.md file
         "main.py"                       # Main script
     ]
     

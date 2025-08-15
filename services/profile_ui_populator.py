@@ -86,13 +86,20 @@ class ProfileUIPopulator:
             try:
                 # Get the value from the UI element
                 value = ui_element.get_value()
-                values[param_name] = value
                 
-                # Validate the value
-                if not ui_element.validate():
-                    error_msg = ui_element.get_validation_error()
-                    if error_msg:
-                        result.add_error(f"Validation failed for {param_name}: {error_msg}")
+                # Only include non-empty values in the profile
+                if value is not None and str(value).strip() != '':
+                    values[param_name] = value
+                    
+                    # Validate the value only if it's not empty
+                    if not ui_element.validate():
+                        error_msg = ui_element.get_validation_error()
+                        if error_msg:
+                            result.add_error(f"Validation failed for {param_name}: {error_msg}")
+                else:
+                    # For empty values, don't validate and don't include in profile
+                    # This prevents validation errors for optional empty fields
+                    pass
                         
             except Exception as e:
                 result.add_error(f"Failed to extract value from {param_name}: {str(e)}")
@@ -292,26 +299,64 @@ class ProfileUIPopulator:
             ValidationResult: Result of the update operation
         """
         result = ValidationResult(is_valid=True)
+        updated_count = 0
+        
+        # Convert profile parameters to the format expected by UI
+        # Group individual field parameters into complex parameter structures
+        grouped_params = {}
+        
+        # Process each profile parameter
+        for param_key, param_value in profile.parameters.items():
+            # Split the parameter key to identify section, parameter, and field
+            parts = param_key.split('.')
+            if len(parts) >= 3:  # section.parameter.field format
+                section_name = parts[0]
+                param_name = parts[1]
+                field_name = parts[2]
+                
+                # Create the grouped parameter key
+                grouped_key = f"{section_name}.{param_name}"
+                
+                # Initialize the grouped parameter if it doesn't exist
+                if grouped_key not in grouped_params:
+                    from models.universal_profile import ParameterValue
+                    grouped_params[grouped_key] = ParameterValue(value={}, source=param_value.source)
+                
+                # Add the field value to the grouped parameter
+                grouped_params[grouped_key].value[field_name] = param_value.value
+            else:
+                # Keep parameters that are already in the correct format
+                grouped_params[param_key] = param_value
         
         # Update each section's parameters
         for section_name, section_widget in section_widgets.items():
             if hasattr(section_widget, 'parameters'):
                 for param_name, param_widget in section_widget.parameters.items():
-                    # Find corresponding parameter in profile
+                    # Find corresponding parameter in grouped parameters
                     full_param_name = f"{section_name}.{param_name}"
-                    profile_param = profile.parameters.get(full_param_name) or profile.parameters.get(param_name)
+                    profile_param = grouped_params.get(full_param_name) or grouped_params.get(param_name)
                     
                     if profile_param and param_widget:
                         try:
                             # Set value based on widget type
                             if param_widget.widget_type == 'simple':
-                                param_widget.ui_elements['main'].set_value(profile_param.value)
+                                if 'main' in param_widget.ui_elements:
+                                    param_widget.ui_elements['main'].set_value(profile_param.value)
+                                    updated_count += 1
+
                             elif param_widget.widget_type == 'complex' and isinstance(profile_param.value, dict):
                                 # Set values for each field
                                 for field_name, field_value in profile_param.value.items():
                                     if field_name in param_widget.ui_elements:
                                         param_widget.ui_elements[field_name].set_value(field_value)
+                                        updated_count += 1
+
                         except Exception as e:
-                            result.add_error(f"Failed to update {full_param_name}: {str(e)}")
-                            
+                            error_msg = f"Failed to update {full_param_name}: {str(e)}"
+                            result.add_error(error_msg)
+                            print(f"ERROR: {error_msg}")
+        
+        # Log successful update
+        if updated_count > 0:
+            print(f"INFO: Successfully updated {updated_count} UI parameters from profile")
         return result

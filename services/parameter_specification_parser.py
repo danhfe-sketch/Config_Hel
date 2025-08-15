@@ -11,6 +11,7 @@ from pathlib import Path
 
 from models.parameter_spec import ParameterSpec, ParameterField, ParameterCommands, UIElementType
 from models.validation_result import ValidationResult
+from utils.helpers import resource_path
 
 
 class ParameterSpecificationParser:
@@ -28,7 +29,9 @@ class ParameterSpecificationParser:
         Args:
             parameter_ui_list_path: Path to the Parameter UI List markdown file
         """
-        self.parameter_ui_list_path = Path(parameter_ui_list_path)
+        # Use resource_path to handle PyInstaller bundled resources
+        resolved_path = resource_path(parameter_ui_list_path)
+        self.parameter_ui_list_path = Path(resolved_path)
         self._specifications: Optional[Dict[str, ParameterSpec]] = None
         self._sections: Optional[Dict[str, List[str]]] = None
     

@@ -14,6 +14,7 @@ from models.universal_profile import UniversalProfile, ProfileMetadata, Paramete
 from models.validation_result import ValidationResult
 from services.parameter_specification_parser import ParameterSpecificationParser
 from services.profile_ui_populator import ProfileUIPopulator
+from services.parameter_processor import ParameterProcessor
 
 
 class UniversalProfileService:
@@ -33,6 +34,7 @@ class UniversalProfileService:
         """
         self.spec_parser = spec_parser
         self.profile_ui_populator = ProfileUIPopulator(spec_parser)
+        self.parameter_processor = ParameterProcessor()
     
     def create_profile_from_ui(self, ui_values: Dict[str, Any], profile_name: str) -> UniversalProfile:
         """
@@ -143,23 +145,28 @@ class UniversalProfileService:
                 # Parse the device response using the parameter specification
                 parsed_value = self._parse_device_response(param_spec, response)
                 
-                # Create parameter value
+                # Apply parameter processing for clean display (Requirements 3.1, 3.2, 3.3, 3.5)
+                processed_value = self._apply_parameter_processing(param_name, parsed_value, response)
+                
+                # Create parameter value with processed value
                 param_value = ParameterValue(
-                    value=parsed_value,
+                    value=processed_value,
                     source="device",
                     timestamp=now,
                     is_modified=False
                 )
                 
-                # Validate the parsed value
-                validation_result = param_spec.validate_value(parsed_value)
+                # Validate the processed value
+                validation_result = param_spec.validate_value(processed_value)
                 param_value.set_validation_result(validation_result)
                 
                 profile.parameters[param_name] = param_value
             else:
-                # Parameter not found in specifications - store raw response
+                # Parameter not found in specifications - apply processing and store
+                processed_value = self._apply_parameter_processing(param_name, response, response)
+                
                 param_value = ParameterValue(
-                    value=response,
+                    value=processed_value,
                     source="device",
                     timestamp=now,
                     is_modified=False
@@ -248,21 +255,82 @@ class UniversalProfileService:
             
         return self._convert_and_map_value(param_spec, raw_value)
 
+    def _clean_time_parameter_field(self, field, raw_value: str) -> str:
+        """
+        Clean time parameter field values to show only numeric values.
+        
+        Args:
+            field: Parameter field specification
+            raw_value: Raw field value from device (e.g., '60s' or 'ACC OFF:120s')
+            
+        Returns:
+            Cleaned value for time parameters, original value for others
+        """
+        if not isinstance(raw_value, str):
+            return raw_value
+        
+        # Define time parameter field names that need cleaning
+        time_field_names = [
+            'moving_time', 'stopped_time',
+            'moving_heartbeat', 'stopped_heartbeat',
+            'sleep_time',
+            'detection_time', 'speed_detection_time',
+            'power_detection_time',
+            'min_charge_time',
+            'jammer_confirmation_time'
+        ]
+        
+        # Check if this field needs time parameter cleaning
+        if hasattr(field, 'name') and field.name in time_field_names:
+            cleaned_value = self._extract_numeric_value_from_time_string(raw_value)
+            print(f"DEBUG: Time parameter field cleaning - {field.name}: '{raw_value}' -> '{cleaned_value}'")
+            return cleaned_value
+        
+        return raw_value
+    
+    def _extract_numeric_value_from_time_string(self, time_string: str) -> str:
+        """
+        Extract numeric value from time parameter strings.
+        
+        Examples:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "180" -> "180"
+        
+        Args:
+            time_string: Time string that may contain units and prefixes
+            
+        Returns:
+            str: Numeric value only
+        """
+        if not time_string:
+            return ""
+        
+        # Extract all digits from the string
+        import re
+        digits = re.findall(r'\d+', str(time_string))
+        
+        # Return the last number found (handles cases like "ACC OFF:120s")
+        return digits[-1] if digits else ""
+
     def _convert_field_value(self, field, raw_value: str) -> Any:
         """Convert a raw field value to the appropriate type and map to options."""
+        # Apply time parameter cleaning for time-related fields
+        cleaned_value = self._clean_time_parameter_field(field, raw_value)
+        
         # First, convert to a Python type
-        typed_value = raw_value
+        typed_value = cleaned_value
         if field.ui_element.value == "number_input":
             try:
-                typed_value = int(raw_value)
+                typed_value = int(cleaned_value)
             except (ValueError, TypeError):
                 try:
-                    typed_value = float(raw_value)
+                    typed_value = float(cleaned_value)
                 except (ValueError, TypeError):
                     # For validation errors like port:0, we keep the value for now
-                    typed_value = raw_value
+                    typed_value = cleaned_value
         elif field.ui_element.value == "toggle_switch":
-            typed_value = raw_value.lower() in ("true", "1", "on", "yes", "enabled")
+            typed_value = cleaned_value.lower() in ("true", "1", "on", "yes", "enabled")
 
         # Then, map to UI option string if applicable
         if field.options:
@@ -686,3 +754,104 @@ class UniversalProfileService:
             ValidationResult: Result of the population operation
         """
         return self.profile_ui_populator.populate_ui_from_profile(profile, ui_elements)
+    
+    def _apply_parameter_processing(self, param_name: str, parsed_value: Any, raw_response: str) -> Any:
+        """
+        Apply parameter processing for clean display according to requirements.
+        
+        This method processes parameters to ensure clean display in the UI:
+        - Time parameters show only numeric values (Requirements 1.1, 1.2, 1.3)
+        - Odometer values are properly parsed and displayed (Requirements 3.1, 3.2, 3.3, 3.5)
+        - Hourmeter values are properly parsed and displayed (Requirements 4.1, 4.2, 4.3, 4.5)
+        
+        Args:
+            param_name: Name of the parameter being processed
+            parsed_value: Already parsed value from device response
+            raw_response: Raw device response for additional processing
+            
+        Returns:
+            Processed value for UI display
+        """
+        try:
+            param_name_lower = param_name.lower()
+            
+            # Time parameter names that need cleaning (Requirements 1.1, 1.2, 1.3)
+            time_parameter_names = {
+                'heartbeat_interval', 'report_interval', 'upload_interval', 'sleep_time',
+                'moving_time', 'stopped_time', 'moving_heartbeat', 'stopped_heartbeat',
+                'timeout', 'interval', 'delay', 'duration'
+            }
+            
+            # Process time parameters
+            if any(time_param in param_name_lower for time_param in time_parameter_names):
+                if isinstance(parsed_value, str):
+                    clean_value = self.parameter_processor.clean_time_parameter(parsed_value)
+                    return clean_value
+                elif isinstance(parsed_value, dict):
+                    # For complex parameters with time fields
+                    processed_dict = {}
+                    for field_name, field_value in parsed_value.items():
+                        if any(time_param in field_name.lower() for time_param in time_parameter_names):
+                            if isinstance(field_value, str):
+                                processed_dict[field_name] = self.parameter_processor.clean_time_parameter(field_value)
+                            else:
+                                processed_dict[field_name] = field_value
+                        else:
+                            processed_dict[field_name] = field_value
+                    return processed_dict
+            
+            # Process odometer parameters (Requirements 3.1, 3.2, 3.3, 3.5)
+            elif 'odometer' in param_name_lower or 'mileage' in param_name_lower:
+                if isinstance(parsed_value, str):
+                    # Use the raw response for better parsing
+                    clean_value = self.parameter_processor.process_odometer_value(raw_response)
+                    if clean_value:
+                        return clean_value
+                    else:
+                        # Fallback to parsed value if processing fails
+                        return parsed_value
+                elif isinstance(parsed_value, dict):
+                    # For complex parameters with odometer fields
+                    processed_dict = {}
+                    for field_name, field_value in parsed_value.items():
+                        if 'odometer' in field_name.lower() or 'mileage' in field_name.lower():
+                            if isinstance(field_value, str):
+                                clean_value = self.parameter_processor.process_odometer_value(raw_response)
+                                processed_dict[field_name] = clean_value if clean_value else field_value
+                            else:
+                                processed_dict[field_name] = field_value
+                        else:
+                            processed_dict[field_name] = field_value
+                    return processed_dict
+            
+            # Process hourmeter parameters (Requirements 4.1, 4.2, 4.3, 4.5)
+            elif 'hourmeter' in param_name_lower or 'acc_on' in param_name_lower or 'accont' in param_name_lower:
+                if isinstance(parsed_value, str):
+                    # Use the raw response for better parsing
+                    clean_value = self.parameter_processor.process_hourmeter_value(raw_response)
+                    if clean_value:
+                        return clean_value
+                    else:
+                        # Fallback to parsed value if processing fails
+                        return parsed_value
+                elif isinstance(parsed_value, dict):
+                    # For complex parameters with hourmeter fields
+                    processed_dict = {}
+                    for field_name, field_value in parsed_value.items():
+                        if 'hourmeter' in field_name.lower() or 'acc_on' in field_name.lower() or 'accont' in field_name.lower():
+                            if isinstance(field_value, str):
+                                clean_value = self.parameter_processor.process_hourmeter_value(raw_response)
+                                processed_dict[field_name] = clean_value if clean_value else field_value
+                            else:
+                                processed_dict[field_name] = field_value
+                        else:
+                            processed_dict[field_name] = field_value
+                    return processed_dict
+            
+            # For all other parameters, return the parsed value as-is
+            return parsed_value
+            
+        except Exception as e:
+            # Log the error and return the original parsed value
+            print(f"WARNING: Parameter processing failed for {param_name}: {e}")
+            return parsed_value

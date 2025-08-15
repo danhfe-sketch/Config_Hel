@@ -35,55 +35,103 @@ class EnhancedParameterExtractor:
     
     def extract_parameters_from_responses(self, device_responses: Dict[str, str]) -> Dict[str, str]:
         """
-        Convert device responses to individual parameters.
+        Convert device responses to individual parameters with comprehensive error handling.
         
         Args:
             device_responses: Dictionary of command -> response mappings
             
         Returns:
             Dictionary of extracted parameters
+            
+        Requirements: 5.1, 5.2 - Log errors and continue processing other parameters
         """
         parameters = {}
+        extraction_errors = []
+        successful_extractions = 0
         
         try:
-            # Process each response type
+            # Process each response type with individual error handling
             for command, response in device_responses.items():
-                if not response:
-                    continue
+                try:
+                    if not response:
+                        self.logger.debug(f"Skipping empty response for command: {command}")
+                        continue
                     
-                # Parse APN responses
-                if command.upper() in ['APN', 'ATSMS:APN#']:
-                    apn_params = self._parse_apn_response(response)
-                    parameters.update(apn_params)
-                
-                # Parse SERVER responses
-                elif command.upper() in ['SERVER', 'ATSMS:SERVER#']:
-                    server_params = self._parse_server_response(response)
-                    parameters.update(server_params)
-                
-                # Parse READOK responses (IMEI, ICCID, GT06SEL, POSBYACK)
-                elif 'READOK' in response.upper():
-                    readok_params = self._parse_readok_response(response)
-                    parameters.update(readok_params)
-                
-                # Parse STATUS responses
-                elif command.upper() in ['STATUS', 'ATSMS:STATUS#']:
-                    status_params = self._parse_status_response(response)
-                    parameters.update(status_params)
-                
-                # Parse VERSION responses
-                elif command.upper() in ['VERSION', 'ATSMS:VERSION#']:
-                    version_params = self._parse_version_response(response)
-                    parameters.update(version_params)
+                    extracted_params = {}
+                    
+                    # Parse APN responses
+                    if command.upper() in ['APN', 'ATSMS:APN#']:
+                        extracted_params = self._safe_parse_apn_response(response, command)
+                    
+                    # Parse SERVER responses
+                    elif command.upper() in ['SERVER', 'ATSMS:SERVER#']:
+                        extracted_params = self._safe_parse_server_response(response, command)
+                    
+                    # Parse READOK responses (IMEI, ICCID, GT06SEL, POSBYACK)
+                    elif 'READOK' in response.upper():
+                        extracted_params = self._safe_parse_readok_response(response, command)
+                    
+                    # Parse STATUS responses
+                    elif command.upper() in ['STATUS', 'ATSMS:STATUS#']:
+                        extracted_params = self._safe_parse_status_response(response, command)
+                    
+                    # Parse VERSION responses
+                    elif command.upper() in ['VERSION', 'ATSMS:VERSION#']:
+                        extracted_params = self._safe_parse_version_response(response, command)
+                    
+                    # Parse HOURMETER/ACCONT responses
+                    elif command.upper() in ['HOURMETER', 'ACCONT', 'ATSMS:ACCONT#']:
+                        extracted_params = self._safe_parse_hourmeter_response(response, command)
+                    
+                    # Parse ODOMETER/MILEAGE responses
+                    elif command.upper() in ['ODOMETER', 'MILEAGE', 'ATSMS:MILEAGE#']:
+                        extracted_params = self._safe_parse_odometer_response(response, command)
+                    
+                    else:
+                        self.logger.debug(f"No parser available for command: {command}")
+                        continue
+                    
+                    # Update parameters with extracted values
+                    if extracted_params:
+                        parameters.update(extracted_params)
+                        successful_extractions += 1
+                        self.logger.debug(f"Successfully extracted {len(extracted_params)} parameters from {command}")
+                    else:
+                        self.logger.warning(f"No parameters extracted from {command} response")
+                        
+                except Exception as e:
+                    error_msg = f"Failed to process {command} response: {str(e)}"
+                    extraction_errors.append(error_msg)
+                    self.logger.error(error_msg)
+                    # Continue processing other responses (Requirement 5.2)
+                    continue
             
-            # Add default parameters
-            parameters = self.add_default_parameters(parameters)
+            # Add default parameters with error handling
+            try:
+                parameters = self.add_default_parameters(parameters)
+            except Exception as e:
+                error_msg = f"Failed to add default parameters: {str(e)}"
+                extraction_errors.append(error_msg)
+                self.logger.error(error_msg)
             
-            self.logger.info(f"Extracted {len(parameters)} parameters from device responses")
+            # Log extraction summary
+            total_responses = len(device_responses)
+            if extraction_errors:
+                self.logger.warning(f"Parameter extraction completed with {len(extraction_errors)} errors. "
+                                  f"Successfully processed {successful_extractions}/{total_responses} responses. "
+                                  f"Extracted {len(parameters)} total parameters.")
+            else:
+                self.logger.info(f"Successfully extracted {len(parameters)} parameters from {total_responses} device responses")
+            
             return parameters
             
         except Exception as e:
-            self.logger.error(f"Error extracting parameters: {e}")
+            # Handle catastrophic failure
+            error_msg = f"Critical error during parameter extraction: {str(e)}"
+            self.logger.error(error_msg)
+            extraction_errors.append(error_msg)
+            
+            # Return whatever parameters we managed to extract
             return parameters
     
     def _parse_apn_response(self, response: str) -> Dict[str, str]:
@@ -241,6 +289,18 @@ class EnhancedParameterExtractor:
             gps_match = re.search(r'GPS:([^;]+)', response, re.IGNORECASE)
             if gps_match:
                 parameters['gps_status'] = gps_match.group(1).strip()
+            
+            # Parse hourmeter from "Get ACC ON Time:value Minute" format in status
+            acc_on_time_match = re.search(r'Get\s+ACC\s+ON\s+Time[=:](\d+)', response, re.IGNORECASE)
+            if acc_on_time_match:
+                parameters['acc_on_time'] = acc_on_time_match.group(1)
+                self.logger.debug(f"Extracted acc_on_time from status: {acc_on_time_match.group(1)}")
+            
+            # Parse odometer from "Cur Mileage Value:valueKM" format in status
+            cur_mileage_match = re.search(r'Cur\s+Mileage\s+Value[=:](\d+)', response, re.IGNORECASE)
+            if cur_mileage_match:
+                parameters['current_mileage'] = cur_mileage_match.group(1)
+                self.logger.debug(f"Extracted current_mileage from status: {cur_mileage_match.group(1)}")
                 
             self.logger.debug(f"Parsed STATUS response with {len(parameters)} status parameters")
             
@@ -352,3 +412,172 @@ class EnhancedParameterExtractor:
                 self.logger.warning(f"Skipping empty parameter: {key}")
         
         return validated
+    
+    def _safe_parse_apn_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse APN response with error handling."""
+        try:
+            return self._parse_apn_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing APN response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_server_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse SERVER response with error handling."""
+        try:
+            return self._parse_server_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing SERVER response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_readok_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse READOK response with error handling."""
+        try:
+            return self._parse_readok_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing READOK response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_status_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse STATUS response with error handling."""
+        try:
+            return self._parse_status_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing STATUS response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_version_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse VERSION response with error handling."""
+        try:
+            return self._parse_version_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing VERSION response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_hourmeter_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse HOURMETER response with error handling."""
+        try:
+            return self._parse_hourmeter_response(response, command)
+        except Exception as e:
+            self.logger.error(f"Error parsing HOURMETER response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_odometer_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse ODOMETER response with error handling."""
+        try:
+            return self._parse_odometer_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing ODOMETER response for {command}: {e}")
+            return {}
+    
+    def _parse_hourmeter_response(self, response: str, command: str = '') -> Dict[str, str]:
+        """
+        Parse HOURMETER/ACCONT response formats.
+        
+        Handles various formats:
+        - "ACCONT=5678"
+        - "Get ACC ON Time:5678 Minute"
+        - "Engine Hours: 1234 hours"
+        
+        Args:
+            response: Hourmeter response string
+            command: Command that generated this response
+            
+        Returns:
+            Dictionary with hourmeter parameters
+        """
+        parameters = {}
+        
+        try:
+            # Pattern to match ACCONT=value format
+            accont_match = re.search(r'ACCONT[=:](\d+)', response, re.IGNORECASE)
+            if accont_match:
+                # Use different parameter names based on the command to avoid conflicts
+                if command.upper() == 'ACCONT':
+                    param_name = 'accont'
+                else:
+                    param_name = 'hourmeter'
+                
+                parameters[param_name] = accont_match.group(1)
+                self.logger.debug(f"Extracted {param_name} from ACCONT format: {accont_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Get ACC ON Time:value Minute" format
+            acc_on_time_match = re.search(r'Get\s+ACC\s+ON\s+Time[=:](\d+)', response, re.IGNORECASE)
+            if acc_on_time_match:
+                parameters['acc_on_time'] = acc_on_time_match.group(1)
+                self.logger.debug(f"Extracted acc_on_time: {acc_on_time_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Engine Hours: value hours" format
+            engine_hours_match = re.search(r'Engine\s+Hours[=:]?\s*(\d+)', response, re.IGNORECASE)
+            if engine_hours_match:
+                parameters['engine_hours'] = engine_hours_match.group(1)
+                self.logger.debug(f"Extracted engine_hours: {engine_hours_match.group(1)}")
+                return parameters
+            
+            # Fallback: try to extract any numeric value
+            numeric_match = re.search(r'(\d+)', response)
+            if numeric_match:
+                parameters['hourmeter'] = numeric_match.group(1)
+                self.logger.debug(f"Extracted hourmeter (fallback): {numeric_match.group(1)}")
+                return parameters
+            
+            self.logger.warning(f"Could not parse hourmeter response: {response}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing hourmeter response '{response}': {e}")
+        
+        return parameters
+    
+    def _parse_odometer_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse ODOMETER/MILEAGE response formats.
+        
+        Handles various formats:
+        - "MILEAGE=12345"
+        - "Cur Mileage Value:12345KM"
+        - "Odometer: 98765 km"
+        
+        Args:
+            response: Odometer response string
+            
+        Returns:
+            Dictionary with odometer parameters
+        """
+        parameters = {}
+        
+        try:
+            # Pattern to match MILEAGE=value format
+            mileage_match = re.search(r'MILEAGE[=:](\d+)', response, re.IGNORECASE)
+            if mileage_match:
+                parameters['odometer'] = mileage_match.group(1)
+                self.logger.debug(f"Extracted odometer from MILEAGE format: {mileage_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Cur Mileage Value:valueKM" format
+            cur_mileage_match = re.search(r'Cur\s+Mileage\s+Value[=:](\d+)', response, re.IGNORECASE)
+            if cur_mileage_match:
+                parameters['current_mileage'] = cur_mileage_match.group(1)
+                self.logger.debug(f"Extracted current_mileage: {cur_mileage_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Odometer: value km" format
+            odometer_match = re.search(r'Odometer[=:]?\s*(\d+)', response, re.IGNORECASE)
+            if odometer_match:
+                parameters['odometer'] = odometer_match.group(1)
+                self.logger.debug(f"Extracted odometer: {odometer_match.group(1)}")
+                return parameters
+            
+            # Fallback: try to extract any numeric value
+            numeric_match = re.search(r'(\d+)', response)
+            if numeric_match:
+                parameters['odometer'] = numeric_match.group(1)
+                self.logger.debug(f"Extracted odometer (fallback): {numeric_match.group(1)}")
+                return parameters
+            
+            self.logger.warning(f"Could not parse odometer response: {response}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing odometer response '{response}': {e}")
+        
+        return parameters

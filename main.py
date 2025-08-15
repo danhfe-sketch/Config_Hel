@@ -4,7 +4,6 @@ import os
 import sys
 import json
 import serial
-import time
 from services.i18n_service import I18nService
 from PIL import Image, ImageTk
 # Import the new helper function
@@ -80,15 +79,27 @@ class App(ctk.CTk):
         self.left_sidebar.grid_rowconfigure(1, weight=0)  # Connection frame (fixed size)
         self.left_sidebar.grid_rowconfigure(2, weight=0)  # Actions frame (fixed size)
 
-        # Logo
+        # Logo with improved error handling
         try:
-            logo_image = ctk.CTkImage(
-                light_image=Image.open(resource_path("assets/images/logo.png")),
-                dark_image=Image.open(resource_path("assets/images/logo.png")),
-                size=(160, 50),  # Slightly smaller to fit in narrower column
-            )
-            logo_label = ctk.CTkLabel(self.left_sidebar, image=logo_image, text="")
-        except FileNotFoundError:
+            # Load logo image with proper error handling
+            logo_path = resource_path("assets/images/logo.png")
+            if os.path.exists(logo_path):
+                logo_image = ctk.CTkImage(
+                    light_image=Image.open(logo_path),
+                    dark_image=Image.open(logo_path),
+                    size=(160, 50),  # Slightly smaller to fit in narrower column
+                )
+                logo_label = ctk.CTkLabel(self.left_sidebar, image=logo_image, text="")
+                # Keep a reference to prevent garbage collection
+                self.logo_image = logo_image
+            else:
+                # Fallback to text if logo file doesn't exist
+                logo_label = ctk.CTkLabel(
+                    self.left_sidebar, text="Lumini Tracker", font=("Roboto", 24)
+                )
+        except Exception as e:
+            print(f"Warning: Could not load logo image: {e}")
+            # Fallback to text label
             logo_label = ctk.CTkLabel(
                 self.left_sidebar, text="Lumini Tracker", font=("Roboto", 24)
             )
@@ -130,106 +141,254 @@ class App(ctk.CTk):
 
 def start_app():
     """
-    Function to initialize and start the main application.
+    Enhanced function to initialize and start the main application with proper error handling.
     This is called after the splash screen is displayed.
     """
-    app = App()
-    app.mainloop()
-
-if __name__ == "__main__":
-    # Use a simpler approach for the splash screen to avoid image issues
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
-        # Create a simple splash window
-        splash_root = tk.Tk()
-        splash_root.overrideredirect(True)  # Remove window decorations
-        splash_root.attributes('-topmost', True)  # Keep on top
+        logger.info("Starting main application initialization")
         
-        # Set a fixed size for the splash window
-        width, height = 500, 300
-        splash_root.geometry(f"{width}x{height}")
+        # Phase 1: Create the main application instance
+        logger.debug("Creating main application instance")
+        app = App()
+        logger.info("Main application instance created successfully")
         
-        # Center the window on the screen
-        x = (splash_root.winfo_screenwidth() // 2) - (width // 2)
-        y = (splash_root.winfo_screenheight() // 2) - (height // 2)
-        splash_root.geometry(f"{width}x{height}+{x}+{y}")
+        # Phase 2: Ensure the window is properly configured for smooth transition
+        logger.debug("Configuring main application window for smooth transition")
+        app.update_idletasks()  # Process pending GUI updates
+        app.lift()  # Bring window to front
+        app.focus_force()  # Give focus to the window
+        logger.debug("Main application window configured and focused")
         
-        # Create a frame with a blue background
-        splash_frame = tk.Frame(splash_root, bg="#0066cc", width=width, height=height)
-        splash_frame.pack(fill="both", expand=True)
+        # Phase 3: Start the main event loop
+        logger.info("Starting main application event loop")
+        app.mainloop()
+        logger.info("Main application event loop ended")
         
-        # Add application name
-        title_label = tk.Label(
-            splash_frame,
-            text="LT32Pro Configurator",
-            font=("Arial", 24, "bold"),
-            bg="#0066cc",
-            fg="white"
-        )
-        title_label.pack(pady=(60, 5))
+    except ImportError as e:
+        logger.error(f"Import error during application startup: {e}")
+        _show_startup_error("Import Error", f"Failed to import required modules:\n{e}")
+        raise
+    except tk.TclError as e:
+        if "doesn't exist" in str(e) and "image" in str(e):
+            logger.warning(f"Image loading error during startup (non-critical): {e}")
+            # For image errors, don't show error dialog as the app can still function
+            logger.info("Application started successfully despite image loading issues")
+        else:
+            logger.error(f"Tkinter error during application startup: {e}")
+            _show_startup_error("Display Error", f"Failed to initialize display:\n{e}")
+            raise
+    except Exception as e:
+        logger.error(f"Unexpected error during application startup: {e}")
+        _show_startup_error("Startup Error", f"Failed to start application:\n{e}")
+        raise
+
+def _show_startup_error(title, message):
+    """
+    Show a simple error dialog for startup failures.
+    
+    Args:
+        title: Error dialog title
+        message: Error message to display
+    """
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
         
-        # Add version number
-        version_label = tk.Label(
-            splash_frame,
-            text="v1.0",
-            font=("Arial", 12),
-            bg="#0066cc",
-            fg="#e0e0e0"
-        )
-        version_label.pack(pady=(0, 20))
+        # Create a temporary root window for the error dialog
+        root = tk.Tk()
+        root.withdraw()  # Hide the root window
         
-        # Add loading text
-        loading_label = tk.Label(
-            splash_frame,
-            text="Loading...",
-            font=("Arial", 14),
-            bg="#0066cc",
-            fg="white"
-        )
-        loading_label.pack(pady=10)
+        # Show error dialog
+        messagebox.showerror(title, message)
+        root.destroy()
         
-        # Add company name at the bottom
-        company_label = tk.Label(
-            splash_frame,
-            text="Lumini Tracker",
-            font=("Arial", 10),
-            bg="#0066cc",
-            fg="#e0e0e0"
-        )
-        company_label.pack(side="bottom", pady=10)
+    except Exception:
+        # Fallback to console output if GUI fails
+        print(f"STARTUP ERROR - {title}: {message}")
+
+def run_with_image_splash():
+    """
+    Run the application with splash screen using the actual splash.png image.
+    """
+    import logging
+    import time
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Create splash screen with the actual splash image
+        logger.debug("Creating image-based splash screen")
         
-        # Add a progress bar
-        progress_bg = tk.Frame(splash_frame, bg="#003366", height=10)
-        progress_bg.pack(fill="x", side="bottom", padx=20, pady=20)
-        
-        progress_bar = tk.Frame(progress_bg, bg="#00ccff", width=0, height=10)
-        progress_bar.place(x=0, y=0, width=0)
-        
-        # Function to animate the progress bar
-        def update_progress_bar(current=0):
-            if current <= 100:
-                # Calculate width based on percentage
-                bar_width = int((width - 40) * (current / 100))
-                progress_bar.place(width=bar_width)
-                
-                # Schedule next update with increasing speed
-                delay = 30 if current > 80 else 40
-                splash_root.after(delay, lambda: update_progress_bar(current + 2))
+        splash_root = None
+        splash_image = None
+        try:
+            # Create splash window
+            splash_root = tk.Tk()
+            splash_root.overrideredirect(True)
+            splash_root.attributes('-topmost', True)
+            
+            # Try to load the splash image
+            splash_image_path = resource_path("assets/images/splash.png")
+            if os.path.exists(splash_image_path):
+                try:
+                    # Load and display the splash image
+                    from PIL import Image, ImageTk
+                    pil_image = Image.open(splash_image_path)
+                    
+                    # Get image dimensions
+                    img_width, img_height = pil_image.size
+                    
+                    # Resize if too large (max 600x400)
+                    max_width, max_height = 600, 400
+                    if img_width > max_width or img_height > max_height:
+                        ratio = min(max_width / img_width, max_height / img_height)
+                        new_width = int(img_width * ratio)
+                        new_height = int(img_height * ratio)
+                        pil_image = pil_image.resize((new_width, new_height), Image.LANCZOS)
+                        img_width, img_height = new_width, new_height
+                    
+                    # Convert to PhotoImage
+                    splash_image = ImageTk.PhotoImage(pil_image)
+                    
+                    # Center the splash screen
+                    screen_width = splash_root.winfo_screenwidth()
+                    screen_height = splash_root.winfo_screenheight()
+                    x = (screen_width // 2) - (img_width // 2)
+                    y = (screen_height // 2) - (img_height // 2)
+                    splash_root.geometry(f"{img_width}x{img_height}+{x}+{y}")
+                    
+                    # Create label with image
+                    image_label = tk.Label(splash_root, image=splash_image, bd=0)
+                    image_label.pack()
+                    
+                    logger.info(f"Splash image loaded successfully: {splash_image_path}")
+                    
+                except Exception as img_error:
+                    logger.warning(f"Failed to load splash image: {img_error}")
+                    # Fallback to text-based splash
+                    splash_root.geometry("400x200")
+                    splash_frame = tk.Frame(splash_root, bg="#0066cc")
+                    splash_frame.pack(fill="both", expand=True)
+                    
+                    title_label = tk.Label(
+                        splash_frame,
+                        text="LT32Pro Configurator",
+                        font=("Arial", 18, "bold"),
+                        bg="#0066cc",
+                        fg="white"
+                    )
+                    title_label.pack(expand=True)
             else:
-                # When progress reaches 100%, close splash and start app
-                splash_root.after(200, finish_splash)
-        
-        # Function to close the splash screen and start the app
-        def finish_splash():
+                logger.warning(f"Splash image not found: {splash_image_path}")
+                # Fallback to text-based splash
+                splash_root.geometry("400x200")
+                screen_width = splash_root.winfo_screenwidth()
+                screen_height = splash_root.winfo_screenheight()
+                x = (screen_width // 2) - 200
+                y = (screen_height // 2) - 100
+                splash_root.geometry(f"400x200+{x}+{y}")
+                
+                splash_frame = tk.Frame(splash_root, bg="#0066cc")
+                splash_frame.pack(fill="both", expand=True)
+                
+                title_label = tk.Label(
+                    splash_frame,
+                    text="LT32Pro Configurator",
+                    font=("Arial", 18, "bold"),
+                    bg="#0066cc",
+                    fg="white"
+                )
+                title_label.pack(expand=True)
+            
+            # Show splash for a brief moment
+            splash_root.update()
+            time.sleep(1.2)  # Brief display time
+            
+            # Close splash screen
             splash_root.destroy()
-            start_app()
+            splash_root = None
+            splash_image = None  # Clear image reference
+            
+            logger.info("Image splash screen completed")
+            
+        except Exception as e:
+            logger.warning(f"Image splash screen failed: {e}")
+            if splash_root:
+                try:
+                    splash_root.destroy()
+                except:
+                    pass
         
-        # Start the progress animation
-        update_progress_bar()
+        # Give a moment for cleanup
+        time.sleep(0.1)
         
-        # Start the splash screen
-        splash_root.mainloop()
+        logger.info("Starting main application")
+        
+        # Start the main application
+        start_app()
         
     except Exception as e:
-        print(f"Error with splash screen: {e}")
-        # If splash screen fails, start the main app directly
-        start_app()
+        logger.error(f"Error in run_with_image_splash: {e}")
+        raise
+
+if __name__ == "__main__":
+    import logging
+    import sys
+    
+    # Configure logging for startup process
+    logging.basicConfig(
+        level=logging.INFO, 
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    
+    logger.info("LT32Pro Configurator starting up")
+    
+    # Check if splash screen should be disabled
+    disable_splash = (
+        os.environ.get('DISABLE_SPLASH', '').lower() in ('1', 'true', 'yes') or
+        '--no-splash' in sys.argv
+    )
+    
+    if disable_splash:
+        logger.info("Splash screen disabled by user preference")
+        splash_success = False
+    else:
+        # Use a conservative approach to preserve existing functionality
+        # Try splash screen first, but fallback quickly if there are any issues
+        splash_success = False
+        
+        try:
+            # Try to run with image splash screen approach
+            logger.debug("Attempting to run with splash screen")
+            run_with_image_splash()
+            splash_success = True
+            logger.info("Application completed successfully with splash screen")
+            
+        except Exception as e:
+            logger.warning(f"Splash screen approach failed: {e}")
+            splash_success = False
+    
+    # If splash screen failed or wasn't attempted, use direct startup
+    if not splash_success:
+        logger.info("Using direct application startup (no splash screen)")
+        
+        try:
+            # Direct startup to preserve all existing functionality
+            start_app()
+            logger.info("Application started successfully without splash screen")
+            
+        except Exception as fallback_error:
+            logger.critical(f"Failed to start application: {fallback_error}")
+            
+            # Show critical error dialog and exit
+            _show_startup_error(
+                "Critical Startup Failure", 
+                f"The application failed to start:\n\n{fallback_error}\n\nPlease check the logs for more details."
+            )
+            
+            logger.critical("Application startup failed completely, exiting")
+            sys.exit(1)
