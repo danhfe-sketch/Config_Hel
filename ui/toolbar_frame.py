@@ -482,28 +482,139 @@ For technical support, contact Lumini Tracker support team.
     def _load_from_device_to_profile_worker(self, profile_path):
         """Worker method to load from device and save to profile file."""
         try:
-            import asyncio
+            # Use the ConfigurationReaderService directly (same approach as check configuration)
+            # This is much faster and more reliable than using the profile manager
             
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Load configuration from device
-            load_result = loop.run_until_complete(self.app.profile_manager.load_from_device())
-            
-            if not load_result.success:
-                # Handle load failure
-                self.app.after(0, self._handle_load_from_device_completion, load_result)
+            # Check if serial service and configuration reader are available
+            if not hasattr(self.app, 'serial_service') or not self.app.serial_service.is_connected:
+                error_result = ProfileOperationResult(
+                    operation_type=OperationType.LOAD_FROM_DEVICE,
+                    success=False
+                )
+                error_result.add_error("Device is not connected")
+                self.app.after(0, self._handle_load_from_device_completion, error_result)
+                return
+                
+            serial_service = self.app.serial_service
+            if serial_service.configuration_reader is None:
+                serial_service.initialize_configuration_reader()
+                
+            if serial_service.configuration_reader is None:
+                error_result = ProfileOperationResult(
+                    operation_type=OperationType.LOAD_FROM_DEVICE,
+                    success=False
+                )
+                error_result.add_error("Configuration reader service not available")
+                self.app.after(0, self._handle_load_from_device_completion, error_result)
                 return
             
-            # Save the loaded profile to file
-            save_result = loop.run_until_complete(self.app.profile_manager.save_to_file(profile_path))
+            # Define completion callback to handle the results
+            def on_completion(result, error_message):
+                try:
+                    if result.success:
+                        # Create a profile from the read parameters
+                        from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+                        from datetime import datetime
+                        
+                        # Create metadata
+                        metadata = ProfileMetadata(
+                            parameter_spec_version="1.0",
+                            created_by="LT32 PRO Configurator - Load from Device",
+                            device_model="LT32 PRO"
+                        )
+                        
+                        # Convert read parameters to ParameterValue objects
+                        parameter_values = {}
+                        successful_reads = 0
+                        
+                        for param_result in result.parameters_read:
+                            if param_result.success and param_result.value is not None:
+                                # Get the section mapping for this parameter
+                                parameter_mapping = serial_service.configuration_reader._get_parameter_section_mapping()
+                                section_info = parameter_mapping.get(param_result.parameter_name)
+                                
+                                if section_info:
+                                    section_name = section_info['section']
+                                    param_name = section_info['parameter']
+                                    full_param_name = f"{section_name}.{param_name}"
+                                else:
+                                    # Fallback to original parameter name
+                                    full_param_name = param_result.parameter_name
+                                
+                                parameter_values[full_param_name] = ParameterValue(
+                                    value=param_result.value,
+                                    source="device"
+                                )
+                                successful_reads += 1
+                        
+                        if successful_reads > 0:
+                            # Create the profile
+                            now = datetime.now()
+                            profile = UniversalProfile(
+                                name=f"Device Configuration {now.strftime('%Y-%m-%d %H:%M:%S')}",
+                                version="1.0",
+                                created_at=now,
+                                modified_at=now,
+                                metadata=metadata,
+                                parameters=parameter_values
+                            )
+                            
+                            # Save the profile to file
+                            try:
+                                import json
+                                profile_data = profile.to_dict()
+                                
+                                with open(profile_path, 'w', encoding='utf-8') as f:
+                                    json.dump(profile_data, f, indent=2, ensure_ascii=False)
+                                
+                                # Create a success result
+                                save_result = ProfileOperationResult(
+                                    operation_type=OperationType.LOAD_FROM_DEVICE,
+                                    success=True
+                                )
+                                save_result.profile = profile
+                                save_result.add_detail("parameters_read", successful_reads)
+                                save_result.add_detail("file_path", profile_path)
+                                
+                                # Handle completion on the main thread
+                                self.app.after(0, self._handle_load_from_device_completion, save_result)
+                                
+                            except Exception as save_error:
+                                error_result = ProfileOperationResult(
+                                    operation_type=OperationType.LOAD_FROM_DEVICE,
+                                    success=False
+                                )
+                                error_result.add_error(f"Failed to save profile to file: {str(save_error)}")
+                                self.app.after(0, self._handle_load_from_device_completion, error_result)
+                        else:
+                            error_result = ProfileOperationResult(
+                                operation_type=OperationType.LOAD_FROM_DEVICE,
+                                success=False
+                            )
+                            error_result.add_error("No parameters could be read from device")
+                            self.app.after(0, self._handle_load_from_device_completion, error_result)
+                    else:
+                        error_result = ProfileOperationResult(
+                            operation_type=OperationType.LOAD_FROM_DEVICE,
+                            success=False
+                        )
+                        error_msg = error_message or "Configuration reading failed"
+                        error_result.add_error(error_msg)
+                        self.app.after(0, self._handle_load_from_device_completion, error_result)
+                        
+                except Exception as e:
+                    error_result = ProfileOperationResult(
+                        operation_type=OperationType.LOAD_FROM_DEVICE,
+                        success=False
+                    )
+                    error_result.add_error(f"Error processing configuration reading results: {str(e)}")
+                    self.app.after(0, self._handle_load_from_device_completion, error_result)
             
-            # Add the loaded profile to the save result so UI can be updated
-            save_result.profile = load_result.profile
-            
-            # Handle completion on the main thread
-            self.app.after(0, self._handle_load_from_device_completion, save_result)
+            # Start configuration reading with progress indication (same as check_device_configuration)
+            serial_service.configuration_reader.read_all_configurations(
+                completion_callback=on_completion,
+                show_progress_dialog=True
+            )
             
         except Exception as e:
             # Handle unexpected errors
@@ -514,9 +625,6 @@ For technical support, contact Lumini Tracker support team.
             )
             error_result.add_error(str(e))
             self.app.after(0, self._handle_load_from_device_completion, error_result)
-        finally:
-            if 'loop' in locals():
-                loop.close()
 
     def _handle_load_from_device_completion(self, result):
         """Handle the completion of loading from device, ensuring UI updates are on the main thread."""
@@ -529,14 +637,18 @@ For technical support, contact Lumini Tracker support team.
                 title = self.i18n.get("load_from_device", "Load from Device")
                 show_info(self.app, title, success_msg)
 
-                # Update UI with the loaded profile using the same approach as check configuration
+                # Update UI with the loaded parameters using the same approach as check configuration
                 try:
                     # Use the serial service method that properly updates the UI
                     if hasattr(self.app, 'serial_service') and hasattr(self.app.serial_service, '_update_ui_from_device_configuration'):
                         self.app.serial_service._update_ui_from_device_configuration()
                     else:
-                        # Fallback to direct UI update
-                        self.app.after(0, self._update_ui_with_loaded_profile, result.profile)
+                        # Log that we're falling back to direct UI update
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message("DEBUG: Using direct UI update for load from device\n")
+                        # Fallback to direct UI update using the profile if available
+                        if hasattr(result, 'profile') and result.profile:
+                            self.app.after(0, self._update_ui_with_loaded_profile, result.profile)
                 except Exception as populate_err:
                     # Log but do not break user flow
                     if hasattr(self.app, 'log_frame') and self.app.log_frame:

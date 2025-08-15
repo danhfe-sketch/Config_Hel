@@ -38,7 +38,7 @@ class SerialService:
         self.last_activity_time = None
         self.connection_monitor_thread = None
         self.stop_monitor = False
-        self.connection_timeout = 30  # seconds without activity before checking connection
+        self.connection_timeout = 3600  # seconds without activity before checking connection (1 hour)
         
         # Configuration reader service
         self.configuration_reader = None
@@ -79,9 +79,9 @@ class SerialService:
             self.read_thread = threading.Thread(target=self.read_from_port, daemon=True)
             self.read_thread.start()
             
-            # Start connection monitoring thread
-            self.connection_monitor_thread = threading.Thread(target=self.monitor_connection, daemon=True)
-            self.connection_monitor_thread.start()
+            # Connection monitoring disabled to prevent timeout issues
+            # self.connection_monitor_thread = threading.Thread(target=self.monitor_connection, daemon=True)
+            # self.connection_monitor_thread.start()
             
             # Log successful connection with detailed message
             self.app.log_frame.log_message(f"INFO: Successfully connected to {port} at {baudrate} baud\n")
@@ -134,8 +134,9 @@ class SerialService:
             # Wait for threads to terminate
             if self.read_thread and self.read_thread.is_alive():
                 self.read_thread.join(timeout=1)
-            if self.connection_monitor_thread and self.connection_monitor_thread.is_alive():
-                self.connection_monitor_thread.join(timeout=1)
+            # Connection monitoring disabled
+            # if self.connection_monitor_thread and self.connection_monitor_thread.is_alive():
+            #     self.connection_monitor_thread.join(timeout=1)
                 
             # Close the port
             self.serial_port.close()
@@ -260,6 +261,9 @@ class SerialService:
         Args:
             response: The response string from the device
         """
+        # Add response to buffer for LT32ProDeviceReader and other components that need direct access
+        self.response_buffer.append(response)
+        
         # Always forward response to configuration_reader if set
         if self.configuration_reader and hasattr(self.configuration_reader, 'capture_device_response'):
             try:
@@ -274,6 +278,7 @@ class SerialService:
                 self.app.log_frame.log_message(f"WARNING: Failed to forward response to app.configuration_reader_service: {str(e)}\n")
         else:
             self.app.log_frame.log_message("WARNING: No configuration reader available to capture device response\n")
+            
         # Store the current command type for processing
         command_type = self.current_command_type
         
@@ -301,13 +306,6 @@ class SerialService:
 
             except Exception as e:
                 self.app.log_frame.log_message(f"ERROR: Failed to parse response: {str(e)}\n")
-        
-        # Forward response to configuration reader if it's waiting for responses
-        if self.configuration_reader and hasattr(self.configuration_reader, 'capture_device_response'):
-            try:
-                self.configuration_reader.capture_device_response(response)
-            except Exception as e:
-                self.app.log_frame.log_message(f"WARNING: Failed to forward response to configuration reader: {str(e)}\n")
         
         # Reset command type after processing
         self.current_command_type = None
@@ -592,6 +590,9 @@ class SerialService:
             if result.success:
                 success_msg = f"Configuration reading completed successfully."
                 self.app.log_frame.log_message(f"INFO: {success_msg}\n")
+                
+                # Load profile from device with parameter processing and update UI
+                self.app.after(0, self._update_ui_from_device_configuration)
                 
                 if hasattr(self.app, 'operation_confirmation_service'):
                     self.app.operation_confirmation_service.show_success_notification(success_msg)
@@ -882,3 +883,103 @@ class SerialService:
         if hasattr(self.app, 'error_handler'):
             # Small improvement for regular activity
             self.app.after(0, self.app.error_handler._update_connection_quality, 1)
+    
+    def _update_ui_from_device_configuration(self) -> None:
+        """
+        Update UI with processed parameters from device configuration.
+        
+        This method uses the ConfigurationReaderService directly (same approach as 
+        check_device_configuration) to read all parameters from the device and 
+        update the UI with the correct values.
+        
+        Requirements: 3.1, 3.2, 3.3, 3.5 (Odometer parameter updates)
+        """
+        try:
+            # Check if configuration reader is available
+            if self.configuration_reader is None:
+                self.initialize_configuration_reader()
+            
+            if self.configuration_reader is None:
+                self.app.log_frame.log_message("ERROR: Configuration reader service not available\n")
+                return
+            
+            # Define completion callback to update UI with the read parameters
+            def on_completion(result, error_message):
+                if result.success:
+                    success_msg = f"Configuration reading completed successfully."
+                    self.app.log_frame.log_message(f"INFO: {success_msg}\n")
+                    
+                    # Update UI with the read parameters
+                    self._update_ui_with_parameters(result.parameters_read)
+                    
+                    if hasattr(self.app, 'operation_confirmation_service'):
+                        self.app.operation_confirmation_service.show_success_notification(success_msg)
+                else:
+                    error_msg = error_message or "Configuration reading failed"
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            
+            # Start configuration reading with progress indication (same as check_device_configuration)
+            try:
+                self.configuration_reader.read_all_configurations(
+                    completion_callback=on_completion,
+                    show_progress_dialog=True
+                )
+                
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Failed to start configuration reading: {str(e)}\n")
+                
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to start UI update from device configuration: {str(e)}\n")
+    
+    def _apply_ui_values_to_parameters_frame(self, ui_values: Dict[str, Any]) -> None:
+        """
+        Apply processed parameter values to the parameters frame UI.
+        
+        Args:
+            ui_values: Dictionary of parameter names to processed values
+        """
+        try:
+            # Update UI using the parameters frame update method
+            if hasattr(self.app, 'params_frame') and hasattr(self.app.params_frame, 'update_fields_from_dict'):
+                self.app.params_frame.update_fields_from_dict(ui_values)
+                self.app.log_frame.log_message("INFO: Parameters frame updated with processed device values\n")
+            elif hasattr(self.app, 'parameters_frame') and hasattr(self.app.parameters_frame, 'update_fields_from_dict'):
+                self.app.parameters_frame.update_fields_from_dict(ui_values)
+                self.app.log_frame.log_message("INFO: Parameters frame updated with processed device values\n")
+            else:
+                self.app.log_frame.log_message("WARNING: Parameters frame update method not available\n")
+                
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to apply UI values to parameters frame: {str(e)}\n")
+            
+    def _update_ui_with_parameters(self, parameters_read):
+        """
+        Update UI with parameters read from the device based on specification.
+        
+        Args:
+            parameters_read: List of parameter read results from ConfigurationReaderService
+        """
+        try:
+            self.app.log_frame.log_message("DEBUG: Updating UI with parameters read from device\n")
+            self.app.log_frame.log_message(f"DEBUG: Number of parameters to process: {len(parameters_read)}\n")
+            
+            # Debug: List all parameters
+            for result in parameters_read:
+                self.app.log_frame.log_message(f"DEBUG: Parameter {result.parameter_name}: success={result.success}, value={result.value}\n")
+            
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or self.app.parameters_frame is None:
+                self.app.log_frame.log_message("DEBUG: Parameters frame not available yet, cannot update UI\n")
+                return
+            else:
+                self.app.log_frame.log_message("DEBUG: Parameters frame found, proceeding with UI updates\n")
+            
+            # Use the configuration reader's UI update method directly
+            self.configuration_reader._update_ui_with_parameters(parameters_read)
+            
+            # Log successful UI updates
+            updated_count = len([r for r in parameters_read if r.success])
+            self.app.log_frame.log_message(f"INFO: Successfully updated UI with {updated_count} parameters\n")
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to update UI with parameters: {str(e)}\n")
