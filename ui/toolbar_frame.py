@@ -567,6 +567,9 @@ For technical support, contact Lumini Tracker support team.
                                 with open(profile_path, 'w', encoding='utf-8') as f:
                                     json.dump(profile_data, f, indent=2, ensure_ascii=False)
                                 
+                                # Import required classes
+                                from models.operation_result import ProfileOperationResult, OperationType
+                                
                                 # Create a success result
                                 save_result = ProfileOperationResult(
                                     operation_type=OperationType.LOAD_FROM_DEVICE,
@@ -580,6 +583,9 @@ For technical support, contact Lumini Tracker support team.
                                 self.app.after(0, self._handle_load_from_device_completion, save_result)
                                 
                             except Exception as save_error:
+                                # Import required classes
+                                from models.operation_result import ProfileOperationResult, OperationType
+                                
                                 error_result = ProfileOperationResult(
                                     operation_type=OperationType.LOAD_FROM_DEVICE,
                                     success=False
@@ -587,6 +593,9 @@ For technical support, contact Lumini Tracker support team.
                                 error_result.add_error(f"Failed to save profile to file: {str(save_error)}")
                                 self.app.after(0, self._handle_load_from_device_completion, error_result)
                         else:
+                            # Import required classes
+                            from models.operation_result import ProfileOperationResult, OperationType
+                            
                             error_result = ProfileOperationResult(
                                 operation_type=OperationType.LOAD_FROM_DEVICE,
                                 success=False
@@ -594,6 +603,9 @@ For technical support, contact Lumini Tracker support team.
                             error_result.add_error("No parameters could be read from device")
                             self.app.after(0, self._handle_load_from_device_completion, error_result)
                     else:
+                        # Import required classes
+                        from models.operation_result import ProfileOperationResult, OperationType
+                        
                         error_result = ProfileOperationResult(
                             operation_type=OperationType.LOAD_FROM_DEVICE,
                             success=False
@@ -603,6 +615,9 @@ For technical support, contact Lumini Tracker support team.
                         self.app.after(0, self._handle_load_from_device_completion, error_result)
                         
                 except Exception as e:
+                    # Import required classes
+                    from models.operation_result import ProfileOperationResult, OperationType
+                    
                     error_result = ProfileOperationResult(
                         operation_type=OperationType.LOAD_FROM_DEVICE,
                         success=False
