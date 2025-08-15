@@ -412,6 +412,63 @@ class ParameterSpecificationFactory:
         
         return None
     
+    def _clean_time_parameter_value(self, param_name: str, field_name: str, field_value: Any) -> Any:
+        """
+        Clean time parameter values to show only numeric values.
+        
+        Args:
+            param_name: Name of the parameter (e.g., 'report_intervals')
+            field_name: Name of the field (e.g., 'moving_time')
+            field_value: Raw field value (e.g., '60s' or 'ACC OFF:120s')
+            
+        Returns:
+            Cleaned value for time parameters, original value for others
+        """
+        # Define time parameters and their fields that need cleaning
+        time_parameters = {
+            'report_intervals': ['moving_time', 'stopped_time'],
+            'heartbeat_intervals': ['moving_heartbeat', 'stopped_heartbeat'],
+            'sleep_time': ['sleep_time'],
+            'speed_alert': ['detection_time'],
+            'power_detection': ['power_detection_time'],
+            'charge_settings': ['min_charge_time'],
+            'jammer_detection': ['jammer_confirmation_time']
+        }
+        
+        # Check if this is a time parameter field that needs cleaning
+        if param_name in time_parameters and field_name in time_parameters[param_name]:
+            if isinstance(field_value, str):
+                cleaned_value = self._extract_numeric_value_from_time_string(field_value)
+                print(f"DEBUG: Time parameter cleaning - {param_name}.{field_name}: '{field_value}' -> '{cleaned_value}'")
+                return cleaned_value
+        
+        return field_value
+    
+    def _extract_numeric_value_from_time_string(self, time_string: str) -> str:
+        """
+        Extract numeric value from time parameter strings.
+        
+        Examples:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "180" -> "180"
+        
+        Args:
+            time_string: Time string that may contain units and prefixes
+            
+        Returns:
+            str: Numeric value only
+        """
+        if not time_string:
+            return ""
+        
+        # Extract all digits from the string
+        import re
+        digits = re.findall(r'\d+', str(time_string))
+        
+        # Return the last number found (handles cases like "ACC OFF:120s")
+        return digits[-1] if digits else ""
+
     def set_parameter_value(self, section_name: str, param_name: str, value: Any, section_widgets: Dict[str, SectionWidget]):
         """Set value for a parameter widget"""
         if section_name not in section_widgets:
@@ -428,7 +485,9 @@ class ParameterSpecificationFactory:
         elif param_widget.widget_type == 'complex' and isinstance(value, dict):
             for field_name, field_value in value.items():
                 if field_name in param_widget.ui_elements:
-                    param_widget.ui_elements[field_name].set_value(field_value)
+                    # Apply time parameter cleaning for time-related fields
+                    cleaned_value = self._clean_time_parameter_value(param_name, field_name, field_value)
+                    param_widget.ui_elements[field_name].set_value(cleaned_value)
     
     def get_all_parameter_values(self, section_widgets: Dict[str, SectionWidget]) -> Dict[str, Any]:
         """Get all parameter values from all sections"""
@@ -1093,7 +1152,16 @@ class ParameterSpecificationFactory:
             )
             return
         
-        command = f"ATSMS:MILEAGE={odometer_value}"
+        # Ensure the odometer value is an integer (not a float)
+        try:
+            # Convert to float first, then to int to handle cases like "28.0"
+            odometer_int = int(float(odometer_value))
+            odometer_value = str(odometer_int)
+        except ValueError:
+            # If conversion fails, keep the original value but show a warning
+            pass
+        
+        command = f"ATSMS:MILEAGE={odometer_value}#"
         self.serial_service.send_command(command)
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
@@ -1111,7 +1179,16 @@ class ParameterSpecificationFactory:
             )
             return
         
-        command = f"ATSMS:ACCONT,{hourmeter_value}"
+        # Ensure the hourmeter value is an integer (not a float)
+        try:
+            # Convert to float first, then to int to handle cases like "28.0"
+            hourmeter_int = int(float(hourmeter_value))
+            hourmeter_value = str(hourmeter_int)
+        except ValueError:
+            # If conversion fails, keep the original value but show a warning
+            pass
+        
+        command = f"ATSMS:ACCONT,{hourmeter_value}#"
         self.serial_service.send_command(command)
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
