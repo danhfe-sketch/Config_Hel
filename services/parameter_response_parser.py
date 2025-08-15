@@ -75,7 +75,7 @@ class ParameterResponseParser:
             
             # Time Parameters
             'report_intervals': {
-                'pattern': r'TIMER:(\d+),(\d+)|TIMER ACC ON:(\d+)s,ACC OFF:(\d+)s',
+                'pattern': r'TIMER:\s*(\d+)\s*,\s*(\d+)|TIMER\s+ACC\s+ON:\s*(\d+)s?\s*,\s*ACC\s+OFF:\s*(\d+)s?',
                 'fields': ['moving_time', 'stopped_time'],
                 'description': 'Report interval configuration response',
                 'post_process': self._process_timer_response
@@ -173,10 +173,10 @@ class ParameterResponseParser:
             
             # Jammer Detection Parameters
             'jammer_detection': {
-                'pattern': r'JAMMER:(\d+),(\d+)',
+                'pattern': r'JAMMER:(ON|OFF|\d+)(?:,(\d+))?',
                 'fields': ['enabled', 'mode'],
                 'description': 'Jammer detection configuration response',
-                'post_process': self._process_boolean_response
+                'post_process': self._process_jammer_detection_response
             },
             'jammer_relay_action': {
                 'pattern': r'JAMRELAY:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)',
@@ -585,6 +585,27 @@ class ParameterResponseParser:
         # Convert enabled to boolean
         if 'enabled' in values:
             values['enabled'] = bool(values['enabled'])
+        
+        return values
+
+    def _process_jammer_detection_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process jammer detection configuration response."""
+        # Handle ON/OFF or numeric format for enabled status
+        if 'enabled' in values:
+            status = values['enabled']
+            if status == 'ON':
+                values['enabled'] = True
+            elif status == 'OFF':
+                values['enabled'] = False
+            else:
+                # Numeric value - 1 means enabled, 0 means disabled
+                values['enabled'] = bool(int(status))
+        
+        # Handle optional mode parameter
+        if 'mode' in values:
+            mode = values['mode']
+            if mode is not None:
+                values['mode'] = int(mode)
         
         return values
 

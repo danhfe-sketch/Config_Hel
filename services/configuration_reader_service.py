@@ -155,8 +155,8 @@ class ConfigurationReaderService:
             'get_server': r'SERVER:(\d+),([^,]*),(\d+),(\d+)',
             
             # Time Parameters
-            'get_timer': r'TIMER:(\d+),(\d+)|TIMER ACC ON:(\d+)s,ACC OFF:(\d+)s',
-            'get_hbt': r'HBT:(\d+),(\d+)|HBT ACC ON:(\d+)s,ACC OFF:(\d+)s',
+            'get_timer': r'TIMER:\s*(\d+)\s*,\s*(\d+)|TIMER\s+ACC\s+ON:\s*(\d+)s?\s*,\s*ACC\s+OFF:\s*(\d+)s?|TIMER:\s*(\d+)s?\s*,\s*ACC\s+OFF:\s*(\d+)s?',
+            'get_hbt': r'HBT:(\d+),(\d+)|HBT ACC ON:(\d+)s,ACC OFF:(\d+)s|HBT:(\d+)s,ACC OFF:(\d+)s',
             
             # Service Parameters (LT32Pro format)
             'get_protocol': r'READOK:\s*GT06SEL=(\d+)',
@@ -185,12 +185,12 @@ class ConfigurationReaderService:
             'get_vibration_sensitivity': r'READOK:\s*VIBL=(\d+)',
             
             # Jammer Detection Parameters
-            'get_jammer_detection': r'JAMMER:(ON|OFF|\d+),(\d+)',
+            'get_jammer_detection': r'JAMMER:(ON|OFF|\d+)(?:,(\d+))?',
             'get_jammer_relay_action': r'JAMRELAY:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)',
             
             # Miscellaneous Parameters
-            'get_odometer': r'(?:MILEAGE=(\d+)|Cur Mileage Value:(\d+)KM)',
-            'get_hourmeter': r'(?:ACCONT:(\d+)|Get ACC ON Time:(\d+) Minute)',
+            'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
+            'get_hourmeter': r'(?:ACCONT:([^,#\s]+)|Get ACC ON Time:([^M]+) Minute)',
             
             # Legacy patterns for backward compatibility (LT32Pro format)
             'get_vibl': r'READOK:\s*VIBL=(\d+)',
@@ -460,6 +460,8 @@ class ConfigurationReaderService:
             # Update UI with read parameters
             if success:
                 self._update_ui_with_parameters(parameters_read)
+                # Also update the profile manager with the read parameters
+                self._update_profile_manager_with_parameters(parameters_read)
             
             # Call completion callback
             if self.completion_callback:
@@ -557,6 +559,131 @@ class ConfigurationReaderService:
         except Exception as e:
             self._log_message(f"ERROR: Failed to update UI with parameters: {str(e)}")
 
+    def _update_profile_manager_with_parameters(self, parameters_read):
+        """
+        Update the profile manager's current profile with parameters read from the device.
+        
+        Args:
+            parameters_read: List of parameter read results
+        """
+        try:
+            # Check if profile manager is available
+            if not hasattr(self.app, 'profile_manager') or not self.app.profile_manager:
+                self._log_message("DEBUG: Profile manager not available, skipping profile update")
+                return
+            
+            # Create a profile from the read parameters
+            from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+            from datetime import datetime
+            
+            # Create metadata
+            metadata = ProfileMetadata(
+                parameter_spec_version="1.0",
+                created_by="LT32 PRO Configurator - Check Configuration",
+                device_model="LT32 PRO"
+            )
+            
+            # Convert read parameters to ParameterValue objects
+            parameter_values = {}
+            successful_reads = 0
+            
+            for result in parameters_read:
+                if result.success and result.raw_response:
+                    # Parse the response to get all field values
+                    parsed_response = self.parse_device_response(
+                        result.parameter_name, 
+                        result.raw_response, 
+                        self._get_command_type_for_parameter(result.parameter_name)
+                    )
+                    
+                    if parsed_response.success:
+                        # Get the section mapping for this parameter
+                        parameter_mapping = self._get_parameter_section_mapping()
+                        section_info = parameter_mapping.get(result.parameter_name)
+                        
+                        if section_info:
+                            section_name = section_info['section']
+                            param_name = section_info['parameter']
+                            full_param_name = f"{section_name}.{param_name}"
+                        else:
+                            # Fallback to original parameter name
+                            full_param_name = result.parameter_name
+                        
+                        # Create parameter value based on the parsed data
+                        if isinstance(parsed_response.parsed_values, dict) and len(parsed_response.parsed_values) > 1:
+                            # Complex parameter with multiple fields - create individual field parameters
+                            for field_name, field_value in parsed_response.parsed_values.items():
+                                field_param_name = f"{full_param_name}.{field_name}"
+                                
+                                # Clean time parameter values to show only numeric values
+                                if result.parameter_name in ['report_intervals', 'heartbeat_intervals']:
+                                    field_value = self._extract_numeric_value_from_time_string(field_value)
+                                
+                                parameter_values[field_param_name] = ParameterValue(
+                                    value=field_value,
+                                    source="device"
+                                )
+                        else:
+                            # Simple parameter with single value
+                            # For parameters like odometer and hourmeter, extract the actual value
+                            if result.parameter_name in ['odometer', 'hourmeter'] and isinstance(parsed_response.parsed_values, dict):
+                                # Extract the actual value from the dictionary
+                                value = parsed_response.parsed_values.get(result.parameter_name, "")
+                            else:
+                                value = result.value or list(parsed_response.parsed_values.values())[0] if parsed_response.parsed_values else ""
+                            
+                            parameter_values[full_param_name] = ParameterValue(
+                                value=value,
+                                source="device"
+                            )
+                        successful_reads += 1
+            
+            if successful_reads > 0:
+                # Create the profile
+                now = datetime.now()
+                profile = UniversalProfile(
+                    name=f"Device Configuration {now.strftime('%Y-%m-%d %H:%M:%S')}",
+                    version="1.0",
+                    created_at=now,
+                    modified_at=now,
+                    metadata=metadata,
+                    parameters=parameter_values
+                )
+                
+                # Set as current profile in the profile manager
+                self.app.profile_manager.set_current_profile(profile)
+                self._log_message(f"INFO: Updated profile manager with {successful_reads} parameters from device")
+            else:
+                self._log_message("WARNING: No successful parameter reads to update profile manager")
+                
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update profile manager with parameters: {str(e)}")
+
+    def _extract_numeric_value_from_time_string(self, time_string: str) -> str:
+        """
+        Extract numeric value from time parameter strings.
+        
+        Examples:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "180" -> "180"
+        
+        Args:
+            time_string: Time string that may contain units and prefixes
+            
+        Returns:
+            str: Numeric value only
+        """
+        if not time_string:
+            return ""
+        
+        # Extract all digits from the string
+        import re
+        digits = re.findall(r'\d+', str(time_string))
+        
+        # Return the last number found (handles cases like "ACC OFF:120s")
+        return digits[-1] if digits else ""
+
     def _update_ui_fields_from_parsed_data(self, parsed_parameters: Dict[str, Dict[str, Any]]):
         """
         Update UI fields from parsed parameter data.
@@ -567,8 +694,13 @@ class ConfigurationReaderService:
         try:
             self._log_message(f"DEBUG: Starting UI field updates for {len(parsed_parameters)} parameters")
             
+            # Debug: Log all parsed parameters and their structure
+            for param_name, param_data in parsed_parameters.items():
+                self._log_message(f"DEBUG: Parsed parameter '{param_name}': {param_data}")
+            
             # Check if parameters frame has the specification-based update method
             if hasattr(self.app.parameters_frame, 'parameter_specification_factory'):
+                self._log_message("DEBUG: Using specification-based update method")
                 def update_fields():
                     try:
                         self._update_specification_based_fields(parsed_parameters)
@@ -576,11 +708,13 @@ class ConfigurationReaderService:
                     except Exception as e:
                         self._log_message(f"ERROR: Failed to update specification-based fields: {str(e)}")
                         # Fallback to individual field updates
+                        self._log_message("DEBUG: Falling back to individual field updates")
                         self._update_individual_fields(parsed_parameters)
                 
                 self.app.after(0, update_fields)
             else:
                 # Fallback to individual field updates
+                self._log_message("DEBUG: Using individual field updates (no specification factory)")
                 self._update_individual_fields(parsed_parameters)
                 
         except Exception as e:
@@ -727,6 +861,58 @@ class ConfigurationReaderService:
             'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
         }
 
+    def _is_time_parameter(self, param_widget) -> bool:
+        """
+        Check if a parameter widget represents a time parameter that needs cleaning.
+        
+        Args:
+            param_widget: Parameter widget to check
+            
+        Returns:
+            bool: True if this is a time parameter that needs numeric cleaning
+        """
+        try:
+            # Get the parameter key/name from the widget
+            param_key = getattr(param_widget, 'key', '')
+            param_name = getattr(param_widget, 'name', '')
+            
+            self._log_message(f"DEBUG: Checking if parameter is time parameter - key: '{param_key}', name: '{param_name}'")
+            
+            # List of time parameter identifiers that need cleaning
+            time_parameter_keys = [
+                # Report interval parameters
+                'moving_time', 'stopped_time', 
+                'report_moving_time', 'report_stopped_time',
+                
+                # Heartbeat interval parameters
+                'moving_heartbeat', 'stopped_heartbeat',
+                'heartbeat_moving_time', 'heartbeat_stopped_time',
+                
+                # Sleep and power saving time parameters
+                'sleep_time',
+                
+                # Speed detection time parameters
+                'speed_detection_time', 'detection_time',
+                
+                # Power detection time parameters
+                'power_detection_time',
+                
+                # Charge time parameters
+                'min_charge_time',
+                
+                # Jammer confirmation time
+                'jammer_confirmation_time'
+            ]
+            
+            # Check if the parameter key or name matches any time parameter
+            is_time_param = param_key in time_parameter_keys or param_name in time_parameter_keys
+            self._log_message(f"DEBUG: Parameter '{param_key}'/'{param_name}' is time parameter: {is_time_param}")
+            return is_time_param
+            
+        except Exception as e:
+            self._log_message(f"WARNING: Error checking if parameter is time parameter: {str(e)}")
+            return False
+
     def _convert_value_for_ui_element(self, raw_value: Any, param_widget) -> Any:
         """
         Convert raw parsed value to the format expected by the UI element.
@@ -740,6 +926,17 @@ class ConfigurationReaderService:
         """
         if raw_value is None:
             return None
+        
+        # Apply time parameter cleaning for time-related parameters
+        if self._is_time_parameter(param_widget):
+            if isinstance(raw_value, str):
+                cleaned_value = self._extract_numeric_value_from_time_string(raw_value)
+                self._log_message(f"DEBUG: Time parameter cleaning applied - '{raw_value}' -> '{cleaned_value}'")
+                raw_value = cleaned_value
+            else:
+                self._log_message(f"DEBUG: Time parameter detected but value is not string: {type(raw_value)} = {raw_value}")
+        else:
+            self._log_message(f"DEBUG: Not a time parameter, no cleaning applied for value: {raw_value}")
         
         # Get the UI element configuration
         ui_element = param_widget.ui_elements.get('main')
@@ -968,6 +1165,11 @@ class ConfigurationReaderService:
             parsed_parameters: Dictionary of parameter names to parsed values
         """
         try:
+            self._log_message(f"DEBUG: Starting individual field updates for {len(parsed_parameters)} parameters")
+            
+            # Debug: Log all parameters being processed
+            for param_name in parsed_parameters.keys():
+                self._log_message(f"DEBUG: Processing individual field update for: {param_name}")
             # Network Parameters
             if 'apn_settings' in parsed_parameters:
                 apn_data = parsed_parameters['apn_settings']
@@ -994,13 +1196,31 @@ class ConfigurationReaderService:
             # Time Parameters
             if 'report_intervals' in parsed_parameters:
                 timer_data = parsed_parameters['report_intervals']
-                self._update_widget_value('moving_time', timer_data.get('moving_time', ''))
-                self._update_widget_value('stopped_time', timer_data.get('stopped_time', ''))
+                # Clean time parameter values to show only numeric values
+                moving_time_raw = timer_data.get('moving_time', '')
+                stopped_time_raw = timer_data.get('stopped_time', '')
+                moving_time_clean = self._extract_numeric_value_from_time_string(moving_time_raw)
+                stopped_time_clean = self._extract_numeric_value_from_time_string(stopped_time_raw)
+                
+                self._log_message(f"DEBUG: Time parameter transformation - moving_time: '{moving_time_raw}' -> '{moving_time_clean}'")
+                self._log_message(f"DEBUG: Time parameter transformation - stopped_time: '{stopped_time_raw}' -> '{stopped_time_clean}'")
+                
+                self._update_widget_value('moving_time', moving_time_clean)
+                self._update_widget_value('stopped_time', stopped_time_clean)
             
             if 'heartbeat_intervals' in parsed_parameters:
                 hbt_data = parsed_parameters['heartbeat_intervals']
-                self._update_widget_value('moving_heartbeat', hbt_data.get('moving_heartbeat', ''))
-                self._update_widget_value('stopped_heartbeat', hbt_data.get('stopped_heartbeat', ''))
+                # Clean time parameter values to show only numeric values
+                moving_heartbeat_raw = hbt_data.get('moving_heartbeat', '')
+                stopped_heartbeat_raw = hbt_data.get('stopped_heartbeat', '')
+                moving_heartbeat_clean = self._extract_numeric_value_from_time_string(moving_heartbeat_raw)
+                stopped_heartbeat_clean = self._extract_numeric_value_from_time_string(stopped_heartbeat_raw)
+                
+                self._log_message(f"DEBUG: Time parameter transformation - moving_heartbeat: '{moving_heartbeat_raw}' -> '{moving_heartbeat_clean}'")
+                self._log_message(f"DEBUG: Time parameter transformation - stopped_heartbeat: '{stopped_heartbeat_raw}' -> '{stopped_heartbeat_clean}'")
+                
+                self._update_widget_value('moving_heartbeat', moving_heartbeat_clean)
+                self._update_widget_value('stopped_heartbeat', stopped_heartbeat_clean)
             
             # Service Parameters
             if 'protocol' in parsed_parameters:
@@ -1017,29 +1237,128 @@ class ConfigurationReaderService:
                 self._update_widget_value('vibration_level', vib_data.get('level', ''))
                 self._update_widget_value('vibration_enabled', vib_data.get('enabled', False))
             
-            # Miscellaneous Parameters
+            # Power Saving Parameters
+            if 'sleep_time' in parsed_parameters:
+                sleep_data = parsed_parameters['sleep_time']
+                # Clean time parameter values to show only numeric values
+                sleep_time_raw = sleep_data.get('sleep_time', '')
+                sleep_time_clean = self._extract_numeric_value_from_time_string(sleep_time_raw)
+                
+                self._log_message(f"DEBUG: Time parameter transformation - sleep_time: '{sleep_time_raw}' -> '{sleep_time_clean}'")
+                
+                self._update_widget_value('sleep_time', sleep_time_clean)
+            
+            # Miscellaneous Parameters - Enhanced odometer handling
             if 'odometer' in parsed_parameters:
                 odo_data = parsed_parameters['odometer']
-                self._update_widget_value('odometer', odo_data.get('odometer', ''))
+                odometer_value = odo_data.get('odometer', '')
+                self._log_message(f"DEBUG: Processing odometer parameter update - raw value: '{odometer_value}'")
+                
+                # Try specification-based update first
+                if self._update_parameter_via_specification('miscellaneous', 'odometer', odometer_value):
+                    self._log_message(f"DEBUG: Successfully updated odometer via specification method: {odometer_value}")
+                else:
+                    # Fallback to legacy widget update
+                    self._log_message(f"DEBUG: Falling back to legacy widget update for odometer")
+                    self._update_widget_value('odometer', odometer_value)
             
+            # Enhanced hourmeter handling
             if 'hourmeter' in parsed_parameters:
                 hour_data = parsed_parameters['hourmeter']
-                self._update_widget_value('hourmeter', hour_data.get('hourmeter', ''))
+                hourmeter_value = hour_data.get('hourmeter', '')
+                self._log_message(f"DEBUG: Processing hourmeter parameter update - raw value: '{hourmeter_value}'")
+                
+                # Try specification-based update first
+                if self._update_parameter_via_specification('miscellaneous', 'hourmeter', hourmeter_value):
+                    self._log_message(f"DEBUG: Successfully updated hourmeter via specification method: {hourmeter_value}")
+                else:
+                    # Fallback to legacy widget update
+                    self._log_message(f"DEBUG: Falling back to legacy widget update for hourmeter")
+                    self._update_widget_value('hourmeter', hourmeter_value)
             
             # Add more parameter updates as needed...
             
         except Exception as e:
             self._log_message(f"ERROR: Failed to update individual fields: {str(e)}")
 
+    def _update_parameter_via_specification(self, section_name: str, param_name: str, value: Any) -> bool:
+        """
+        Update a parameter using the specification-based method.
+        
+        Args:
+            section_name: Name of the parameter section
+            param_name: Name of the parameter
+            value: Value to set
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
+        try:
+            # Check if specification factory is available
+            if not hasattr(self.app.parameters_frame, 'parameter_specification_factory'):
+                self._log_message(f"DEBUG: No specification factory available for {section_name}.{param_name}")
+                return False
+            
+            # Check if section widgets are available
+            if not hasattr(self.app.parameters_frame, 'section_widgets'):
+                self._log_message(f"DEBUG: No section widgets available for {section_name}.{param_name}")
+                return False
+            
+            factory = self.app.parameters_frame.parameter_specification_factory
+            section_widgets = self.app.parameters_frame.section_widgets
+            
+            # Check if the section exists
+            if section_name not in section_widgets:
+                self._log_message(f"DEBUG: Section '{section_name}' not found in section widgets")
+                return False
+            
+            # Check if the parameter exists in the section
+            section_widget = section_widgets[section_name]
+            if param_name not in section_widget.parameters:
+                self._log_message(f"DEBUG: Parameter '{param_name}' not found in section '{section_name}'")
+                return False
+            
+            # Get current value for comparison
+            current_value = factory.get_parameter_value(section_name, param_name, section_widgets)
+            
+            # Set the new value
+            def update_parameter():
+                try:
+                    factory.set_parameter_value(section_name, param_name, value, section_widgets)
+                    
+                    # Verify the update
+                    new_value = factory.get_parameter_value(section_name, param_name, section_widgets)
+                    
+                    # Log the update
+                    self._log_message(f"DEBUG: Parameter {section_name}.{param_name} updated: '{current_value}' -> '{new_value}'")
+                    
+                    # Add visual indicator if available
+                    self._add_visual_update_indicator(section_name, param_name, current_value != new_value)
+                    
+                except Exception as e:
+                    self._log_message(f"ERROR: Failed to set parameter {section_name}.{param_name}: {str(e)}")
+                    raise
+            
+            # Schedule the update on the main thread
+            self.app.after(0, update_parameter)
+            return True
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update parameter {section_name}.{param_name} via specification: {str(e)}")
+            return False
+
     def _update_widget_value(self, widget_name: str, value: Any):
         """
-        Update a specific widget value.
+        Update a specific widget value using legacy method.
         
         Args:
             widget_name: Name of the widget to update
             value: Value to set
         """
         try:
+            self._log_message(f"DEBUG: Attempting legacy widget update for {widget_name} = {value}")
+            
+            # Try parameter_widgets first (legacy approach)
             if hasattr(self.app.parameters_frame, 'parameter_widgets'):
                 widgets = self.app.parameters_frame.parameter_widgets
                 if widget_name in widgets:
@@ -1048,11 +1367,22 @@ class ConfigurationReaderService:
                         def update_widget():
                             try:
                                 widget.set_value(value)
-                                self._log_message(f"DEBUG: Updated {widget_name} to {value}")
+                                self._log_message(f"DEBUG: Updated {widget_name} to {value} via parameter_widgets")
                             except Exception as e:
-                                self._log_message(f"ERROR: Failed to update {widget_name}: {str(e)}")
+                                self._log_message(f"ERROR: Failed to update {widget_name} via parameter_widgets: {str(e)}")
                         
                         self.app.after(0, update_widget)
+                        return
+                    else:
+                        self._log_message(f"DEBUG: Widget {widget_name} found but has no set_value method")
+                else:
+                    self._log_message(f"DEBUG: Widget {widget_name} not found in parameter_widgets")
+            else:
+                self._log_message(f"DEBUG: No parameter_widgets attribute found")
+            
+            # If legacy approach failed, log the issue
+            self._log_message(f"WARNING: Could not update widget {widget_name} - widget not found or not accessible")
+            
         except Exception as e:
             self._log_message(f"ERROR: Failed to update widget {widget_name}: {str(e)}")
 
@@ -1334,7 +1664,9 @@ class ConfigurationReaderService:
                     time.sleep(0.5)
                 
                 # Send the command and wait for response
-                response = self._send_command_and_wait(command, timeout=5.0)
+                # Use longer timeout for TIMER command as it may take more time to respond
+                timeout = 8.0 if command == 'TIMER' else 5.0
+                response = self._send_command_and_wait(command, timeout=timeout)
                 
                 if response is None:
                     last_error = self.i18n.get('config_read_timeout', 'Command timeout')
@@ -1440,22 +1772,28 @@ class ConfigurationReaderService:
                 
                 # Time Parameters
                 elif command_type == 'get_timer':
-                    # Handle both response formats
+                    # Handle multiple response formats
                     if match.group(1) and match.group(2):  # TIMER:x,y format
                         parsed_values['moving_time'] = match.group(1)
                         parsed_values['stopped_time'] = match.group(2)
                     elif match.group(3) and match.group(4):  # TIMER ACC ON:xs,ACC OFF:ys format
                         parsed_values['moving_time'] = match.group(3)
                         parsed_values['stopped_time'] = match.group(4)
+                    elif match.group(5) and match.group(6):  # TIMER:xs,ACC OFF:ys format
+                        parsed_values['moving_time'] = match.group(5)
+                        parsed_values['stopped_time'] = match.group(6)
                     
                 elif command_type == 'get_hbt':
-                    # Handle both response formats
+                    # Handle multiple response formats
                     if match.group(1) and match.group(2):  # HBT:x,y format
                         parsed_values['moving_heartbeat'] = match.group(1)
                         parsed_values['stopped_heartbeat'] = match.group(2)
                     elif match.group(3) and match.group(4):  # HBT ACC ON:xs,ACC OFF:ys format
                         parsed_values['moving_heartbeat'] = match.group(3)
                         parsed_values['stopped_heartbeat'] = match.group(4)
+                    elif match.group(5) and match.group(6):  # HBT:xs,ACC OFF:ys format
+                        parsed_values['moving_heartbeat'] = match.group(5)
+                        parsed_values['stopped_heartbeat'] = match.group(6)
                 
                 # Service Parameters
                 elif command_type == 'get_protocol':
@@ -1571,7 +1909,9 @@ class ConfigurationReaderService:
                         parsed_values['enabled'] = False
                     else:
                         parsed_values['enabled'] = status == '1'
-                    parsed_values['mode'] = match.group(2)
+                    # Handle optional mode parameter
+                    mode = match.group(2) if match.lastindex >= 2 else None
+                    parsed_values['mode'] = mode
                     
                 elif command_type == 'get_jammer_relay_action':
                     parsed_values['enabled'] = match.group(1) == '1'
@@ -1589,17 +1929,51 @@ class ConfigurationReaderService:
                 # Miscellaneous Parameters
                 elif command_type == 'get_odometer':
                     # Handle both MILEAGE=value and "Cur Mileage Value:valueKM" formats
+                    odometer_value = None
                     if match.group(1):  # MILEAGE=value format
-                        parsed_values['odometer'] = match.group(1)
+                        odometer_value = match.group(1)
+                        self._log_message(f"DEBUG: Parsed odometer from MILEAGE format: '{odometer_value}'")
                     elif match.group(2):  # Cur Mileage Value:valueKM format
-                        parsed_values['odometer'] = match.group(2)
+                        odometer_value = match.group(2)
+                        self._log_message(f"DEBUG: Parsed odometer from 'Cur Mileage Value' format: '{odometer_value}'")
+                    
+                    if odometer_value is not None:
+                        # Validate that the odometer value is numeric
+                        try:
+                            # Ensure the value is a valid number
+                            int(odometer_value)
+                            parsed_values['odometer'] = odometer_value
+                            self._log_message(f"DEBUG: Successfully parsed odometer value: {odometer_value}")
+                        except ValueError:
+                            self._log_message(f"WARNING: Invalid odometer value (not numeric): '{odometer_value}'")
+                            parsed_values['odometer'] = '0'  # Default to 0 for invalid values
+                    else:
+                        self._log_message(f"WARNING: No odometer value found in response: '{response}'")
+                        parsed_values['odometer'] = '0'  # Default to 0 when no value found
                     
                 elif command_type == 'get_hourmeter':
                     # Handle both ACCONT:value and "Get ACC ON Time:value Minute" formats
+                    hourmeter_value = None
                     if match.group(1):  # ACCONT:value format
-                        parsed_values['hourmeter'] = match.group(1)
+                        hourmeter_value = match.group(1)
+                        self._log_message(f"DEBUG: Parsed hourmeter from ACCONT format: '{hourmeter_value}'")
                     elif match.group(2):  # Get ACC ON Time:value Minute format
-                        parsed_values['hourmeter'] = match.group(2)
+                        hourmeter_value = match.group(2)
+                        self._log_message(f"DEBUG: Parsed hourmeter from 'Get ACC ON Time' format: '{hourmeter_value}'")
+                    
+                    if hourmeter_value is not None:
+                        # Validate that the hourmeter value is numeric
+                        try:
+                            # Ensure the value is a valid number
+                            int(hourmeter_value)
+                            parsed_values['hourmeter'] = hourmeter_value
+                            self._log_message(f"DEBUG: Successfully parsed hourmeter value: {hourmeter_value}")
+                        except ValueError:
+                            self._log_message(f"WARNING: Invalid hourmeter value (not numeric): '{hourmeter_value}'")
+                            parsed_values['hourmeter'] = '0'  # Default to 0 for invalid values
+                    else:
+                        self._log_message(f"WARNING: No hourmeter value found in response: '{response}'")
+                        parsed_values['hourmeter'] = '0'  # Default to 0 when no value found
                 
                 # Legacy parameter parsing for backward compatibility
                 elif command_type == 'get_vibl':
@@ -1859,7 +2233,7 @@ class ConfigurationReaderService:
         # Wait for a response
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if self.captured_response:
+            if self.captured_response is not None:
                 response = self.captured_response
                 self.waiting_for_response = False
                 self.captured_response = None
@@ -1882,8 +2256,19 @@ class ConfigurationReaderService:
         Args:
             response: The device response string
         """
-        if self.waiting_for_response and not self.captured_response:
+        # Always log the response for debugging
+        self._log_message(f"DEBUG: Received device response: '{response}'")
+        
+        # Capture response if we're waiting for one and haven't captured one yet
+        if self.waiting_for_response and self.captured_response is None:
             self.captured_response = response.strip()
+            self._log_message(f"DEBUG: Captured response for processing: '{self.captured_response}'")
+        elif self.waiting_for_response:
+            # Log if we're already have a captured response (might indicate timing issues)
+            self._log_message(f"DEBUG: Already have captured response '{self.captured_response}', ignoring new response: '{response}'")
+        else:
+            # Log responses we're not expecting (helps with debugging)
+            self._log_message(f"DEBUG: Ignoring unsolicited response: '{response}'")
 
     def _get_specific_error_message(self, param_name: str, error_message: str) -> str:
         """Get a specific error message for a parameter."""
@@ -2130,17 +2515,6 @@ class ConfigurationReaderService:
             'get_acc_cfg': 'ACC_CFG=type-on_voltage-off_voltage'
         }
         return format_map.get(command_type, 'Unknown format')
-    
-    def capture_device_response(self, response: str):
-        """
-        Capture device response for parameter reading operations.
-        
-        Args:
-            response: Response received from device
-        """
-        if self.waiting_for_response:
-            self.captured_response = response
-            self._log_message(f"DEBUG: Captured response: {response}")
 
     def _log_message(self, message: str) -> None:
         """Log a message to the application log."""

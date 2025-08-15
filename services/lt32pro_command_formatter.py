@@ -208,7 +208,7 @@ class LT32ProCommandFormatter:
             r'^[A-Z]+,.+#$',                 # Commands with values like APN,value#
             r'^SZCS#[A-Z0-9]+$',            # Read commands like SZCS#IMEI, SZCS#GT06SEL
             r'^SZCS#[A-Z0-9]+=.+$',         # Set commands like SZCS#GT06SEL=2
-            r'^CXCS#[A-Z0-9]+$',            # Legacy read commands like CXCS#IMEI, CXCS#GT06SEL
+            r'^CXCS#[A-Z0-9_]+$',           # Legacy read commands like CXCS#IMEI, CXCS#GT06SEL, CXCS#SPD_LED_SHOW
             r'^CXCS#[A-Z0-9_]+#[A-Z0-9_]+$' # Multi-part legacy commands like CXCS#ACCLINE#ACC_CFG
         ]
         
