@@ -499,6 +499,9 @@ For technical support, contact Lumini Tracker support team.
             # Save the loaded profile to file
             save_result = loop.run_until_complete(self.app.profile_manager.save_to_file(profile_path))
             
+            # Add the loaded profile to the save result so UI can be updated
+            save_result.profile = load_result.profile
+            
             # Handle completion on the main thread
             self.app.after(0, self._handle_load_from_device_completion, save_result)
             
@@ -526,11 +529,14 @@ For technical support, contact Lumini Tracker support team.
                 title = self.i18n.get("load_from_device", "Load from Device")
                 show_info(self.app, title, success_msg)
 
-                # Populate UI with the values from the current profile
+                # Update UI with the loaded profile using the same approach as check configuration
                 try:
-                    ui_field_values = {}
-                    populate_result = self.app.profile_manager.populate_ui_fields(ui_field_values)
-                    self.app.after(0, self._update_ui_with_values, ui_field_values, populate_result)
+                    # Use the serial service method that properly updates the UI
+                    if hasattr(self.app, 'serial_service') and hasattr(self.app.serial_service, '_update_ui_from_device_configuration'):
+                        self.app.serial_service._update_ui_from_device_configuration()
+                    else:
+                        # Fallback to direct UI update
+                        self.app.after(0, self._update_ui_with_loaded_profile, result.profile)
                 except Exception as populate_err:
                     # Log but do not break user flow
                     if hasattr(self.app, 'log_frame') and self.app.log_frame:
@@ -770,7 +776,6 @@ For technical support, contact Lumini Tracker support team.
                             error_msg += "\nCheck the log for detailed recovery information."
                         
                         show_profile_error_dialog(self.app, "Profile Deployment Failed", error_msg)
-                
                 # Update recovery statistics
                 self.app.profile_manager.update_recovery_statistics(recovery_summary)
                 
@@ -1084,3 +1089,462 @@ For technical support, contact Lumini Tracker support team.
         except Exception as e:
             print(f"Error creating progress dialog: {e}")
             return None
+    
+    def _load_profile_to_device_worker(self, profile_path):
+        """Worker method to load profile from file and deploy to device."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Load profile from file
+            load_result = loop.run_until_complete(self.app.profile_manager.load_from_file(profile_path))
+            
+            if not load_result.success:
+                self.app.after(0, self._handle_profile_operation_completion, load_result)
+                return
+            
+            # Deploy profile to device
+            deploy_result = loop.run_until_complete(self.app.profile_manager.save_to_device())
+            
+            # Handle completion on the main thread
+            self.app.after(0, self._handle_profile_operation_completion, deploy_result)
+            
+        except Exception as e:
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.SAVE_TO_DEVICE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_profile_operation_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+    
+    def _save_profile_from_ui(self):
+        """Save current UI values to a profile file."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'params_frame'):
+                show_error(
+                    self.app,
+                    "Save Profile Error",
+                    "Parameters frame is not available. Cannot save profile."
+                )
+                return
+            
+            # Show file save dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.asksaveasfilename(
+                title=self.i18n.get("save_profile", "Save Profile"),
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Extract values from UI
+            try:
+                # Use the extract_validated_field_values method from ParametersFrame
+                field_values, validation_result = self.app.params_frame.extract_validated_field_values()
+                
+                if not validation_result.is_valid:
+                    # Show validation errors
+                    error_msg = "Cannot save profile due to validation errors:\n\n"
+                    error_msg += "\n".join(validation_result.errors)
+                    show_error(self.app, "Validation Error", error_msg)
+                    return
+                
+                # Create a profile from the UI values
+                from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+                from datetime import datetime
+                
+                # Create metadata
+                metadata = ProfileMetadata(
+                    parameter_spec_version="1.0",
+                    created_by="LT32 PRO Configurator",
+                    device_model="LT32 PRO"
+                )
+                
+                # Convert field values to ParameterValue objects
+                parameter_values = {}
+                for param_name, value in field_values.items():
+                    parameter_values[param_name] = ParameterValue(
+                        value=value,
+                        source="user"
+                    )
+                
+                now = datetime.now()
+                profile = UniversalProfile(
+                    name=f"UI_Profile_{now.strftime('%Y%m%d_%H%M%S')}",
+                    version="1.0",
+                    created_at=now,
+                    modified_at=now,
+                    metadata=metadata,
+                    parameters=parameter_values
+                )
+                
+                # Save the profile to file using the profile's to_dict method
+                import json
+                profile_data = profile.to_dict()
+                
+                with open(profile_path, 'w', encoding='utf-8') as f:
+                    json.dump(profile_data, f, indent=2, ensure_ascii=False)
+                
+                # Show success message
+                show_info(
+                    self.app,
+                    "Profile Saved",
+                    f"Profile successfully saved to:\n{profile_path}"
+                )
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"Profile saved successfully to: {profile_path}\n")
+                
+            except Exception as extract_error:
+                error_msg = f"Failed to extract UI values: {str(extract_error)}"
+                show_error(self.app, "Save Profile Error", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+        except Exception as e:
+            error_msg = f"Save profile failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Save Profile Error", error_msg)
+    
+    def _load_profile_to_ui(self):
+        """Load profile from file and populate UI."""
+        try:
+            # Show file open dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.askopenfilename(
+                title=self.i18n.get("load_profile", "Load Profile"),
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Load profile from file
+            try:
+                import json
+                with open(profile_path, 'r', encoding='utf-8') as f:
+                    profile_data = json.load(f)
+                
+                # Create UniversalProfile object
+                from models.universal_profile import UniversalProfile
+                from datetime import datetime
+                
+                # Use the from_dict method to properly reconstruct the profile
+                profile = UniversalProfile.from_dict(profile_data)
+                
+                # Populate UI with profile values
+                if hasattr(self.app, 'params_frame'):
+                    populate_result = self.app.params_frame.populate_ui_from_profile(profile)
+                    
+                    if populate_result.is_valid:
+                        show_info(
+                            self.app,
+                            "Profile Loaded",
+                            f"Profile successfully loaded from:\n{profile_path}"
+                        )
+                        
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message(f"Profile loaded successfully from: {profile_path}\n")
+                    else:
+                        # Show warnings if there were issues
+                        warning_msg = "Profile loaded with warnings:\n\n"
+                        warning_msg += "\n".join(populate_result.errors)
+                        show_warning(self.app, "Profile Load Warning", warning_msg)
+                else:
+                    show_error(
+                        self.app,
+                        "Load Profile Error",
+                        "Parameters frame is not available. Cannot load profile."
+                    )
+                
+            except Exception as load_error:
+                error_msg = f"Failed to load profile file: {str(load_error)}"
+                show_error(self.app, "Load Profile Error", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+        except Exception as e:
+            error_msg = f"Load profile failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile Error", error_msg)
+    
+    def _handle_profile_operation_completion(self, result):
+        """Handle the completion of profile operations."""
+        try:
+            if result.success:
+                show_info(
+                    self.app,
+                    "Operation Successful",
+                    "Profile operation completed successfully."
+                )
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("Profile operation completed successfully\n")
+            else:
+                error_msg = "Profile operation failed:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                
+                show_error(self.app, "Operation Failed", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: Profile operation failed\n")
+        
+        except Exception as e:
+            print(f"Error in profile operation completion callback: {e}")
+
+    def _update_ui_with_values(self, ui_field_values, populate_result):
+        """Update UI with loaded values."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or not self.app.parameters_frame:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: Parameters frame not available for UI update\n")
+                return
+            
+            # Get the current profile from profile manager
+            if hasattr(self.app, 'profile_manager') and self.app.profile_manager:
+                current_profile = self.app.profile_manager.get_current_profile()
+                if current_profile:
+                    # Use the parameters frame's populate method
+                    populate_result = self.app.parameters_frame.populate_ui_from_profile(current_profile)
+                    
+                    if populate_result.is_valid:
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message("INFO: UI updated successfully with loaded values\n")
+                    else:
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message(f"WARNING: UI update completed with warnings: {populate_result.errors}\n")
+                else:
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message("WARNING: No current profile available for UI update\n")
+            else:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: Profile manager not available for UI update\n")
+                    
+        except Exception as e:
+            error_msg = f"Error updating UI with values: {e}"
+            print(error_msg)
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+
+    def _save_profile_from_ui(self):
+        """Save current UI values to a profile file."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'params_frame'):
+                show_error(
+                    self.app,
+                    "Save Profile Error",
+                    "Parameters frame is not available. Cannot save profile."
+                )
+                return
+            
+            # Show file save dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.asksaveasfilename(
+                title=self.i18n.get("save_profile", "Save Profile"),
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Extract values from UI
+            try:
+                # Use the extract_validated_field_values method from ParametersFrame
+                field_values, validation_result = self.app.params_frame.extract_validated_field_values()
+                
+                if not validation_result.is_valid:
+                    # Show validation errors
+                    error_msg = "Cannot save profile due to validation errors:\n\n"
+                    error_msg += "\n".join(validation_result.errors)
+                    show_error(self.app, "Validation Error", error_msg)
+                    return
+                
+                # Create a profile from the UI values
+                from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+                from datetime import datetime
+                
+                # Create metadata
+                metadata = ProfileMetadata(
+                    parameter_spec_version="1.0",
+                    created_by="LT32 PRO Configurator",
+                    device_model="LT32 PRO"
+                )
+                
+                # Convert field values to ParameterValue objects
+                parameter_values = {}
+                for param_name, value in field_values.items():
+                    parameter_values[param_name] = ParameterValue(
+                        value=value,
+                        source="user"
+                    )
+                
+                now = datetime.now()
+                profile = UniversalProfile(
+                    name=f"UI_Profile_{now.strftime('%Y%m%d_%H%M%S')}",
+                    version="1.0",
+                    created_at=now,
+                    modified_at=now,
+                    metadata=metadata,
+                    parameters=parameter_values
+                )
+                
+                # Save the profile to file using the profile's to_dict method
+                import json
+                profile_data = profile.to_dict()
+                
+                with open(profile_path, 'w', encoding='utf-8') as f:
+                    json.dump(profile_data, f, indent=2, ensure_ascii=False)
+                
+                # Show success message
+                show_info(
+                    self.app,
+                    "Profile Saved",
+                    f"Profile successfully saved to:\n{profile_path}"
+                )
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"Profile saved successfully to: {profile_path}\n")
+                
+            except Exception as extract_error:
+                error_msg = f"Failed to extract UI values: {str(extract_error)}"
+                show_error(self.app, "Save Profile Error", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+        except Exception as e:
+            error_msg = f"Save profile failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Save Profile Error", error_msg)
+    
+    def _load_profile_to_ui(self):
+        """Load profile from file and populate UI."""
+        try:
+            # Show file open dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.askopenfilename(
+                title=self.i18n.get("load_profile", "Load Profile"),
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Load profile from file
+            try:
+                import json
+                with open(profile_path, 'r', encoding='utf-8') as f:
+                    profile_data = json.load(f)
+                
+                # Create UniversalProfile object
+                from models.universal_profile import UniversalProfile
+                from datetime import datetime
+                
+                # Use the from_dict method to properly reconstruct the profile
+                profile = UniversalProfile.from_dict(profile_data)
+                
+                # Populate UI with profile values
+                if hasattr(self.app, 'params_frame'):
+                    populate_result = self.app.params_frame.populate_ui_from_profile(profile)
+                    
+                    if populate_result.is_valid:
+                        show_info(
+                            self.app,
+                            "Profile Loaded",
+                            f"Profile successfully loaded from:\n{profile_path}"
+                        )
+                        
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message(f"Profile loaded successfully from: {profile_path}\n")
+                    else:
+                        # Show warnings if there were issues
+                        warning_msg = "Profile loaded with warnings:\n\n"
+                        warning_msg += "\n".join(populate_result.errors)
+                        show_warning(self.app, "Profile Load Warning", warning_msg)
+                else:
+                    show_error(
+                        self.app,
+                        "Load Profile Error",
+                        "Parameters frame is not available. Cannot load profile."
+                    )
+                
+            except Exception as load_error:
+                error_msg = f"Failed to load profile file: {str(load_error)}"
+                show_error(self.app, "Load Profile Error", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+        except Exception as e:
+            error_msg = f"Load profile failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile Error", error_msg)
+
+    def _update_ui_with_loaded_profile(self, profile):
+        """Update UI with loaded profile values."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or not self.app.parameters_frame:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: Parameters frame not available for UI update\n")
+                return
+            
+            # Use the parameters frame's populate method directly
+            if profile:
+                populate_result = self.app.parameters_frame.populate_ui_from_profile(profile)
+                
+                if populate_result.is_valid:
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message("INFO: UI updated successfully with loaded values\n")
+                else:
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message(f"WARNING: UI update completed with warnings: {populate_result.errors}\n")
+            else:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: No profile available for UI update\n")
+                    
+        except Exception as e:
+            error_msg = f"Error updating UI with loaded profile: {e}"
+            print(error_msg)
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
