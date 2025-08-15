@@ -82,6 +82,12 @@ class LogFrame(ctk.CTkFrame):
         Appends a message to the log text area with proper formatting and color coding.
         Uses buffering for better performance with rapid log messages.
         """
+        # Redirect DEBUG messages to console instead of UI log
+        if message.startswith("DEBUG:"):
+            # Print DEBUG messages to console
+            print(f"[DEBUG] {message[6:].strip()}")  # Remove "DEBUG:" prefix
+            return  # Don't add to UI log
+            
         # Store the message in the deque for history
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_entries.append((timestamp, message))
