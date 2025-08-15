@@ -190,7 +190,7 @@ class ConfigurationReaderService:
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
-            'get_hourmeter': r'(?:ACCONT:([^,#\s]+)|Get ACC ON Time:([^M]+) Minute)',
+            'get_hourmeter': r'(?:ACCONT:([^,#\s]+)|Get ACC ON Time:([^M]+) Minute|Set ACC ON Time:([^M]+) Minute OK)',
             
             # Legacy patterns for backward compatibility (LT32Pro format)
             'get_vibl': r'READOK:\s*VIBL=(\d+)',
@@ -1952,7 +1952,7 @@ class ConfigurationReaderService:
                         parsed_values['odometer'] = '0'  # Default to 0 when no value found
                     
                 elif command_type == 'get_hourmeter':
-                    # Handle both ACCONT:value and "Get ACC ON Time:value Minute" formats
+                    # Handle ACCONT:value, "Get ACC ON Time:value Minute", and "Set ACC ON Time:value Minute OK" formats
                     hourmeter_value = None
                     if match.group(1):  # ACCONT:value format
                         hourmeter_value = match.group(1)
@@ -1960,6 +1960,9 @@ class ConfigurationReaderService:
                     elif match.group(2):  # Get ACC ON Time:value Minute format
                         hourmeter_value = match.group(2)
                         self._log_message(f"DEBUG: Parsed hourmeter from 'Get ACC ON Time' format: '{hourmeter_value}'")
+                    elif match.group(3):  # Set ACC ON Time:value Minute OK format
+                        hourmeter_value = match.group(3)
+                        self._log_message(f"DEBUG: Parsed hourmeter from 'Set ACC ON Time' format: '{hourmeter_value}'")
                     
                     if hourmeter_value is not None:
                         # Validate that the hourmeter value is numeric
