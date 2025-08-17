@@ -344,7 +344,9 @@ class DeviceCommandMapper:
             # TCP ACK value mapping for Parameter UI List compliance
             'tcp_ack': {
                 'Enabled': '1',
-                'Disabled': '0'
+                'Disabled': '0',
+                True: '1',
+                False: '0'
             },
 
             # Angle report enabled mapping
@@ -381,9 +383,9 @@ class DeviceCommandMapper:
 
             # Sleep mode mapping - Updated to match Parameter UI List exactly
             'sleep_mode': {
-                'Desabilitado (Disabled)': '0',
-                'Sleep (Habilitado)': '1',
-                'Deep Sleep (Ultra-baixo)': '2'
+                'Desabilitado (Disabled)': 'Disabled',
+                'Sleep (Habilitado)': 'Sleep',
+                'Deep Sleep (Ultra-baixo)': 'Deep Sleep'
             },
 
             # Protocol mapping (GT06SEL values) - Updated to match Parameter UI List exactly
@@ -391,6 +393,13 @@ class DeviceCommandMapper:
                 'GT06 (0x60)': '0',
                 'CRX3 (0x22)': '1',
                 'CRX (0x12)': '2'
+            },
+            
+            # GT06 protocol mapping for validation
+            'gt06_protocol': {
+                'GT06 (0x60)': 'GT06-0x60',
+                'CRX3 (0x22)': 'CRX3',
+                'CRX (0x12)': 'GT06-0x12'
             },
 
             # Ignition mode mapping
@@ -892,9 +901,10 @@ class DeviceCommandMapper:
     def get_bulk_commands(self, parameters: Dict[str, Any], validate_commands: bool = True) -> List[str]:
         """
         Generate a list of commands for bulk sending based on LT32Pro documentation.
+        This method processes all flattened parameters from the UI and generates appropriate commands.
 
         Args:
-            parameters: Dictionary of parameter names and values
+            parameters: Dictionary of flattened parameter names and values from UI
             validate_commands: Whether to validate commands before including them
 
         Returns:
@@ -906,175 +916,184 @@ class DeviceCommandMapper:
         commands = []
         validation_errors = []
         validation_warnings = []
+        processed_params = set()  # Track which parameters we've already processed
 
-        # Removed ATSMS:CXCS#PROTOCOL=0# command since it doesn't exist
+        self.logger.info(f"Starting bulk command generation for {len(parameters)} parameters")
 
-        # Special handling for APN parameters - send a single command with all parameters
-        if 'apn_server' in parameters and parameters['apn_server'] is not None:
-            server = parameters['apn_server']
-            user = parameters.get('apn_user', '')
-            password = parameters.get('apn_password', '')
+        # Define parameter groups for compound commands that need multiple parameters
+        compound_groups = [
+            # Network Configuration (Critical - send first)
+            {
+                'name': 'apn',
+                'params': ['apn_server', 'apn_user', 'apn_password'],
+                'required': ['apn_server'],  # At minimum we need the server
+                'method': self._generate_apn_command
+            },
+            {
+                'name': 'server',
+                'params': ['server_address', 'server_port'],
+                'required': ['server_address', 'server_port'],  # Both required
+                'method': self._generate_server_command
+            },
             
-            # Format the APN command with all available parameters
-            apn_command = f"{self.command_prefix}APN,{server},{user},{password}#"
+            # Timing Configuration
+            {
+                'name': 'timer',
+                'params': ['moving_time', 'stopped_time'],
+                'required': ['moving_time', 'stopped_time'],  # Both required
+                'method': self._generate_timer_command
+            },
+            {
+                'name': 'heartbeat',
+                'params': ['moving_heartbeat', 'stopped_heartbeat'],
+                'required': ['moving_heartbeat', 'stopped_heartbeat'],  # Both required
+                'method': self._generate_heartbeat_command
+            },
             
-            # Validate the APN command if validation is enabled
-            if validate_commands:
-                validation_context = ValidationContext(
-                    command_type='apn',
-                    source='bulk_commands',
-                    timestamp=datetime.now()
-                )
-                
-                validation_result = self.validation_gateway.validate_command_before_send(
-                    apn_command, validation_context
-                )
-                
-                if not validation_result.is_valid:
-                    error_msg = f"APN command validation failed: {validation_result.error_message}"
-                    if validation_result.suggestions:
-                        error_msg += f". Suggestions: {'; '.join(validation_result.suggestions)}"
-                    
-                    self.logger.error(f"APN command blocked by validation: {apn_command}")
-                    self.validation_gateway.log_blocked_command(validation_result, validation_context)
-                    
-                    # APN is critical, so raise an error
-                    raise ValueError(error_msg)
-                
-                self.logger.debug(f"APN command validation passed: {apn_command}")
+            # Ignition Configuration
+            {
+                'name': 'ignition',
+                'params': ['ignition_mode', 'on_voltage', 'off_voltage'],
+                'required': ['ignition_mode'],  # Mode is required, voltages are optional
+                'method': self._generate_ignition_command
+            },
             
-            commands.append(apn_command)
-
-        # Define command sequence for proper device configuration according to LT32Pro documentation
-        sequence = [
-            # Skip APN parameters as they're handled separately
-            # 'apn_server', 'apn_user', 'apn_password',
-            # Then configure server settings
-            'server_ip', 'server_port', 'backup_server_ip', 'backup_server_port',
-            # Configure timer settings
-            'timer_ign_on', 'timer_ign_off',
-            # Configure heartbeat settings (only include heartbeat_ign_on which includes heartbeat_ign_off)
-            'heartbeat_ign_on',
-            # Configure vibration settings
-            'vibration', 'vibration_window', 'sensitivity',
-            # Configure defense settings
-            'defense_time',
-            # Configure network settings
-            'network_select',
-            # Configure VoLTE settings
-            'volte_switch',
-            # Configure sleep mode settings
-            'sleep_mode',
-            # Configure sleep time settings
-            'sleep_time',
-            # Configure ignition settings
-            'ignition_type', 'ignition_config',
-            # Configure other device behavior
-            'lock_type', 'curve_sensor',
-            # Configure protocol settings
-            'gt06_protocol',
-            # Configure movement detection
-            'blind_speed',
-            # Configure relay settings
-            'relay_gps_check'
+            # Speed Alert Configuration
+            {
+                'name': 'speed_alert',
+                'params': ['speed_alert_enabled', 'speed_detection_time', 'speed_limit', 'speed_alert_type'],
+                'required': ['speed_alert_enabled'],  # At minimum we need enabled status
+                'method': self._generate_speed_alert_command
+            },
+            
+            # Power Alert Configuration
+            {
+                'name': 'main_power_alert',
+                'params': ['main_power_alert_enabled', 'main_power_alert_type', 'main_power_detection_time', 'main_power_min_charge_time'],
+                'required': ['main_power_alert_enabled'],
+                'method': self._generate_main_power_alert_command
+            },
+            
+            # Angle Report Configuration
+            {
+                'name': 'angle_report',
+                'params': ['angle_report_enabled', 'angle_report_min_speed', 'angle_report_angle_variation'],
+                'required': ['angle_report_enabled'],
+                'method': self._generate_angle_report_command
+            },
+            
+            # Vibration Configuration
+            {
+                'name': 'vibration',
+                'params': ['vibration_enabled', 'vibration_level'],
+                'required': ['vibration_enabled'],
+                'method': self._generate_vibration_command
+            },
+            
+            # Jammer Relay Configuration
+            {
+                'name': 'jammer_relay',
+                'params': ['jammer_relay_enabled', 'jammer_output_operation', 'jammer_confirmation_time', 'jammer_speed_limit'],
+                'required': ['jammer_relay_enabled'],
+                'method': self._generate_jammer_relay_command
+            }
         ]
-
-        # Generate commands in the defined sequence
-        for param in sequence:
-            # Skip APN parameters as they're handled separately
-            if param in ['apn_server', 'apn_user', 'apn_password', 'apn_full']:
-                continue
-                
-            if param in parameters and parameters[param] is not None:
+        
+        # Process compound commands first
+        for group in compound_groups:
+            # Check if we have the required parameters for this group
+            has_required = all(param in parameters and parameters[param] is not None and parameters[param] != '' 
+                             for param in group['required'])
+            
+            if has_required:
                 try:
-                    # Some parameters need context from other parameters
-                    context = {}
-
-                    # Handle timer parameters that need both values
-                    if param == 'timer_ign_off' and 'timer_ign_on' in parameters:
-                        context['timer_ign_on'] = parameters['timer_ign_on']
-                    elif param == 'timer_ign_on' and 'timer_ign_off' in parameters:
-                        context['timer_ign_off'] = parameters['timer_ign_off']
-
-                    # Handle heartbeat parameters that need both values
-                    elif param == 'heartbeat_ign_off' and 'heartbeat_ign_on' in parameters:
-                        context['heartbeat_ign_on'] = parameters['heartbeat_ign_on']
-                    elif param == 'heartbeat_ign_on' and 'heartbeat_ign_off' in parameters:
-                        context['heartbeat_ign_off'] = parameters['heartbeat_ign_off']
-
-                    # Handle APN parameters for the full command
-                    elif param == 'apn_full':
-                        # Skip this parameter as we'll handle APN separately
-                        continue
-
-                    # Handle server parameters that need IP and port
-                    elif param == 'server_port' and 'server_ip' in parameters:
-                        context['ip'] = parameters['server_ip']
-                    elif param == 'server_ip' and 'server_port' in parameters:
-                        context['port'] = parameters['server_port']
-
-                    # Handle vibration window parameters
-                    elif param == 'vibration_window':
-                        # For vibration_window, we need the vibration value as context
-                        if 'vibration' in parameters:
-                            context['window'] = parameters['vibration']
+                    # Collect all available parameters for this group
+                    group_params = {}
+                    for param in group['params']:
+                        if param in parameters and parameters[param] is not None and parameters[param] != '':
+                            group_params[param] = parameters[param]
+                    
+                    if group_params:  # Only process if we have some parameters
+                        command = group['method'](group_params, validate_commands)
+                        if command:
+                            commands.append(command)
+                            self.logger.info(f"Added bulk command for {group['name']}: {command}")
+                            # Mark these parameters as processed
+                            processed_params.update(group['params'])
                         else:
-                            # Skip this parameter if we don't have the required context
-                            self._log_message(f"Skipping {param} due to missing vibration parameter")
-                            continue
-                    elif param == 'vibration':
-                        # For vibration, we might need to include window context
-                        if 'vibration_window' in parameters:
-                            context['window'] = parameters['vibration_window']
-
-                    try:
-                        command = self.get_command(param, parameters[param], context, 
-                                                 confirm_destructive=True, validate_command=validate_commands)
-                        commands.append(command)
-                    except ValueError as e:
-                        error_msg = str(e)
+                            self.logger.warning(f"No command generated for group: {group['name']}")
+                            
+                except ValueError as e:
+                    if validate_commands and group['name'] in ['apn', 'server']:
+                        error_msg = f"{group['name'].upper()} command validation failed: {str(e)}"
+                        self.logger.error(error_msg)
+                        validation_errors.append(f"{group['name']}: {error_msg}")
+                    else:
+                        warning_msg = f"Command validation failed for {group['name']}: {str(e)}"
+                        validation_warnings.append(f"{group['name']}: {warning_msg}")
+                        self.logger.warning(f"Non-critical parameter validation failed: {group['name']}")
                         
-                        # Check if this is a validation error
-                        if "Command validation failed" in error_msg:
-                            # Determine if this is a critical parameter that should block the entire operation
-                            critical_params = ['apn_server', 'server_ip', 'server_port']
-                            if param in critical_params:
-                                self.logger.error(f"Critical parameter validation failed: {param}")
-                                validation_errors.append(f"{param}: {error_msg}")
-                                continue  # Don't raise immediately, collect all errors first
-                            else:
-                                # Non-critical parameter, log as warning and continue
-                                self.logger.warning(f"Non-critical parameter validation failed: {param}")
-                                validation_warnings.append(f"{param}: {error_msg}")
-                                continue
-                        
-                        # Check if we're missing a required context parameter
-                        if "Missing required context parameter" in error_msg:
-                            # Try to extract the missing parameter name
-                            import re
-                            match = re.search(r'parameter: (\w+)', error_msg)
-                            if match:
-                                missing_param = match.group(1)
-                                # Check if the missing parameter is available in parameters
-                                if missing_param in parameters:
-                                    # Add the missing parameter to context and try again
-                                    context[missing_param] = parameters[missing_param]
-                                    try:
-                                        command = self.get_command(param, parameters[param], context,
-                                                                 confirm_destructive=True, validate_command=validate_commands)
-                                        commands.append(command)
-                                        continue
-                                    except ValueError:
-                                        pass  # If it still fails, fall through to the error handling below
-                        
-                        # Log error and skip parameters that can't be formatted
-                        self.logger.warning(f"Error formatting command for {param}: {error_msg}")
-                        continue
                 except Exception as e:
-                    # Log error and skip parameters that can't be formatted
-                    self.logger.warning(f"Error formatting command for {param}: {str(e)}")
+                    self.logger.error(f"Unexpected error generating command for {group['name']}: {str(e)}")
+                    if validate_commands and group['name'] in ['apn', 'server']:
+                        validation_errors.append(f"{group['name']}: {str(e)}")
+        
+        # Process individual parameters that weren't part of compound commands
+        individual_params = [
+            'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
+            'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter'
+        ]
+        
+        for param_name in individual_params:
+            if param_name not in processed_params and param_name in parameters:
+                param_value = parameters[param_name]
+                
+                # Skip None values and empty strings
+                if param_value is None or param_value == '':
                     continue
-
+                    
+                try:
+                    command = self._generate_individual_command(param_name, param_value, validate_commands)
+                    if command:
+                        commands.append(command)
+                        self.logger.info(f"Added bulk command for {param_name}: {command}")
+                        processed_params.add(param_name)
+                    else:
+                        self.logger.warning(f"No command generated for parameter: {param_name}")
+                        
+                except ValueError as e:
+                    if validate_commands:
+                        warning_msg = f"Command validation failed for {param_name}: {str(e)}"
+                        validation_warnings.append(f"{param_name}: {warning_msg}")
+                        self.logger.warning(f"Non-critical parameter validation failed: {param_name}")
+                    else:
+                        self.logger.warning(f"Command generation failed for {param_name}: {str(e)}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Unexpected error generating command for {param_name}: {str(e)}")
+        
+        # Process any remaining parameters that weren't explicitly handled
+        remaining_params = set(parameters.keys()) - processed_params
+        if remaining_params:
+            self.logger.info(f"Processing {len(remaining_params)} additional parameters: {remaining_params}")
+            for param_name in remaining_params:
+                param_value = parameters[param_name]
+                
+                # Skip None values, empty strings, and metadata parameters
+                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version']:
+                    continue
+                    
+                try:
+                    command = self._generate_individual_command(param_name, param_value, validate_commands)
+                    if command:
+                        commands.append(command)
+                        self.logger.info(f"Added bulk command for additional parameter {param_name}: {command}")
+                    else:
+                        self.logger.debug(f"No command generated for additional parameter: {param_name}")
+                        
+                except Exception as e:
+                    self.logger.debug(f"Could not generate command for additional parameter {param_name}: {str(e)}")
+        
         # Check if we have critical validation errors that should block the operation
         if validation_errors:
             error_summary = f"Critical parameter validation failed: {'; '.join(validation_errors)}"
@@ -1086,7 +1105,448 @@ class DeviceCommandMapper:
             warning_summary = f"Non-critical parameter validation warnings: {'; '.join(validation_warnings)}"
             self.logger.warning(warning_summary)
 
+        self.logger.info(f"Generated {len(commands)} bulk commands from {len(parameters)} parameters")
         return commands
+    
+    # Format methods for bulk command generation
+    def format_apn_command(self, apn: str, user: str = "", password: str = "") -> str:
+        """Format APN configuration command."""
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                command = f"ATSMS:APN,{apn},{user},{password}#"
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+                return command
+            except ValueError as e:
+                raise ValueError(f"APN command validation failed: {str(e)}")
+        return f"ATSMS:APN,{apn},{user},{password}#"
+    
+    def _determine_server_type(self, address: str) -> str:
+        """Determine server type: 0 for IP address, 1 for domain name."""
+        import re
+        # Check if address is an IP address (IPv4)
+        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+        if re.match(ip_pattern, address):
+            return '0'  # IP address
+        else:
+            return '1'  # Domain name
+    
+    def format_server_command(self, address: str, port: str) -> str:
+        """Format server configuration command."""
+        # Determine server type (0 for IP, 1 for domain)
+        server_type = self._determine_server_type(address)
+        command = f"ATSMS:SERVER,{server_type},{address},{port},0#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Server command validation failed: {str(e)}")
+        return command
+    
+    def format_timer_command(self, moving_time: int, stopped_time: int) -> str:
+        """Format timer configuration command."""
+        command = f"ATSMS:TIMER,{moving_time},{stopped_time}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Timer command validation failed: {str(e)}")
+        return command
+    
+    def format_hbt_command(self, moving_hbt: int, stopped_hbt: int) -> str:
+        """Format heartbeat configuration command."""
+        command = f"ATSMS:HBT,{moving_hbt},{stopped_hbt}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Heartbeat command validation failed: {str(e)}")
+        return command
+    
+    def format_ignition_command(self, ignition_mode: str, on_voltage: float = None, off_voltage: float = None) -> str:
+        """Format ignition configuration command."""
+        if ignition_mode == 'Virtual por bateria (Virtual by battery)':
+            if on_voltage is None or off_voltage is None:
+                raise ValueError("On and off voltages are required for virtual battery ignition mode")
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG={on_voltage}-{off_voltage}"
+        else:
+            command = f"ATSMS:SZCS#ACCLINE=0"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Ignition command validation failed: {str(e)}")
+        return command
+    
+    def format_speed_alert_command(self, enabled: bool, detection_time: int, speed_limit: int, alert_type: str) -> str:
+        """Format speed alert configuration command."""
+        enabled_str = 'ON' if enabled else 'OFF'
+        alert_type_code = self._map_alert_type(alert_type)
+        command = f"ATSMS:SPEED,{enabled_str},{detection_time},{speed_limit},{alert_type_code}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Speed alert command validation failed: {str(e)}")
+        return command
+    
+    def format_main_power_alert_command(self, enabled: bool, alert_type: str, detection_time: int, min_charge_time: int) -> str:
+        """Format main power alert configuration command."""
+        enabled_str = 'ON' if enabled else 'OFF'
+        alert_type_code = self._map_alert_type(alert_type)
+        command = f"ATSMS:POWERALM,{enabled_str},{alert_type_code},{detection_time},{min_charge_time}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Main power alert command validation failed: {str(e)}")
+        return command
+    
+    def format_angle_report_command(self, enabled: bool, min_speed: int, angle_variation: int) -> str:
+        """Format angle report configuration command."""
+        if enabled:
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed}-{angle_variation}"
+        else:
+            command = f"ATSMS:SZCS#ANGLEVALUE=0-0"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Angle report command validation failed: {str(e)}")
+        return command
+    
+    def format_vibration_sensitivity_command(self, enabled: bool, level: int) -> str:
+        """Format vibration sensitivity configuration command."""
+        if enabled:
+            command = f"ATSMS:SZCS#VIBL={level}"
+        else:
+            command = f"ATSMS:SZCS#VIBL=0"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Vibration sensitivity command validation failed: {str(e)}")
+        return command
+    
+    def format_jammer_relay_command(self, enabled: bool, output_operation: str, confirmation_time: int, speed_limit: int) -> str:
+        """Format jammer relay configuration command."""
+        if enabled:
+            operation_code = self._map_jammer_operation(output_operation)
+            command = f"ATSMS:JAMRELAY,{operation_code},{confirmation_time},{speed_limit},0,0,0,0#"
+        else:
+            command = f"ATSMS:JAMRELAY,0,0,0,0,0,0,0#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Jammer relay command validation failed: {str(e)}")
+        return command
+    
+    def _map_protocol_value(self, protocol: str) -> str:
+        """Map protocol UI value to device command value."""
+        protocol_mapping = {
+            'GT06 (0x60)': '0',
+            'CRX3 (0x22)': '1', 
+            'CRX (0x12)': '2'
+        }
+        return protocol_mapping.get(protocol, '0')  # Default to GT06
+    
+    def format_protocol_command(self, protocol: str) -> str:
+        """Format protocol configuration command."""
+        protocol_code = self._map_protocol_value(protocol)
+        command = f"ATSMS:SZCS#GT06SEL={protocol_code}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Protocol command validation failed: {str(e)}")
+        return command
+    
+    def format_tcp_ack_command(self, tcp_ack: bool) -> str:
+        """Format TCP ACK configuration command."""
+        ack_value = '1' if tcp_ack else '0'
+        command = f"ATSMS:SZCS#POSBYACK={ack_value}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"TCP ACK command validation failed: {str(e)}")
+        return command
+    
+    def format_speed_buzzer_command(self, enabled: bool) -> str:
+        """Format speed buzzer configuration command."""
+        buzzer_value = '1' if enabled else '0'
+        command = f"ATSMS:SZCS#SPD_LED_SHOW={buzzer_value}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Speed buzzer command validation failed: {str(e)}")
+        return command
+    
+    def _map_sleep_mode_value(self, sleep_mode: str) -> str:
+        """Map sleep mode UI value to device command value."""
+        sleep_mode_mapping = {
+            'Desabilitado (Disabled)': '0',
+            'Sleep (Habilitado)': '1',
+            'Deep Sleep (Ultra-baixo)': '2'
+        }
+        return sleep_mode_mapping.get(sleep_mode, '0')  # Default to disabled
+    
+    def format_sleep_mode_command(self, sleep_mode: str) -> str:
+        """Format sleep mode configuration command."""
+        mode_code = self._map_sleep_mode_value(sleep_mode)
+        command = f"ATSMS:SZCS#SLPDISCONNECT={mode_code}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Sleep mode command validation failed: {str(e)}")
+        return command
+    
+    def format_sleep_time_command(self, sleep_time: int) -> str:
+        """Format sleep time configuration command."""
+        command = f"ATSMS:SZCS#SLEEPT={sleep_time}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Sleep time command validation failed: {str(e)}")
+        return command
+    
+    def format_backup_battery_alert_command(self, enabled: bool) -> str:
+        """Format backup battery alert configuration command."""
+        state = 'ON' if enabled else 'OFF'
+        command = f"ATSMS:BATALM,{state},0#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Backup battery alert command validation failed: {str(e)}")
+        return command
+    
+    def format_jammer_detection_command(self, enabled: bool) -> str:
+        """Format jammer detection configuration command."""
+        state = 'ON' if enabled else 'OFF'
+        command = f"ATSMS:JAMMER,{state},0#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Jammer detection command validation failed: {str(e)}")
+        return command
+    
+    def format_odometer_command(self, value: int) -> str:
+        """Format odometer configuration command."""
+        command = f"ATSMS:MILEAGE={value}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Odometer command validation failed: {str(e)}")
+        return command
+    
+    def format_hourmeter_command(self, value: int) -> str:
+        """Format hourmeter configuration command."""
+        command = f"ATSMS:ACCONT={value}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Hourmeter command validation failed: {str(e)}")
+        return command
+
+    def _generate_apn_command(self, apn_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate APN command from flattened parameters."""
+        try:
+            apn_server = apn_params.get('apn_server', '')
+            apn_user = apn_params.get('apn_user', '')
+            apn_password = apn_params.get('apn_password', '')
+            
+            if not apn_server:
+                self.logger.warning("APN server is required for APN command")
+                return None
+                
+            return self.format_apn_command(apn_server, apn_user, apn_password)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating APN command: {str(e)}")
+            return None
+    
+    def _generate_server_command(self, server_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate server command from flattened parameters."""
+        try:
+            server_address = server_params.get('server_address')
+            server_port = server_params.get('server_port')
+            
+            if not server_address or not server_port:
+                self.logger.warning("Both server address and port are required for server command")
+                return None
+                
+            return self.format_server_command(server_address, server_port)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating server command: {str(e)}")
+            return None
+    
+    def _generate_timer_command(self, timer_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate timer command from flattened parameters."""
+        try:
+            moving_time = timer_params.get('moving_time')
+            stopped_time = timer_params.get('stopped_time')
+            
+            if moving_time is None or stopped_time is None:
+                self.logger.warning("Both moving and stopped times are required for timer command")
+                return None
+                
+            return self.format_timer_command(int(float(moving_time)), int(float(stopped_time)))
+            
+        except Exception as e:
+            self.logger.error(f"Error generating timer command: {str(e)}")
+            return None
+    
+    def _generate_heartbeat_command(self, hbt_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate heartbeat command from flattened parameters."""
+        try:
+            moving_hbt = hbt_params.get('moving_heartbeat')
+            stopped_hbt = hbt_params.get('stopped_heartbeat')
+            
+            if moving_hbt is None or stopped_hbt is None:
+                self.logger.warning("Both moving and stopped heartbeats are required for heartbeat command")
+                return None
+                
+            return self.format_hbt_command(int(float(moving_hbt)), int(float(stopped_hbt)))
+            
+        except Exception as e:
+            self.logger.error(f"Error generating heartbeat command: {str(e)}")
+            return None
+    
+    def _generate_ignition_command(self, ignition_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate ignition command from flattened parameters."""
+        try:
+            ignition_mode = ignition_params.get('ignition_mode')
+            on_voltage = ignition_params.get('on_voltage')
+            off_voltage = ignition_params.get('off_voltage')
+            
+            if not ignition_mode:
+                self.logger.warning("Ignition mode is required for ignition command")
+                return None
+                
+            return self.format_ignition_command(ignition_mode, on_voltage, off_voltage)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating ignition command: {str(e)}")
+            return None
+    
+    def _generate_speed_alert_command(self, speed_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate speed alert command from flattened parameters."""
+        try:
+            enabled = speed_params.get('speed_alert_enabled', False)
+            detection_time = speed_params.get('speed_detection_time', 0)
+            speed_limit = speed_params.get('speed_limit', 0)
+            alert_type = speed_params.get('speed_alert_type', 'Apenas GPRS')
+            
+            return self.format_speed_alert_command(enabled, detection_time, speed_limit, alert_type)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating speed alert command: {str(e)}")
+            return None
+    
+    def _generate_main_power_alert_command(self, power_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate main power alert command from flattened parameters."""
+        try:
+            enabled = power_params.get('main_power_alert_enabled', False)
+            alert_type = power_params.get('main_power_alert_type', 'Apenas GPRS')
+            detection_time = power_params.get('main_power_detection_time', 10)
+            min_charge_time = power_params.get('main_power_min_charge_time', 10)
+            
+            return self.format_main_power_alert_command(enabled, alert_type, detection_time, min_charge_time)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating main power alert command: {str(e)}")
+            return None
+    
+    def _generate_angle_report_command(self, angle_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate angle report command from flattened parameters."""
+        try:
+            enabled = angle_params.get('angle_report_enabled', False)
+            min_speed = angle_params.get('angle_report_min_speed', 8)
+            angle_variation = angle_params.get('angle_report_angle_variation', 15)
+            
+            return self.format_angle_report_command(enabled, min_speed, angle_variation)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating angle report command: {str(e)}")
+            return None
+    
+    def _generate_vibration_command(self, vibration_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate vibration command from flattened parameters."""
+        try:
+            enabled = vibration_params.get('vibration_enabled', False)
+            level = vibration_params.get('vibration_level', 1)
+            
+            return self.format_vibration_sensitivity_command(enabled, level)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating vibration command: {str(e)}")
+            return None
+    
+    def _generate_jammer_relay_command(self, jammer_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate jammer relay command from flattened parameters."""
+        try:
+            enabled = jammer_params.get('jammer_relay_enabled', False)
+            output_operation = jammer_params.get('jammer_output_operation', 'Sem Ação')
+            confirmation_time = jammer_params.get('jammer_confirmation_time', 80)
+            speed_limit = jammer_params.get('jammer_speed_limit', 5)
+            
+            return self.format_jammer_relay_command(enabled, output_operation, confirmation_time, speed_limit)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating jammer relay command: {str(e)}")
+            return None
+    
+    def _generate_individual_command(self, param_name: str, param_value: Any, validate_commands: bool) -> Optional[str]:
+        """Generate command for individual parameters."""
+        try:
+            # Map individual parameters to their command methods
+            individual_mapping = {
+                'protocol': lambda v: self.format_protocol_command(v),
+                'tcp_ack': lambda v: self.format_tcp_ack_command(v),
+                'speed_buzzer': lambda v: self.format_speed_buzzer_command(v),
+                'sleep_mode': lambda v: self.format_sleep_mode_command(v),
+                'sleep_time': lambda v: self.format_sleep_time_command(int(float(v)) if v is not None else 0),
+                'backup_battery_alert': lambda v: self.format_backup_battery_alert_command(v),
+                'jammer_detection': lambda v: self.format_jammer_detection_command(v),
+                'odometer': lambda v: self.format_odometer_command(v),
+                'hourmeter': lambda v: self.format_hourmeter_command(v),
+            }
+            
+            if param_name in individual_mapping:
+                return individual_mapping[param_name](param_value)
+            else:
+                self.logger.debug(f"No individual command mapping for parameter: {param_name}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error generating individual command for {param_name}: {str(e)}")
+            return None
 
     def get_validation_statistics(self) -> Dict[str, Any]:
         """
@@ -1431,7 +1891,7 @@ class DeviceCommandMapper:
         
         # Handle conditional commands (like ignition type)
         if parameter_name == 'ignition_type':
-            return self._generate_ignition_command(values)
+            return self._generate_ignition_command_legacy(values)
         # Handle toggle parameters with custom templates that aren't single-field friendly
         if parameter_name == 'jammer_detection':
             return self._generate_jammer_detection_command(values)
@@ -1480,11 +1940,11 @@ class DeviceCommandMapper:
                 commands.extend([accline_cmd, acc_cfg_cmd])
             else:
                 # Single command for physical/accelerometer modes
-                commands.append(self._generate_ignition_command(values))
+                commands.append(self._generate_ignition_command_legacy(values))
         
         elif parameter_name == 'server_settings':
             # Server settings might need backup server configuration too
-            main_cmd = self._generate_server_command(values)
+            main_cmd = self._generate_server_command(values, True)
             commands.append(main_cmd)
             
             # If backup server is configured, add backup commands
@@ -1581,8 +2041,8 @@ class DeviceCommandMapper:
         
         return commands
     
-    def _generate_ignition_command(self, values: Dict[str, Any]) -> str:
-        """Generate ignition command based on ignition mode."""
+    def _generate_ignition_command_legacy(self, values: Dict[str, Any]) -> str:
+        """Generate ignition command based on ignition mode (legacy method)."""
         ignition_mode = values.get('ignition_mode')
         if not ignition_mode:
             raise ValueError("ignition_mode is required for ignition_type parameter")
@@ -1605,23 +2065,23 @@ class DeviceCommandMapper:
         """Generate command for parameters with multiple fields."""
         # Handle specific multi-field parameters first
         if param_config.name == 'apn_settings':
-            return self._generate_apn_command(values)
+            return self._generate_apn_command(values, True)
         elif param_config.name == 'server_settings':
-            return self._generate_server_command(values)
+            return self._generate_server_command(values, True)
         elif param_config.name == 'report_intervals':
-            return self._generate_timer_command(values)
+            return self._generate_timer_command(values, True)
         elif param_config.name == 'heartbeat_intervals':
-            return self._generate_heartbeat_command(values)
+            return self._generate_heartbeat_command(values, True)
         elif param_config.name == 'speed_alert':
-            return self._generate_speed_alert_command(values)
+            return self._generate_speed_alert_command(values, True)
         elif param_config.name == 'angle_report':
-            return self._generate_angle_report_command(values)
+            return self._generate_angle_report_command(values, True)
         elif param_config.name == 'main_power_alert':
-            return self._generate_power_alert_command(values)
+            return self._generate_power_alert_command(values, True)
         elif param_config.name == 'jammer_relay_action':
-            return self._generate_jammer_relay_command(values)
+            return self._generate_jammer_relay_command(values, True)
         elif param_config.name == 'vibration_sensitivity':
-            return self._generate_vibration_sensitivity_command(values)
+            return self._generate_vibration_sensitivity_command(values, True)
         else:
             # Generic multi-field command generation
             # Get the set command template - try different command keys
@@ -1632,163 +2092,6 @@ class DeviceCommandMapper:
                 raise ValueError(f"No set command defined for parameter {param_config.name}")
             
             return self._generate_generic_multi_field_command(param_config, values, set_command)
-    
-    def _generate_apn_command(self, values: Dict[str, Any]) -> str:
-        """Generate APN command: APN,<apn>,<user>,<password>#"""
-        apn = values.get('apn', '')
-        user = values.get('user', '')
-        password = values.get('password', '')
-        
-        command = f"APN,{apn},{user},{password}#"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_server_command(self, values: Dict[str, Any]) -> str:
-        """Generate SERVER command: SERVER,<type>,<address>,<port>,0#"""
-        address = values.get('address', '')
-        port = values.get('port', '')
-        
-        # Determine server type (0 for IP, 1 for domain)
-        server_type = self._determine_server_type(address)
-        
-        command = f"SERVER,{server_type},{address},{port},0#"
-        return f"{self.command_prefix}{command}"
-    
-    def _determine_server_type(self, address: str) -> int:
-        """
-        Determine server type based on address format.
-        
-        Args:
-            address: Server address (IP or domain/URL)
-            
-        Returns:
-            0 for IP address, 1 for domain/URL
-        """
-        if not address:
-            return 0  # Default to IP
-        
-        # Check if it's an IP address
-        ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
-        if re.match(ip_pattern, address):
-            # Validate IP address ranges
-            parts = address.split('.')
-            if all(0 <= int(part) <= 255 for part in parts):
-                return 0  # Valid IP address
-        
-        # Check if it's a URL with protocol
-        url_pattern = r'^https?://.*'
-        if re.match(url_pattern, address):
-            return 1  # URL
-        
-        # Check if it's a domain name
-        domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$'
-        if re.match(domain_pattern, address):
-            return 1  # Domain
-        
-        # Default to domain/URL for anything else
-        return 1
-    
-    def _generate_timer_command(self, values: Dict[str, Any]) -> str:
-        """Generate TIMER command: TIMER,<moving_time>,<stopped_time>#"""
-        moving_time = values.get('moving_time', '')
-        stopped_time = values.get('stopped_time', '')
-        
-        command = f"TIMER,{moving_time},{stopped_time}#"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_heartbeat_command(self, values: Dict[str, Any]) -> str:
-        """Generate HBT command: HBT,<moving_heartbeat>,<stopped_heartbeat>#"""
-        moving_heartbeat = values.get('moving_heartbeat', '')
-        stopped_heartbeat = values.get('stopped_heartbeat', '')
-        
-        command = f"HBT,{moving_heartbeat},{stopped_heartbeat}#"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_speed_alert_command(self, values: Dict[str, Any]) -> str:
-        """Generate SPEED command: SPEED,<enabled>,<detection_time>,<speed_limit>,<alert_type>#"""
-        enabled = self._map_boolean_to_on_off(values.get('enabled', False))
-        detection_time = values.get('detection_time', '')
-        speed_limit = values.get('speed_limit', '')
-        alert_type = self._map_alert_type(values.get('alert_type', 'Apenas GPRS'))
-        
-        command = f"SPEED,{enabled},{detection_time},{speed_limit},{alert_type}#"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_angle_report_command(self, values: Dict[str, Any]) -> str:
-        """Generate ANGLEVALUE command: SZCS#ANGLEVALUE=<min_speed>-<angle_variation>"""
-        if not values.get('enabled', False):
-            # If disabled, we might need a different command or skip
-            return f"{self.command_prefix}SZCS#ANGLEVALUE=0-0"
-        
-        min_speed = values.get('min_speed', '')
-        angle_variation = values.get('angle_variation', '')
-        
-        command = f"SZCS#ANGLEVALUE={min_speed}-{angle_variation}"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_power_alert_command(self, values: Dict[str, Any]) -> str:
-        """Generate POWERALM command: POWERALM,<enabled>,<alert_type>,<detection_time>,<min_charge_time>#"""
-        enabled = self._map_boolean_to_on_off(values.get('enabled', False))
-        alert_type = self._map_alert_type(values.get('alert_type', 'Apenas GPRS'))
-        detection_time = values.get('detection_time', '')
-        min_charge_time = values.get('min_charge_time', '')
-        
-        command = f"POWERALM,{enabled},{alert_type},{detection_time},{min_charge_time}#"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_jammer_relay_command(self, values: Dict[str, Any]) -> str:
-        """Generate JAMRELAY command: JAMRELAY,<op>,<time>,<speed>,<D>,<E>,<F>,<G>#"""
-        enabled = values.get('enabled', False)
-        if not enabled:
-            # If disabled, set operation to 0 (no action)
-            command = "JAMRELAY,0,0,0,0,0,0,0#"
-        else:
-            operation = self._map_jammer_operation(values.get('output_operation', 'Sem Ação'))
-            confirmation_time = self._validate_number_value(values.get('confirmation_time', '0'), '0-1800')
-            speed_limit = self._validate_number_value(values.get('speed_limit', '0'), '0-255')
-            # D, E, F, G parameters are not specified in the UI, using defaults
-            command = f"JAMRELAY,{operation},{confirmation_time},{speed_limit},0,0,0,0#"
-        
-        return f"{self.command_prefix}{command}"
-
-    def _generate_jammer_detection_command(self, values: Dict[str, Any]) -> str:
-        """Generate JAMMER toggle command: JAMMER,<state>,<mode>#
-        Defaults mode to 0 (GPRS) when not provided.
-        Accepts values as {'value': bool} or {'enabled': bool}.
-        """
-        enabled = values.get('value') if isinstance(values, dict) else False
-        if isinstance(values, dict) and 'enabled' in values:
-            enabled = values.get('enabled')
-        state = 'ON' if bool(enabled) else 'OFF'
-        mode = '0'
-        command = f"JAMMER,{state},{mode}#"
-        return f"{self.command_prefix}{command}"
-
-    def _generate_backup_battery_alert_command(self, values: Dict[str, Any]) -> str:
-        """Generate BATALM toggle command: BATALM,<state>,<mode>#
-        Defaults mode to 0 (GPRS) when not provided.
-        Accepts values as {'value': bool} or {'enabled': bool}.
-        """
-        enabled = values.get('value') if isinstance(values, dict) else False
-        if isinstance(values, dict) and 'enabled' in values:
-            enabled = values.get('enabled')
-        state = 'ON' if bool(enabled) else 'OFF'
-        mode = '0'
-        command = f"BATALM,{state},{mode}#"
-        return f"{self.command_prefix}{command}"
-    
-    def _generate_single_field_command(self, param_config, values: Dict[str, Any]) -> str:
-        """Generate command for single-field parameters."""
-        set_command = param_config.commands.get('set')
-        if not set_command:
-            raise ValueError(f"No set command defined for parameter {param_config.name}")
-        
-        # Get the parameter value with proper mapping
-        value = self._get_mapped_parameter_value(param_config, values)
-        
-        # Replace placeholders in command template using smart replacement
-        command = self._replace_command_placeholders(set_command, param_config.name, value)
-        
-        return f"{self.command_prefix}{command}"
     
     def _get_mapped_parameter_value(self, param_config: ParameterConfig, values: Dict[str, Any]) -> Any:
         """Get parameter value with appropriate mapping based on UI element type."""

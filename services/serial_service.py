@@ -239,11 +239,11 @@ class SerialService:
                 
                 return False
             
-            # Log successful validation
+            # Log successful validation to console
             if validation_result.extracted_parameters:
                 param_info = ", ".join([f"{k}={v}" for k, v in validation_result.extracted_parameters.items() if not k.startswith('_')])
                 if param_info:
-                    self.app.log_frame.log_message(f"INFO: Command validated - Parameters: {param_info}\n")
+                    print(f"INFO: Command validated - Parameters: {param_info}")
         
         # Send the command
         try:
@@ -433,8 +433,8 @@ class SerialService:
         self.queue_thread = threading.Thread(target=self._process_command_queue, daemon=True)
         self.queue_thread.start()
         
-        # Log the start of bulk operation
-        self.app.log_frame.log_message("INFO: Starting bulk command operation\n")
+        # Log the start of bulk operation to console
+        print("INFO: Starting bulk command operation")
         
     def _process_command_queue(self) -> None:
         """Process commands from the queue sequentially with delays."""
@@ -476,8 +476,8 @@ class SerialService:
                 # Mark the task as done
                 self.command_queue.task_done()
                 
-            # Log completion of bulk operation
-            self.app.after(0, self.app.log_frame.log_message, "INFO: Bulk command operation completed\n")
+            # Log completion of bulk operation to console
+            print("INFO: Bulk command operation completed")
             
             # Call the callback if provided
             if self.queue_callback:
@@ -504,7 +504,7 @@ class SerialService:
             self.command_queue.get()
             self.command_queue.task_done()
             
-        self.app.log_frame.log_message("INFO: Bulk command operation stopped\n")
+        print("INFO: Bulk command operation stopped")
         
     def send_all_parameters(self) -> None:
         """
@@ -525,26 +525,46 @@ class SerialService:
             if not self.app.operation_confirmation_service.confirm_operation(
                 self.app.operation_confirmation_service.OPERATION_BULK_SEND
             ):
-                self.app.log_frame.log_message("INFO: Bulk send operation canceled by user\n")
+                # Move INFO message to console instead of UI log
+                print("INFO: Bulk send operation canceled by user")
                 return
         
         # Collect all parameters from UI
         parameters = self._collect_parameters_from_ui()
         
+        # Debug: Log the collected parameters structure
+        self.app.log_frame.log_message(f"DEBUG: Collected parameters structure: {type(parameters)}\n")
+        self.app.log_frame.log_message(f"DEBUG: Parameters keys: {list(parameters.keys()) if isinstance(parameters, dict) else 'Not a dict'}\n")
+        
+        # Flatten the hierarchical parameter structure for the device command mapper
+        flattened_parameters = self._flatten_parameters_for_device_mapper(parameters)
+        self.app.log_frame.log_message(f"DEBUG: Flattened parameters: {flattened_parameters}\n")
+        print(f"DEBUG: Flattened parameters: {flattened_parameters}")  # Also print to console
+        
         # Get bulk commands in the correct sequence
         try:
-            commands = self.app.device_command_mapper.get_bulk_commands(parameters)
+            self.app.log_frame.log_message("DEBUG: Calling device_command_mapper.get_bulk_commands()\n")
+            commands = self.app.device_command_mapper.get_bulk_commands(flattened_parameters)
+            self.app.log_frame.log_message(f"DEBUG: get_bulk_commands returned {len(commands) if commands else 0} commands\n")
             
             if not commands:
-                self.app.log_frame.log_message("WARNING: No parameters to send\n")
+                warning_msg = "WARNING: No parameters to send"
+                self.app.log_frame.log_message(f"{warning_msg}\n")
+                print(warning_msg)  # Also print to console
+                self.app.log_frame.log_message(f"DEBUG: Parameters passed to get_bulk_commands: {flattened_parameters}\n")
+                print(f"DEBUG: Parameters passed to get_bulk_commands: {flattened_parameters}")  # Also print to console
                 return
             
             # Create a progress dialog if we have the operation confirmation service
             progress_dialog_id = None
             if hasattr(self.app, 'operation_confirmation_service'):
+                # Use i18n for progress dialog text
+                sending_title = self.app.i18n.get("sending_parameters", "Sending Parameters")
+                bulk_send_title = self.app.i18n.get("bulk_parameter_send", "Bulk Parameter Send")
+                
                 progress_dialog_id = self.app.operation_confirmation_service.create_progress_dialog(
-                    "Sending Parameters",
-                    "Bulk Parameter Send",
+                    sending_title,
+                    bulk_send_title,
                     self.app.operation_confirmation_service.PROGRESS_TYPE_DETERMINATE,
                     len(commands),
                     True
@@ -559,13 +579,16 @@ class SerialService:
             # Define a callback that updates progress and shows completion
             def on_complete(results):
                 if progress_dialog_id:
+                    # Use i18n for completion message
+                    success_msg = self.app.i18n.get("all_parameters_sent_successfully", "All parameters sent successfully")
                     self.app.operation_confirmation_service.complete_progress(
                         progress_dialog_id,
                         True,
-                        "All parameters sent successfully"
+                        success_msg
                     )
                 else:
-                    self.app.log_frame.log_message("INFO: All parameters sent successfully\n")
+                    # Move INFO message to console instead of UI log
+                    print("INFO: All parameters sent successfully")
             
             # Queue the commands for sequential processing
             self.queue_commands(
@@ -575,17 +598,21 @@ class SerialService:
                 progress_dialog_id=progress_dialog_id
             )
             
-            self.app.log_frame.log_message(f"INFO: Queued {len(commands)} commands for sending\n")
+            # Move INFO message to console instead of UI log
+            print(f"INFO: Queued {len(commands)} commands for sending")
             
         except Exception as e:
             self.app.log_frame.log_message(f"ERROR: Failed to prepare commands: {str(e)}\n")
             
             # Close progress dialog if it exists
             if hasattr(self.app, 'operation_confirmation_service') and progress_dialog_id:
+                # Use i18n for error message
+                error_template = self.app.i18n.get("error_preparing_commands", "Error preparing commands: {error}")
+                error_msg = error_template.format(error=str(e))
                 self.app.operation_confirmation_service.complete_progress(
                     progress_dialog_id,
                     False,
-                    f"Error: {str(e)}"
+                    error_msg
                 )
             
     def check_device_configuration(self) -> None:
@@ -648,25 +675,183 @@ class SerialService:
         parameters = {}
         
         # Check if parameters frame exists
-        if not hasattr(self.app, 'parameters_frame'):
+        if not hasattr(self.app, 'parameters_frame') and not hasattr(self.app, 'params_frame'):
+            self.app.log_frame.log_message("DEBUG: No parameters frame found\n")
             return parameters
-            
-        # Collect APN parameters
-        if hasattr(self.app.parameters_frame, 'apn_server_entry'):
-            parameters['apn_server'] = self.app.parameters_frame.apn_server_entry.get()
-        if hasattr(self.app.parameters_frame, 'apn_user_entry'):
-            parameters['apn_user'] = self.app.parameters_frame.apn_user_entry.get()
-        if hasattr(self.app.parameters_frame, 'apn_password_entry'):
-            parameters['apn_password'] = self.app.parameters_frame.apn_password_entry.get()
-            
-        # Collect all other parameters from parameter widgets
-        # This requires the parameter widgets to have a consistent interface
-        if hasattr(self.app.parameters_frame, 'parameter_widgets'):
-            for param_name, widget in self.app.parameters_frame.parameter_widgets.items():
-                if hasattr(widget, 'get_value'):
-                    parameters[param_name] = widget.get_value()
+        
+        # Get the parameters frame (try both possible names)
+        params_frame = getattr(self.app, 'parameters_frame', None) or getattr(self.app, 'params_frame', None)
+        
+        if params_frame is None:
+            self.app.log_frame.log_message("DEBUG: Parameters frame is None\n")
+            return parameters
+        
+        # Use the modern specification-based parameter collection method
+        if hasattr(params_frame, 'get_all_parameter_values'):
+            try:
+                parameters = params_frame.get_all_parameter_values()
+                self.app.log_frame.log_message(f"DEBUG: Collected {len(parameters)} parameters using specification method\n")
+                
+                # Log the collected parameters for debugging
+                for param_name, value in parameters.items():
+                    self.app.log_frame.log_message(f"DEBUG: Parameter {param_name}: {value}\n")
                     
+                return parameters
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Failed to collect parameters using specification method: {str(e)}\n")
+        
+        # Fallback to legacy parameter collection methods
+        self.app.log_frame.log_message("DEBUG: Using fallback parameter collection methods\n")
+        
+        # Try legacy parameter widgets
+        if hasattr(params_frame, 'parameter_widgets'):
+            for param_name, widget in params_frame.parameter_widgets.items():
+                try:
+                    if hasattr(widget, 'get_value'):
+                        parameters[param_name] = widget.get_value()
+                    elif hasattr(widget, 'get'):
+                        parameters[param_name] = widget.get()
+                except Exception as e:
+                    self.app.log_frame.log_message(f"WARNING: Failed to get value for parameter {param_name}: {str(e)}\n")
+        
+        # Try legacy APN entries
+        if hasattr(params_frame, 'apn_server_entry'):
+            try:
+                parameters['apn_server'] = params_frame.apn_server_entry.get()
+            except:
+                pass
+        if hasattr(params_frame, 'apn_user_entry'):
+            try:
+                parameters['apn_user'] = params_frame.apn_user_entry.get()
+            except:
+                pass
+        if hasattr(params_frame, 'apn_password_entry'):
+            try:
+                parameters['apn_password'] = params_frame.apn_password_entry.get()
+            except:
+                pass
+        
+        self.app.log_frame.log_message(f"DEBUG: Collected {len(parameters)} parameters using fallback methods\n")
         return parameters
+    
+    def _flatten_parameters_for_device_mapper(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Flatten the hierarchical parameter structure to the format expected by device command mapper.
+        
+        Args:
+            parameters: Hierarchical parameter structure from UI
+            
+        Returns:
+            Flattened parameter dictionary
+        """
+        flattened = {}
+        
+        try:
+            # Handle the hierarchical structure from the specification-based UI
+            for section_name, section_data in parameters.items():
+                if isinstance(section_data, dict):
+                    for param_name, param_data in section_data.items():
+                        if isinstance(param_data, dict):
+                            # Handle nested parameter data (like apn_settings)
+                            for field_name, field_value in param_data.items():
+                                if field_value is not None:
+                                    # Map to the expected flat structure
+                                    if param_name == 'apn_settings':
+                                        if field_name == 'apn':
+                                            flattened['apn_server'] = field_value
+                                        elif field_name == 'user':
+                                            flattened['apn_user'] = field_value
+                                        elif field_name == 'password':
+                                            flattened['apn_password'] = field_value
+                                    elif param_name == 'server_settings':
+                                        if field_name == 'address':
+                                            flattened['server_address'] = field_value
+                                        elif field_name == 'port':
+                                            flattened['server_port'] = field_value
+                                    elif param_name == 'report_intervals':
+                                        if field_name == 'moving_time':
+                                            flattened['moving_time'] = field_value
+                                        elif field_name == 'stopped_time':
+                                            flattened['stopped_time'] = field_value
+                                    elif param_name == 'heartbeat_intervals':
+                                        if field_name == 'moving_heartbeat':
+                                            flattened['moving_heartbeat'] = field_value
+                                        elif field_name == 'stopped_heartbeat':
+                                            flattened['stopped_heartbeat'] = field_value
+                                    elif param_name == 'ignition_type':
+                                        if field_name == 'ignition_mode':
+                                            flattened['ignition_mode'] = field_value
+                                        elif field_name == 'on_voltage':
+                                            flattened['on_voltage'] = field_value
+                                        elif field_name == 'off_voltage':
+                                            flattened['off_voltage'] = field_value
+                                    elif param_name == 'speed_alert':
+                                        if field_name == 'enabled':
+                                            flattened['speed_alert_enabled'] = field_value
+                                        elif field_name == 'detection_time':
+                                            flattened['speed_detection_time'] = field_value
+                                        elif field_name == 'speed_limit':
+                                            flattened['speed_limit'] = field_value
+                                        elif field_name == 'alert_type':
+                                            flattened['speed_alert_type'] = field_value
+                                    elif param_name == 'main_power_alert':
+                                        if field_name == 'enabled':
+                                            flattened['main_power_alert_enabled'] = field_value
+                                        elif field_name == 'alert_type':
+                                            flattened['main_power_alert_type'] = field_value
+                                        elif field_name == 'detection_time':
+                                            flattened['main_power_detection_time'] = field_value
+                                        elif field_name == 'min_charge_time':
+                                            flattened['main_power_min_charge_time'] = field_value
+                                    elif param_name == 'vibration_sensitivity':
+                                        if field_name == 'enabled':
+                                            flattened['vibration_enabled'] = field_value
+                                        elif field_name == 'level':
+                                            flattened['vibration_level'] = field_value
+                                    elif param_name == 'jammer_relay_action':
+                                        if field_name == 'enabled':
+                                            flattened['jammer_relay_enabled'] = field_value
+                                        elif field_name == 'output_operation':
+                                            flattened['jammer_output_operation'] = field_value
+                                        elif field_name == 'confirmation_time':
+                                            flattened['jammer_confirmation_time'] = field_value
+                                        elif field_name == 'speed_limit':
+                                            flattened['jammer_speed_limit'] = field_value
+                                    else:
+                                        # Generic mapping for other nested parameters
+                                        flattened[f"{param_name}_{field_name}"] = field_value
+                        else:
+                            # Handle simple parameter values
+                            if param_data is not None:
+                                if param_name == 'protocol':
+                                    flattened['protocol'] = param_data
+                                elif param_name == 'tcp_ack':
+                                    flattened['tcp_ack'] = param_data
+                                elif param_name == 'sleep_mode':
+                                    flattened['sleep_mode'] = param_data
+                                elif param_name == 'sleep_time':
+                                    flattened['sleep_time'] = param_data
+                                elif param_name == 'speed_buzzer':
+                                    flattened['speed_buzzer'] = param_data
+                                elif param_name == 'backup_battery_alert':
+                                    flattened['backup_battery_alert'] = param_data
+                                elif param_name == 'jammer_detection':
+                                    flattened['jammer_detection'] = param_data
+                                elif param_name == 'odometer':
+                                    flattened['odometer'] = param_data
+                                elif param_name == 'hourmeter':
+                                    flattened['hourmeter'] = param_data
+                                else:
+                                    # Generic mapping for other simple parameters
+                                    flattened[param_name] = param_data
+            
+            self.app.log_frame.log_message(f"DEBUG: Flattened {len(parameters)} sections into {len(flattened)} parameters\n")
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to flatten parameters: {str(e)}\n")
+            print(f"ERROR: Failed to flatten parameters: {str(e)}")
+            
+        return flattened
         
     def _process_config_check_results(self, results: Dict[str, Any]) -> None:
         """

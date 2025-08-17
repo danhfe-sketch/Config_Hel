@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Callable, Optional, Dict, Any, List
 import customtkinter as ctk
+from ui.custom_confirmation_dialog import show_confirmation_dialog
 
 class OperationConfirmationService:
     """Centralized service for operation confirmations and success feedback."""
@@ -85,38 +86,140 @@ class OperationConfirmationService:
         Returns:
             True if the user confirmed, False otherwise
         """
-        # Get the confirmation message for this operation type
+        # Get the confirmation message for this operation type using i18n
         if operation_type in self.confirmation_messages:
-            title = self.confirmation_messages[operation_type]["title"]
-            message = custom_message or self.confirmation_messages[operation_type]["message"]
-            detail = self.confirmation_messages[operation_type]["detail"]
+            # Use i18n service if available
+            if hasattr(self.app, 'i18n'):
+                # Map operation types to i18n keys
+                i18n_key_map = {
+                    self.OPERATION_BULK_SEND: {
+                        "title": "confirm_bulk_send_title",
+                        "message": "confirm_bulk_send_message", 
+                        "detail": "confirm_bulk_send_detail"
+                    },
+                    self.OPERATION_FACTORY_RESET: {
+                        "title": "confirm_factory_reset_title",
+                        "message": "confirm_factory_reset_message",
+                        "detail": "confirm_factory_reset_detail"
+                    },
+                    self.OPERATION_DEVICE_RESET: {
+                        "title": "confirm_device_reset_title",
+                        "message": "confirm_device_reset_message",
+                        "detail": "confirm_device_reset_detail"
+                    },
+                    self.OPERATION_RESTORE_DEFAULTS: {
+                        "title": "confirm_restore_defaults_title",
+                        "message": "confirm_restore_defaults_message",
+                        "detail": "confirm_restore_defaults_detail"
+                    }
+                }
+                
+                if operation_type in i18n_key_map:
+                    title = self.app.i18n.get(i18n_key_map[operation_type]["title"], self.confirmation_messages[operation_type]["title"])
+                    message = custom_message or self.app.i18n.get(i18n_key_map[operation_type]["message"], self.confirmation_messages[operation_type]["message"])
+                    detail = self.app.i18n.get(i18n_key_map[operation_type]["detail"], self.confirmation_messages[operation_type]["detail"])
+                else:
+                    # Fallback to hardcoded messages for unmapped operations
+                    title = self.confirmation_messages[operation_type]["title"]
+                    message = custom_message or self.confirmation_messages[operation_type]["message"]
+                    detail = self.confirmation_messages[operation_type]["detail"]
+            else:
+                # Fallback to hardcoded messages if i18n not available
+                title = self.confirmation_messages[operation_type]["title"]
+                message = custom_message or self.confirmation_messages[operation_type]["message"]
+                detail = self.confirmation_messages[operation_type]["detail"]
             
-            # Format the full message with detail
-            full_message = f"{message}\n\n{detail}"
-            
-            # Show the confirmation dialog
-            return messagebox.askyesno(title, full_message, icon=messagebox.WARNING)
+            # Use custom confirmation dialog instead of basic messagebox
+            try:
+                # Try to get the main window as parent - improved detection
+                parent = None
+                
+                # Try different ways to get the main window
+                if hasattr(self.app, 'winfo_exists') and callable(getattr(self.app, 'winfo_exists', None)):
+                    try:
+                        if self.app.winfo_exists():
+                            parent = self.app
+                    except:
+                        pass
+                
+                if parent is None and hasattr(self.app, 'root'):
+                    parent = self.app.root
+                    
+                if parent is None and hasattr(self.app, 'master'):
+                    parent = self.app.master
+                    
+                # If we still don't have a parent, try to find the main window
+                if parent is None:
+                    import tkinter as tk
+                    try:
+                        # Get the default root window
+                        parent = tk._default_root
+                    except:
+                        pass
+                
+                # Show custom confirmation dialog
+                return show_confirmation_dialog(parent, title, message, detail, "warning")
+            except Exception as e:
+                # Fallback to basic messagebox if custom dialog fails
+                print(f"Warning: Custom dialog failed, using fallback: {e}")
+                full_message = f"{message}\n\n{detail}"
+                return messagebox.askyesno(title, full_message, icon=messagebox.WARNING)
         else:
             # For unknown operation types, use a generic confirmation
-            return messagebox.askyesno(
-                "Confirm Operation", 
-                "Are you sure you want to perform this operation?",
-                icon=messagebox.QUESTION
-            )
+            generic_title = self.app.i18n.get("confirm_operation", "Confirm Operation") if hasattr(self.app, 'i18n') else "Confirm Operation"
+            generic_message = self.app.i18n.get("confirm_operation_message", "Are you sure you want to perform this operation?") if hasattr(self.app, 'i18n') else "Are you sure you want to perform this operation?"
+            
+            try:
+                # Try to get the main window as parent - improved detection
+                parent = None
+                
+                # Try different ways to get the main window
+                if hasattr(self.app, 'winfo_exists') and callable(getattr(self.app, 'winfo_exists', None)):
+                    try:
+                        if self.app.winfo_exists():
+                            parent = self.app
+                    except:
+                        pass
+                
+                if parent is None and hasattr(self.app, 'root'):
+                    parent = self.app.root
+                    
+                if parent is None and hasattr(self.app, 'master'):
+                    parent = self.app.master
+                    
+                # If we still don't have a parent, try to find the main window
+                if parent is None:
+                    import tkinter as tk
+                    try:
+                        # Get the default root window
+                        parent = tk._default_root
+                    except:
+                        pass
+                
+                # Show custom confirmation dialog
+                return show_confirmation_dialog(parent, generic_title, generic_message, "", "question")
+            except Exception as e:
+                # Fallback to basic messagebox if custom dialog fails
+                print(f"Warning: Custom dialog failed, using fallback: {e}")
+                return messagebox.askyesno(
+                    generic_title, 
+                    generic_message,
+                    icon=messagebox.QUESTION
+                )
     
     def show_success_notification(self, message: str) -> None:
         """
-        Show a success notification in the log.
+        Show a success notification in the console.
         
         Args:
             message: The success message to display
         """
-        if hasattr(self.app, 'log_frame'):
-            self.app.log_frame.log_message(f"INFO: ✓ {message}\n")
-            
-            # Flash the log area to draw attention for important success messages
-            if hasattr(self.app.log_frame, '_flash_log_for_attention'):
-                self.app.log_frame._flash_log_for_attention(success=True)
+        # Redirect success notifications to console instead of UI log
+        print(f"INFO: ✓ {message}")
+        
+        # Still flash the log area if available for visual feedback
+        if hasattr(self.app, 'log_frame') and hasattr(self.app.log_frame, '_flash_log_for_attention'):
+            self.app.log_frame._flash_log_for_attention(success=True)
     
     def create_progress_dialog(self, title: str, operation_name: str, 
                               progress_type: str = PROGRESS_TYPE_DETERMINATE,
@@ -407,7 +510,7 @@ class OperationConfirmationService:
     
     def show_operation_progress_in_log(self, operation: str, progress: int, total: int) -> None:
         """
-        Show operation progress in the log.
+        Show operation progress in the console.
         
         Args:
             operation: The operation name
@@ -416,12 +519,11 @@ class OperationConfirmationService:
         """
         if hasattr(self.app, 'error_handler'):
             self.app.error_handler.show_operation_progress(operation, progress, total)
-        elif hasattr(self.app, 'log_frame'):
+        else:
+            # Redirect progress messages to console instead of UI log
             percentage = int((progress / total) * 100)
             bar_length = 20
             filled_length = int(bar_length * progress / total)
             bar = '█' * filled_length + '░' * (bar_length - filled_length)
             
-            self.app.log_frame.log_message(
-                f"INFO: {operation}: {progress}/{total} ({percentage}%) [{bar}]\n"
-            )
+            print(f"INFO: {operation}: {progress}/{total} ({percentage}%) [{bar}]")

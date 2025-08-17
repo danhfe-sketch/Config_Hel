@@ -854,7 +854,7 @@ def secure_validation(operation_name: str):
 
 
 # Context manager for security operations
-class SecurityContext:
+class SecurityContextManager:
     """Context manager for security-aware operations"""
     
     def __init__(self, security_service: APNSecurityService, 
