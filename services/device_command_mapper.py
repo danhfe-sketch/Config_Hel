@@ -2908,6 +2908,8 @@ class DeviceCommandMapper:
         """
         Handle angle_report parameter fields mapping to ANGLEVALUE command parameters.
         
+        Preserve exact UI formatting for numeric fields (e.g., leading zeros).
+        
         Args:
             values: Dictionary with angle report field values
             
@@ -2931,13 +2933,41 @@ class DeviceCommandMapper:
                     'angle_variation': '0'
                 }
             
-            # Validate speed and angle parameters
-            min_speed = self._validate_optional_parameter(values.get('min_speed', 0), 'min_speed', '0-255')
-            angle_variation = self._validate_optional_parameter(values.get('angle_variation', 0), 'angle_variation', '0-180')
+            # Read raw inputs (preserve strings if provided by UI)
+            raw_min_speed = values.get('min_speed', 0)
+            raw_angle_variation = values.get('angle_variation', 0)
+            
+            # Convert to int for validation but preserve original string formatting when available
+            try:
+                min_speed_int = int(str(raw_min_speed))
+            except (ValueError, TypeError):
+                raise ValueError(f"angle_report.min_speed must be a valid integer, got: '{raw_min_speed}'")
+            
+            try:
+                angle_variation_int = int(str(raw_angle_variation))
+            except (ValueError, TypeError):
+                raise ValueError(f"angle_report.angle_variation must be a valid integer, got: '{raw_angle_variation}'")
+            
+            # Validate ranges
+            if not (0 <= min_speed_int <= 255):
+                raise ValueError("angle_report.min_speed must be between 0 and 255")
+            if not (0 <= angle_variation_int <= 180):
+                raise ValueError("angle_report.angle_variation must be between 0 and 180")
+            
+            # Preserve the exact UI string when it was provided as a string; otherwise use the integer representation
+            if isinstance(raw_min_speed, str):
+                min_speed_out = raw_min_speed
+            else:
+                min_speed_out = str(min_speed_int)
+            
+            if isinstance(raw_angle_variation, str):
+                angle_variation_out = raw_angle_variation
+            else:
+                angle_variation_out = str(angle_variation_int)
             
             result = {
-                'min_speed': str(min_speed),
-                'angle_variation': str(angle_variation)
+                'min_speed': min_speed_out,
+                'angle_variation': angle_variation_out
             }
             
             self.logger.debug(f"Successfully processed angle_report fields: {result}")

@@ -682,11 +682,25 @@ class ParameterSpecificationFactory:
                 param_widget = section_widget.parameters[param_name]
                 values = {}
                 
-                # Extract values from UI elements
+                # Extract values from UI elements.
+                # Prefer the UI element's display/raw string (get_display_value) when available
+                # so formatting like leading zeros is preserved for command construction.
                 for field_name, ui_element in param_widget.ui_elements.items():
                     try:
-                        value = ui_element.get_value()
-                        values[field_name] = value
+                        # Use raw/display value if element provides it and it's not empty
+                        display_value = None
+                        if hasattr(ui_element, 'get_display_value'):
+                            try:
+                                display_value = ui_element.get_display_value()
+                            except Exception:
+                                display_value = None
+                        
+                        if display_value is not None and str(display_value) != '':
+                            values[field_name] = display_value
+                        else:
+                            # Fallback to typed value
+                            value = ui_element.get_value()
+                            values[field_name] = value
                     except Exception as e:
                         print(f"WARNING: Failed to get value for {param_name}.{field_name}: {e}")
                         values[field_name] = None
@@ -695,6 +709,17 @@ class ParameterSpecificationFactory:
                 if len(param_widget.ui_elements) == 1:
                     single_value = list(values.values())[0]
                     values[param_name] = single_value
+                
+                # Debug: log the captured values and their types to help diagnose formatting issues
+                try:
+                    print(f"DEBUG: _get_current_parameter_values - captured values for '{param_name}': {values}")
+                    for k, v in values.items():
+                        try:
+                            print(f"DEBUG: _get_current_parameter_values - field '{k}' type: {type(v).__name__}, repr: {v!r}")
+                        except Exception:
+                            print(f"DEBUG: _get_current_parameter_values - field '{k}' value (unprintable)")
+                except Exception:
+                    pass
                 
                 return values
         
@@ -1012,6 +1037,14 @@ class ParameterSpecificationFactory:
         min_speed = str(values.get('min_speed', '')).strip()
         angle_variation = str(values.get('angle_variation', '')).strip()
         
+        # Debug logging to validate exact values and types coming from UI
+        try:
+            print(f"DEBUG: _send_angle_report_command - raw values: enabled={enabled!r}, min_speed={values.get('min_speed')!r}, angle_variation={values.get('angle_variation')!r}")
+            # Also print the types
+            print(f"DEBUG: _send_angle_report_command - types: enabled={type(enabled).__name__}, min_speed_type={type(values.get('min_speed')).__name__ if values.get('min_speed') is not None else 'None'}, angle_variation_type={type(values.get('angle_variation')).__name__ if values.get('angle_variation') is not None else 'None'}")
+        except Exception:
+            pass
+        
         if enabled:
             if not min_speed or not angle_variation:
                 messagebox.showerror(
@@ -1019,9 +1052,16 @@ class ParameterSpecificationFactory:
                     self.i18n_service.get("angle_values_required", "Minimum speed and angle variation are required when angle report is enabled")
                 )
                 return
+            # Use the exact strings (preserve leading zeros) that were captured from UI
             command = f"ATSMS:SZCS#ANGLEVALUE={min_speed}-{angle_variation}"
         else:
             command = "ATSMS:SZCS#ANGLEVALUE=0-0"
+        
+        # Log the final command for debugging
+        try:
+            print(f"DEBUG: _send_angle_report_command - sending command: {command}")
+        except Exception:
+            pass
         
         self.serial_service.send_command(command)
         messagebox.showinfo(

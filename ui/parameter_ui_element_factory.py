@@ -60,6 +60,25 @@ class BaseUIElement(ABC):
     def set_value(self, value: Any) -> None:
         """Set the value in the widget"""
         pass
+
+    def get_display_value(self) -> Any:
+        """
+        Get the raw/displayed value from the underlying widget without converting types.
+
+        Default implementation tries to read the widget text (if available) and falls
+        back to get_value() which may return a typed value.
+        """
+        try:
+            if hasattr(self, 'widget') and self.widget is not None:
+                # Prefer raw string from the underlying widget if possible
+                if hasattr(self.widget, 'get'):
+                    raw = self.widget.get()
+                    return raw if raw is not None else self.get_value()
+            # Fallback to the typed value
+            return self.get_value()
+        except Exception:
+            # Last-resort fallback
+            return self.get_value()
     
     def validate(self) -> bool:
         """Validate the current element value"""
