@@ -177,6 +177,7 @@ class OperationConfirmationService:
         status_label.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="w")
         
         # Cancel button (if cancelable)
+        cancel_button = None
         if cancelable:
             cancel_button = ctk.CTkButton(
                 dialog, 
@@ -195,7 +196,8 @@ class OperationConfirmationService:
             "total_steps": total_steps,
             "current_step": 0,
             "cancelable": cancelable,
-            "cancel_callback": None
+            "cancel_callback": None,
+            "cancel_button": cancel_button
         }
         
         return dialog_id
@@ -274,7 +276,11 @@ class OperationConfirmationService:
         elif success and dialog_info["status_label"].winfo_exists():
             dialog_info["status_label"].configure(text="Operation completed successfully.")
         elif dialog_info["status_label"].winfo_exists():
-            dialog_info["status_label"].configure(text="Operation failed or was canceled.")
+            # Check if this was a cancellation vs. a failure
+            if completion_message and "canceled" in completion_message.lower():
+                dialog_info["status_label"].configure(text="Operation was canceled.")
+            else:
+                dialog_info["status_label"].configure(text="Operation failed or was canceled.")
 
         # Show completion message in log
         operation_name = dialog_info["operation_name"]
@@ -282,7 +288,11 @@ class OperationConfirmationService:
             self.show_success_notification(f"{operation_name} completed successfully")
         else:
             if hasattr(self.app, 'log_frame'):
-                self.app.log_frame.log_message(f"WARNING: {operation_name} was not completed\n")
+                # Check if this was a cancellation vs. a failure
+                if completion_message and "canceled" in completion_message.lower():
+                    self.app.log_frame.log_message(f"INFO: {operation_name} was canceled by user\n")
+                else:
+                    self.app.log_frame.log_message(f"WARNING: {operation_name} was not completed\n")
 
         # Close the dialog after a short delay
         self.app.after(1500, lambda: self._close_progress_dialog(dialog_id))
@@ -309,6 +319,10 @@ class OperationConfirmationService:
             return
             
         dialog_info = self.progress_dialogs[dialog_id]
+        
+        # Disable cancel button to prevent double-clicks
+        if dialog_info.get("cancel_button") and dialog_info["cancel_button"].winfo_exists():
+            dialog_info["cancel_button"].configure(state="disabled")
         
         # Call the cancel callback if provided
         if dialog_info["cancel_callback"]:

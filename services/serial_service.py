@@ -198,6 +198,14 @@ class SerialService:
             command_type: Optional type of command for response processing
             bypass_validation: If True, skip command validation (for debugging/testing)
         """
+        # Check if we're in a cancellation state
+        if (hasattr(self, 'configuration_reader') and 
+            self.configuration_reader is not None and
+            hasattr(self.configuration_reader, 'cancel_requested') and 
+            self.configuration_reader.cancel_requested):
+            self.app.log_frame.log_message("INFO: Command not sent - operation was canceled\n")
+            return False
+                
         if not self.is_connected or not self.serial_port:
             self.app.log_frame.log_message("ERROR: Not connected to device\n")
             return False
@@ -263,6 +271,18 @@ class SerialService:
         """
         # Add response to buffer for LT32ProDeviceReader and other components that need direct access
         self.response_buffer.append(response)
+        
+        # Check for cancellation before forwarding response
+        config_reader_service = None
+        if hasattr(self, 'configuration_reader') and self.configuration_reader:
+            config_reader_service = self.configuration_reader
+        elif hasattr(self.app, 'configuration_reader_service'):
+            config_reader_service = self.app.configuration_reader_service
+            
+        # If we have a configuration reader service, check for cancellation
+        if config_reader_service and hasattr(config_reader_service, 'cancel_requested') and config_reader_service.cancel_requested:
+            self.app.log_frame.log_message(f"INFO: Ignoring response due to cancellation: '{response}'\n")
+            return
         
         # Always forward response to configuration_reader if set
         if self.configuration_reader and hasattr(self.configuration_reader, 'capture_device_response'):
@@ -587,6 +607,14 @@ class SerialService:
         
         # Define completion callback
         def on_completion(result, error_message):
+            # Check if operation was canceled
+            if (hasattr(self, 'configuration_reader') and 
+                self.configuration_reader is not None and 
+                hasattr(self.configuration_reader, 'cancel_requested') and 
+                self.configuration_reader.cancel_requested):
+                self.app.log_frame.log_message("INFO: Configuration reading was canceled by user\n")
+                return
+            
             if result.success:
                 success_msg = f"Configuration reading completed successfully."
                 self.app.log_frame.log_message(f"INFO: {success_msg}\n")
@@ -908,6 +936,11 @@ class SerialService:
                 if result.success:
                     success_msg = f"Configuration reading completed successfully."
                     self.app.log_frame.log_message(f"INFO: {success_msg}\n")
+                    
+                    # Check if operation was canceled before updating UI
+                    if hasattr(self.configuration_reader, 'cancel_requested') and self.configuration_reader.cancel_requested:
+                        self.app.log_frame.log_message("INFO: Configuration reading was canceled, skipping UI update\n")
+                        return
                     
                     # Update UI with the read parameters
                     self._update_ui_with_parameters(result.parameters_read)

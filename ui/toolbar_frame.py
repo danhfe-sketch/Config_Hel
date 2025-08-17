@@ -562,7 +562,7 @@ For technical support, contact Lumini Tracker support team.
                             # Save the profile to file
                             try:
                                 import json
-                                profile_data = profile.to_dict()
+                                profile_data = profile.to_dict(for_save=True)
                                 
                                 with open(profile_path, 'w', encoding='utf-8') as f:
                                     json.dump(profile_data, f, indent=2, ensure_ascii=False)

@@ -79,6 +79,22 @@ class ParameterValue:
         
         return result
     
+    def to_dict_for_save(self) -> Dict[str, Any]:
+        """Convert parameter value to dictionary for saving to file (without runtime metadata)."""
+        result = {
+            "value": self.value
+        }
+        
+        # Only include validation_status if it exists
+        if self.validation_status:
+            result["validation_status"] = {
+                "is_valid": self.validation_status.is_valid,
+                "errors": self.validation_status.errors,
+                "warnings": self.validation_status.warnings
+            }
+        
+        return result
+    
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ParameterValue':
         """Create parameter value from dictionary."""
@@ -136,11 +152,18 @@ class UniversalProfile:
         if isinstance(self.modified_at, str):
             self.modified_at = datetime.fromisoformat(self.modified_at)
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert profile to dictionary for serialization."""
+    def to_dict(self, for_save: bool = False) -> Dict[str, Any]:
+        """Convert profile to dictionary for serialization.
+        
+        Args:
+            for_save: If True, omits runtime metadata fields from parameters
+        """
         parameters_dict = {}
         for param_name, param_value in self.parameters.items():
-            parameters_dict[param_name] = param_value.to_dict()
+            if for_save:
+                parameters_dict[param_name] = param_value.to_dict_for_save()
+            else:
+                parameters_dict[param_name] = param_value.to_dict()
         
         return {
             "name": self.name,

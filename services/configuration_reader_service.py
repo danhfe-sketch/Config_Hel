@@ -76,6 +76,18 @@ class ConfigurationReaderService:
         
         # Initialize response parsing patterns
         self._init_response_patterns()
+        
+        # Progress tracking variables
+        self.current_parameter_index = 0
+        self.total_parameters_count = 0
+        self.successful_reads_count = 0
+        self.failed_reads_count = 0
+        self.current_parameter_name = ""
+        self.progress_dialog_id = None
+        self.last_read_attempt = None
+        self.total_read_attempts = 0
+        self.successful_reads = 0
+        self.failed_reads = 0
     
     def _init_error_handler(self):
         """Initialize parameter error handler."""
@@ -354,8 +366,9 @@ class ConfigurationReaderService:
             self._log_message(f"INFO: Starting configuration read with {total_commands} commands (attempt #{self.total_read_attempts})")
             
             for i, (param_name, command, command_type) in enumerate(all_commands):
+                # Check for cancellation before processing each parameter
                 if self.cancel_requested:
-                    self._log_message("INFO: Configuration reading canceled by user")
+                    self._log_message("INFO: Configuration reading canceled by user before processing parameter")
                     break
                 
                 # Update current parameter tracking
@@ -398,9 +411,20 @@ class ConfigurationReaderService:
                 
                 # Log the command being sent for debugging
                 self._log_message(f"DEBUG: Sending command for {param_name}: {command} (type: {command_type})")
+                
+                # Check for cancellation before sending command
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user before sending command")
+                    break
+                
                 # Read the parameter with enhanced error handling
                 result = self.read_specific_parameter_with_error_handling(param_name, command, command_type, max_retries=2)
                 parameters_read.append(result)
+                
+                # Check for cancellation after reading parameter
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user after reading parameter")
+                    break
                 
                 if not result.success:
                     failed_parameters.append(param_name)
@@ -419,30 +443,44 @@ class ConfigurationReaderService:
                     if self.parameter_error_handler:
                         self.parameter_error_handler.last_successful_operation = datetime.now()
                 
+                # Check for cancellation after processing result
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user during processing")
+                    break
+                    
                 # Add delay between commands to avoid overwhelming the device
-                if i < total_commands - 1:  # Don't delay after the last command
+                # But don't delay if canceled
+                if i < total_commands - 1 and not self.cancel_requested:  # Don't delay after the last command or if canceled
                     time.sleep(0.8)
             
             # Calculate results
             read_duration = time.time() - start_time
             successful_reads = self.successful_reads_count
             failed_reads = self.failed_reads_count
-            success = successful_reads > 0  # Success if at least one parameter was read
             
-            # Set completion message with detailed results and statistics
-            if failed_reads == 0:
-                completion_message = (f"✓ Configuration reading completed successfully!\n"
-                                    f"All {successful_reads} parameters read successfully\n"
-                                    f"Duration: {read_duration:.1f} seconds")
-            elif successful_reads > 0:
-                completion_message = (f"⚠ Configuration reading partially completed\n"
-                                    f"Success: {successful_reads} | Failed: {failed_reads}\n"
-                                    f"Total: {successful_reads + failed_reads} parameters\n"
+            # Check if operation was canceled
+            if self.cancel_requested:
+                success = successful_reads > 0  # Success if at least one parameter was read before cancellation
+                completion_message = (f"⚠ Configuration reading canceled by user\n"
+                                    f"Completed: {successful_reads} parameters\n"
                                     f"Duration: {read_duration:.1f} seconds")
             else:
-                completion_message = (f"✗ Configuration reading failed\n"
-                                    f"No parameters could be read ({failed_reads} failures)\n"
-                                    f"Duration: {read_duration:.1f} seconds")
+                success = successful_reads > 0  # Success if at least one parameter was read
+                
+                # Set completion message with detailed results and statistics
+                if failed_reads == 0:
+                    completion_message = (f"✓ Configuration reading completed successfully!\n"
+                                        f"All {successful_reads} parameters read successfully\n"
+                                        f"Duration: {read_duration:.1f} seconds")
+                elif successful_reads > 0:
+                    completion_message = (f"⚠ Configuration reading partially completed\n"
+                                        f"Success: {successful_reads} | Failed: {failed_reads}\n"
+                                        f"Total: {successful_reads + failed_reads} parameters\n"
+                                        f"Duration: {read_duration:.1f} seconds")
+                else:
+                    completion_message = (f"✗ Configuration reading failed\n"
+                                        f"No parameters could be read ({failed_reads} failures)\n"
+                                        f"Duration: {read_duration:.1f} seconds")
             
             result = ConfigurationReadResult(
                 success=success,
@@ -457,8 +495,8 @@ class ConfigurationReaderService:
             self.successful_reads = getattr(self, 'successful_reads', 0) + successful_reads
             self.failed_reads = getattr(self, 'failed_reads', 0) + len(failed_parameters)
             
-            # Update UI with read parameters
-            if success:
+            # Update UI with read parameters only if not canceled
+            if success and not self.cancel_requested:
                 self._update_ui_with_parameters(parameters_read)
                 # Also update the profile manager with the read parameters
                 self._update_profile_manager_with_parameters(parameters_read)
@@ -466,12 +504,20 @@ class ConfigurationReaderService:
             # Call completion callback
             if self.completion_callback:
                 error_msg = None
-                if failed_parameters:
+                if failed_parameters and not self.cancel_requested:
                     error_msg = f"Failed to read {len(failed_parameters)} parameters"
-                self.completion_callback(result, error_msg)
+                elif self.cancel_requested:
+                    error_msg = "Operation canceled by user"
+                
+                # Only call completion callback if not canceled or if we want to notify about cancellation
+                if not self.cancel_requested or True:  # Always call completion callback
+                    self.completion_callback(result, error_msg)
             
-            self._log_message(f"INFO: Configuration reading completed in {read_duration:.2f} seconds")
-            self._log_message(f"INFO: Session statistics - Total successful: {self.successful_reads}, Total failed: {self.failed_reads}")
+            if self.cancel_requested:
+                self._log_message(f"INFO: Configuration reading was canceled by user after {read_duration:.2f} seconds")
+            else:
+                self._log_message(f"INFO: Configuration reading completed in {read_duration:.2f} seconds")
+                self._log_message(f"INFO: Session statistics - Total successful: {self.successful_reads}, Total failed: {self.failed_reads}")
             
         except Exception as e:
             # Handle unexpected errors
@@ -495,6 +541,7 @@ class ConfigurationReaderService:
         
         finally:
             self.is_reading = False
+            self.cancel_requested = False  # Reset cancel flag
             
             # Re-enable parameter modification
             self._disable_parameter_modification(False)
@@ -2057,7 +2104,7 @@ class ConfigurationReaderService:
         
         # Exclude device information commands - only include actual parameter reading commands
         # This matches the behavior of the working "load profile from device" feature
-        excluded_params = {'device_info'}  # Exclude IMEI, ICCID, VERSION, STATUS commands
+        excluded_params = {'device_info', 'all_parameters'}  # Exclude IMEI, ICCID, VERSION, STATUS commands and all_parameters
         
         self._log_message("DEBUG: Building parameter command list for configuration reading")
         
@@ -2262,16 +2309,23 @@ class ConfigurationReaderService:
         # Always log the response for debugging
         self._log_message(f"DEBUG: Received device response: '{response}'")
         
-        # Capture response if we're waiting for one and haven't captured one yet
-        if self.waiting_for_response and self.captured_response is None:
-            self.captured_response = response.strip()
-            self._log_message(f"DEBUG: Captured response for processing: '{self.captured_response}'")
-        elif self.waiting_for_response:
-            # Log if we're already have a captured response (might indicate timing issues)
-            self._log_message(f"DEBUG: Already have captured response '{self.captured_response}', ignoring new response: '{response}'")
+        # Check for cancellation before capturing response
+        if self.cancel_requested:
+            self._log_message(f"DEBUG: Ignoring response due to cancellation: '{response}'")
+            return
+        
+        # Capture response if we're waiting for one
+        if self.waiting_for_response:
+            if self.captured_response is None:
+                self.captured_response = response.strip()
+                self._log_message(f"DEBUG: Captured response for processing: '{self.captured_response}'")
+            else:
+                # We already have a response - this might be a duplicate or delayed response
+                self._log_message(f"DEBUG: Already have captured response '{self.captured_response}', received additional response: '{response}'")
+                # Don't overwrite the first response to avoid timing issues
         else:
             # Log responses we're not expecting (helps with debugging)
-            self._log_message(f"DEBUG: Ignoring unsolicited response: '{response}'")
+            self._log_message(f"DEBUG: Ignoring unsolicited response (not waiting): '{response}'")
 
     def _get_specific_error_message(self, param_name: str, error_message: str) -> str:
         """Get a specific error message for a parameter."""
@@ -2310,6 +2364,16 @@ class ConfigurationReaderService:
         last_error = None
         
         while retry_count <= max_retries:
+            # Check for cancellation
+            if self.cancel_requested:
+                return ParameterReadResult(
+                    parameter_name=param_name,
+                    success=False,
+                    value=None,
+                    error_message="Operation canceled by user",
+                    raw_response=""
+                )
+            
             try:
                 # Validate connection before each attempt
                 if self.parameter_error_handler and retry_count > 0:
@@ -2327,6 +2391,16 @@ class ConfigurationReaderService:
                 start_time = time.time()
                 
                 try:
+                    # Check for cancellation before sending command
+                    if self.cancel_requested:
+                        return ParameterReadResult(
+                            parameter_name=param_name,
+                            success=False,
+                            value=None,
+                            error_message="Operation canceled by user",
+                            raw_response=""
+                        )
+                    
                     # Format the command with ATSMS prefix for proper LT32Pro USB communication
                     if self.command_formatter.is_read_command_supported(command):
                         formatted_command = self.command_formatter.format_read_command(command)
@@ -2359,6 +2433,16 @@ class ConfigurationReaderService:
                 response = self._wait_for_response_with_timeout(param_name, command, timeout=10.0)
                 read_duration = time.time() - start_time
                 
+                # Check for cancellation after waiting for response
+                if self.cancel_requested:
+                    return ParameterReadResult(
+                        parameter_name=param_name,
+                        success=False,
+                        value=None,
+                        error_message="Operation canceled by user",
+                        raw_response=""
+                    )
+                
                 if response is None:
                     # Handle timeout
                     if self.parameter_error_handler:
@@ -2373,7 +2457,6 @@ class ConfigurationReaderService:
                             self._log_message(f"INFO: Retrying {param_name} (attempt {retry_count + 1}/{max_retries + 1})")
                             time.sleep(1.0)  # Brief delay before retry
                             continue
-                    
                     return ParameterReadResult(
                         parameter_name=param_name,
                         success=False,
@@ -2469,32 +2552,64 @@ class ConfigurationReaderService:
             timeout: Timeout in seconds
             
         Returns:
-            Response string or None if timeout
+            Response string or None if timeout or cancellation
         """
         start_time = time.time()
         self.waiting_for_response = True
         self.captured_response = None
         self.response_timeout = False
         
-        # Wait for response with periodic connection checks
+        # Wait for response with periodic connection checks and cancellation checks
         while time.time() - start_time < timeout:
+            # Check for cancellation
+            if self.cancel_requested:
+                self._log_message(f"INFO: Cancellation requested while waiting for {param_name} response")
+                self.waiting_for_response = False
+                self.response_timeout = True
+                self.captured_response = None
+                return None
+            
+            # Check if we have a captured response - this is the primary success condition
             if self.captured_response is not None:
                 response = self.captured_response
+                elapsed_time = time.time() - start_time
+                self._log_message(f"DEBUG: Successfully received response for {param_name} in {elapsed_time:.2f}s: '{response}'")
                 self.waiting_for_response = False
                 self.captured_response = None
                 return response
             
             # Check if connection is still valid every 2 seconds
-            if time.time() - start_time > 2.0 and (time.time() - start_time) % 2.0 < 0.1:
+            elapsed = time.time() - start_time
+            if elapsed > 2.0 and int(elapsed) % 2 == 0:
                 if not hasattr(self.app, 'serial_service') or not self.app.serial_service.is_connected:
                     self._log_message(f"WARNING: Connection lost while waiting for {param_name} response")
                     break
             
-            time.sleep(0.1)
+            time.sleep(0.05)  # Reduced sleep time for faster response detection
+        
+        # Final check for response before declaring timeout
+        if self.captured_response is not None:
+            response = self.captured_response
+            elapsed_time = time.time() - start_time
+            self._log_message(f"DEBUG: Response received just before timeout for {param_name} in {elapsed_time:.2f}s: '{response}'")
+            self.waiting_for_response = False
+            self.captured_response = None
+            return response
+        
+        # Check for cancellation one more time before declaring timeout
+        if self.cancel_requested:
+            self._log_message(f"INFO: Cancellation requested before timeout for {param_name} response")
+            self.waiting_for_response = False
+            self.response_timeout = True
+            self.captured_response = None
+            return None
         
         # Timeout occurred
+        elapsed_time = time.time() - start_time
+        self._log_message(f"WARNING: Timeout waiting for {param_name} response after {elapsed_time:.2f}s (threshold: {timeout}s)")
         self.waiting_for_response = False
         self.response_timeout = True
+        self.captured_response = None
         return None
     
     def _get_expected_format(self, command_type: str) -> str:
@@ -2780,6 +2895,19 @@ class ConfigurationReaderService:
                 except Exception as e:
                     self._log_message(f"WARNING: Failed to update progress dialog during cancellation: {str(e)}")
             
+            # Cancel any pending serial operations immediately
+            self._cancel_serial_operations()
+            
+            # Also cancel any waiting for response
+            self.waiting_for_response = False
+            self.response_timeout = True
+            
+            # If we have access to the serial service, cancel its operations too
+            if hasattr(self.app, 'serial_service'):
+                self.app.serial_service.waiting_for_response = False
+                self.app.serial_service.response_timeout = True
+                self.app.serial_service.captured_response = None
+            
             # Wait for the thread to finish gracefully
             if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.is_alive():
                 self.read_thread.join(timeout=3.0)  # Wait up to 3 seconds for graceful shutdown
@@ -2789,6 +2917,27 @@ class ConfigurationReaderService:
             self._log_message(f"INFO: Configuration reading cancelled - {successful_count} parameters read successfully before cancellation")
         else:
             self._log_message("INFO: No active configuration reading operation to cancel")
+    
+    def _cancel_serial_operations(self) -> None:
+        """Cancel any ongoing serial operations."""
+        try:
+            # Clear any pending responses
+            self.waiting_for_response = False
+            self.captured_response = None
+            self.response_timeout = True  # Set to True to indicate timeout/cancellation
+            
+            # If we have access to the serial service, clear its state too
+            if hasattr(self.app, 'serial_service'):
+                self.app.serial_service.waiting_for_response = False
+                self.app.serial_service.response_timeout = True
+                if hasattr(self.app.serial_service, 'response_buffer'):
+                    self.app.serial_service.response_buffer.clear()
+                # Clear any captured response
+                self.app.serial_service.captured_response = None
+            
+            self._log_message("INFO: Cancelled pending serial communications and response capture")
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to cancel serial operations: {str(e)}")
 
     def get_parameter_update_log(self) -> List[Dict[str, Any]]:
         """

@@ -88,6 +88,36 @@ class LogFrame(ctk.CTkFrame):
             print(f"[DEBUG] {message[6:].strip()}")  # Remove "DEBUG:" prefix
             return  # Don't add to UI log
             
+        # Redirect specific INFO messages to console instead of UI log
+        # These are typically internal operation messages that are not critical for the user
+        info_redirect_patterns = [
+            "Profile loaded to UI successfully",
+            "UI updated successfully with loaded values",
+            "Log copied to clipboard",
+            "Profile saved from UI successfully",
+            "Parameters frame updated with processed device values",
+            "Configuration check complete - UI updated with device values",
+            "Device configuration loaded to UI",
+            "All parameters sent successfully",
+            "Successfully read"
+        ]
+        
+        if message.startswith("INFO:"):
+            message_content = message[5:].strip()  # Remove "INFO:" prefix
+            # Check if this INFO message should be redirected to console
+            for pattern in info_redirect_patterns:
+                if pattern in message_content:
+                    # Print INFO messages to console
+                    print(f"[INFO] {message_content}")
+                    return  # Don't add to UI log
+        
+        # Redirect SYSTEM messages to console instead of UI log
+        # These are typically internal messages that don't have a specific category
+        if not any(message.startswith(prefix) for prefix in ["APP:", "DEV:", "INFO:", "ERROR:", "WARNING:", "DEBUG:"]):
+            # Print SYSTEM messages to console
+            print(f"[SYSTEM] {message.strip()}")
+            return  # Don't add to UI log
+            
         # Store the message in the deque for history
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_entries.append((timestamp, message))

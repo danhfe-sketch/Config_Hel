@@ -114,8 +114,8 @@ class ProfileFileHandler:
             profile.modified_at = datetime.now()
             profile.metadata.profile_format_version = self.CURRENT_FORMAT_VERSION
             
-            # Convert profile to dictionary
-            profile_data = profile.to_dict()
+            # Convert profile to dictionary for saving (without runtime metadata)
+            profile_data = profile.to_dict(for_save=True)
             
             # Add file metadata
             file_metadata = {
