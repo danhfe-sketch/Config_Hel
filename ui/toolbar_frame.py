@@ -1372,38 +1372,38 @@ For technical support, contact Lumini Tracker support team.
                     populate_result = self.app.params_frame.populate_ui_from_profile(profile)
                     
                     if populate_result.is_valid:
-                        show_info(
-                            self.app,
-                            "Profile Loaded",
-                            f"Profile successfully loaded from:\n{profile_path}"
-                        )
+                        title = self.i18n.get("profile_loaded_title", "Profile Loaded")
+                        message = self.i18n.get("profile_loaded_successfully", "Profile successfully loaded from {file_path}").format(file_path=profile_path)
+                        # Diagnostic log to verify localization values at runtime
+                        print(f"DEBUG: show_info will be called with title='{title}' message='{message}' (lang={self.i18n.get_current_language()})")
+                        show_info(self.app, title, message)
                         
                         if hasattr(self.app, 'log_frame') and self.app.log_frame:
                             self.app.log_frame.log_message(f"Profile loaded successfully from: {profile_path}\n")
                     else:
                         # Show warnings if there were issues
-                        warning_msg = "Profile loaded with warnings:\n\n"
+                        warning_msg = self.i18n.get("profile_operation_warning", "Profile loaded with warnings:\n\n")
                         warning_msg += "\n".join(populate_result.errors)
-                        show_warning(self.app, "Profile Load Warning", warning_msg)
+                        show_warning(self.app, self.i18n.get("profile_operation", "Profile Operation"), warning_msg)
                 else:
                     show_error(
                         self.app,
-                        "Load Profile Error",
-                        "Parameters frame is not available. Cannot load profile."
+                        self.i18n.get("profile_error", "Load Profile Error"),
+                        self.i18n.get("profile_manager_not_available", "Parameters frame is not available. Cannot load profile.")
                     )
                 
             except Exception as load_error:
-                error_msg = f"Failed to load profile file: {str(load_error)}"
-                show_error(self.app, "Load Profile Error", error_msg)
+                error_msg = self.i18n.get("profile_error_file_corrupted", "Failed to load profile file: {error}").format(error=str(load_error))
+                show_error(self.app, self.i18n.get("profile_error", "Load Profile Error"), error_msg)
                 
                 if hasattr(self.app, 'log_frame') and self.app.log_frame:
                     self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
                 
         except Exception as e:
-            error_msg = f"Load profile failed: {str(e)}"
+            error_msg = self.i18n.get("profile_operation_failed", "Load profile failed: {error}").format(error=str(e))
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            show_error(self.app, "Load Profile Error", error_msg)
+            show_error(self.app, self.i18n.get("profile_error", "Load Profile Error"), error_msg)
     
     def _handle_profile_operation_completion(self, result):
         """Handle the completion of profile operations."""
@@ -1601,11 +1601,9 @@ For technical support, contact Lumini Tracker support team.
                     populate_result = self.app.params_frame.populate_ui_from_profile(profile)
                     
                     if populate_result.is_valid:
-                        show_info(
-                            self.app,
-                            "Profile Loaded",
-                            f"Profile successfully loaded from:\n{profile_path}"
-                        )
+                        title = self.i18n.get("profile_loaded_title", "Profile Loaded")
+                        message = self.i18n.get("profile_loaded_successfully", "Profile successfully loaded from {file_path}").format(file_path=profile_path)
+                        show_info(self.app, title, message)
                         
                         if hasattr(self.app, 'log_frame') and self.app.log_frame:
                             self.app.log_frame.log_message(f"Profile loaded successfully from: {profile_path}\n")

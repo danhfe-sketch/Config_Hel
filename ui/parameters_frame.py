@@ -72,8 +72,23 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         Returns:
             ValidationResult: Result of the population operation
         """
+        # Check if profile_ui_populator is available
+        if not hasattr(self, 'profile_ui_populator') or not self.profile_ui_populator:
+            from models.validation_result import ValidationResult
+            result = ValidationResult(is_valid=False)
+            result.add_error("ProfileUIPopulator not available")
+            return result
+        
+        # Check if section_widgets is available and populated
+        if not hasattr(self, 'section_widgets') or not self.section_widgets:
+            from models.validation_result import ValidationResult
+            result = ValidationResult(is_valid=False)
+            result.add_error("Section widgets not available")
+            return result
+        
         # Use the ProfileUIPopulator to populate UI from profile
-        return self.profile_ui_populator.update_ui_elements_from_profile(profile, self.section_widgets)
+        result = self.profile_ui_populator.update_ui_elements_from_profile(profile, self.section_widgets)
+        return result
     
     def extract_validated_field_values(self):
         """

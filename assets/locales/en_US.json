@@ -467,6 +467,7 @@
     "parameter_warning": "Warning for parameter {parameter_name}: {details}",
     "invalid_parameter_value": "Invalid value for parameter {parameter_name}",
     "parameter_not_found": "Parameter {parameter_name} not found",
+"profile_loaded_title": "Profile Loaded",
     "profile_saved_successfully": "Profile successfully saved to {file_path}",
     "profile_loaded_successfully": "Profile successfully loaded from {file_path}",
     "file_not_found": "File not found: {file_path}",

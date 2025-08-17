@@ -467,6 +467,7 @@
     "parameter_warning": "Aviso para parâmetro {parameter_name}: {details}",
     "invalid_parameter_value": "Valor inválido para parâmetro {parameter_name}",
     "parameter_not_found": "Parâmetro {parameter_name} não encontrado",
+"profile_loaded_title": "Perfil Carregado",
     "profile_saved_successfully": "Perfil salvo com sucesso em {file_path}",
     "profile_loaded_successfully": "Perfil carregado com sucesso de {file_path}",
     "file_not_found": "Arquivo não encontrado: {file_path}",

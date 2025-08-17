@@ -202,7 +202,25 @@ class CTkMessageBox(ctk.CTkToplevel):
 
 def show_info(parent, title: str, message: str) -> None:
     """Show an info message dialog (localized buttons if available)."""
-    i18n = getattr(parent, 'i18n_service', None)
+    # Prefer i18n service attached to the parent under common attribute names
+    i18n = None
+    if hasattr(parent, 'i18n'):
+        i18n = getattr(parent, 'i18n')
+    elif hasattr(parent, 'i18n_service'):
+        i18n = getattr(parent, 'i18n_service')
+    
+    # Fix common hardcoded strings by translating them when possible
+    try:
+        if i18n:
+            # Translate known profile-load messages if they were passed as English literals
+            if title == "Profile Loaded":
+                title = i18n.get("profile_loaded_title", title)
+            if isinstance(message, str) and "Profile successfully loaded" in message:
+                message = i18n.get("profile_loaded_successfully", "Profile successfully loaded from {file_path}").format(file_path=message.splitlines()[-1] if "\n" in message else message)
+    except Exception:
+        # If translation lookup fails, keep original title/message
+        pass
+
     ok_label = i18n.get('ok', 'OK') if i18n else 'OK'
     dialog = CTkMessageBox(
         parent=parent,

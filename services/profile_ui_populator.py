@@ -307,6 +307,9 @@ class ProfileUIPopulator:
         
         # Process each profile parameter
         for param_key, param_value in profile.parameters.items():
+            # Parse string dictionary values back to actual dictionaries
+            processed_value = self._parse_parameter_value(param_value.value)
+            
             # Split the parameter key to identify section, parameter, and field
             parts = param_key.split('.')
             if len(parts) >= 3:  # section.parameter.field format
@@ -323,10 +326,19 @@ class ProfileUIPopulator:
                     grouped_params[grouped_key] = ParameterValue(value={}, source=param_value.source)
                 
                 # Add the field value to the grouped parameter
-                grouped_params[grouped_key].value[field_name] = param_value.value
+                grouped_params[grouped_key].value[field_name] = processed_value
             else:
-                # Keep parameters that are already in the correct format
-                grouped_params[param_key] = param_value
+                # For simple parameters, if processed_value is a dict containing the field
+                # matching the parameter name (common when a single-field dict was serialized),
+                # extract the inner value so UI receives the raw value (e.g., '59') instead of {'odometer': '59'}.
+                from models.universal_profile import ParameterValue
+                # Determine the simple parameter name (last segment)
+                simple_name = param_key.split('.')[-1] if param_key else None
+                if isinstance(processed_value, dict) and simple_name and simple_name in processed_value and len(processed_value) == 1:
+                    extracted_value = processed_value[simple_name]
+                    grouped_params[param_key] = ParameterValue(value=extracted_value, source=param_value.source)
+                else:
+                    grouped_params[param_key] = ParameterValue(value=processed_value, source=param_value.source)
         
         # Update each section's parameters
         for section_name, section_widget in section_widgets.items():
@@ -359,4 +371,33 @@ class ProfileUIPopulator:
         # Log successful update
         if updated_count > 0:
             print(f"INFO: Successfully updated {updated_count} UI parameters from profile")
+            
         return result
+    
+    def _parse_parameter_value(self, value):
+        """
+        Parse parameter values that might be stored as string representations of dictionaries.
+        
+        Args:
+            value: The parameter value to parse
+            
+        Returns:
+            The parsed value (dict if it was a string representation, otherwise original value)
+        """
+        if isinstance(value, str):
+            # Check if this looks like a string representation of a dictionary
+            if value.startswith('{') and value.endswith('}'):
+                try:
+                    # Try to safely evaluate the string as a Python literal
+                    import ast
+                    parsed_value = ast.literal_eval(value)
+                    return parsed_value
+                except (ValueError, SyntaxError):
+                    # If parsing fails, return the original string
+                    return value
+            else:
+                # Regular string value
+                return value
+        else:
+            # Non-string value, return as-is
+            return value
