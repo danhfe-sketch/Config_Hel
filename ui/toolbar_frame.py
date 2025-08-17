@@ -652,22 +652,9 @@ For technical support, contact Lumini Tracker support team.
                 title = self.i18n.get("load_from_device", "Load from Device")
                 show_info(self.app, title, success_msg)
 
-                # Update UI with the loaded parameters using the same approach as check configuration
-                try:
-                    # Use the serial service method that properly updates the UI
-                    if hasattr(self.app, 'serial_service') and hasattr(self.app.serial_service, '_update_ui_from_device_configuration'):
-                        self.app.serial_service._update_ui_from_device_configuration()
-                    else:
-                        # Log that we're falling back to direct UI update
-                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                            self.app.log_frame.log_message("DEBUG: Using direct UI update for load from device\n")
-                        # Fallback to direct UI update using the profile if available
-                        if hasattr(result, 'profile') and result.profile:
-                            self.app.after(0, self._update_ui_with_loaded_profile, result.profile)
-                except Exception as populate_err:
-                    # Log but do not break user flow
-                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                        self.app.log_frame.log_message(f"ERROR: Failed to populate UI after device load: {populate_err}\n")
+                # Note: UI is already updated by ConfigurationReaderService.read_all_configurations()
+                # No need to call _update_ui_from_device_configuration again as it would duplicate the process
+                # The configuration reading service handles both parameter reading and UI updates
                 
                 # Log success
                 if hasattr(self.app, 'log_frame') and self.app.log_frame:

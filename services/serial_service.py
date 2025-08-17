@@ -619,8 +619,8 @@ class SerialService:
                 success_msg = f"Configuration reading completed successfully."
                 self.app.log_frame.log_message(f"INFO: {success_msg}\n")
                 
-                # Load profile from device with parameter processing and update UI
-                self.app.after(0, self._update_ui_from_device_configuration)
+                # Note: UI is already updated by the ConfigurationReaderService.read_all_configurations()
+                # No need to call _update_ui_from_device_configuration again as it would duplicate the process
                 
                 if hasattr(self.app, 'operation_confirmation_service'):
                     self.app.operation_confirmation_service.show_success_notification(success_msg)
