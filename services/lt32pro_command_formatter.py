@@ -143,9 +143,43 @@ class LT32ProCommandFormatter:
         
         if command not in self.WRITE_COMMAND_MAPPINGS:
             raise ValueError(f"Unsupported write command: {command}")
-            
+
+        # Special handling for JAMMER: when state is OFF, do not include the extra mode/field
+        if command == 'JAMMER':
+            # Accept values like 'OFF', 'OFF,0', 'ON,1' etc.
+            parts = [p.strip() for p in value.split(',') if p is not None]
+            if len(parts) == 0:
+                raise ValueError("JAMMER command requires at least a state value")
+            state = parts[0].upper()
+            if state == 'OFF':
+                return f"ATSMS:JAMMER,OFF#"
+            # For non-OFF states, preserve original formatting (include remaining parts if any)
+            rest = ','.join(parts[1:]) if len(parts) > 1 else ''
+            base = f"JAMMER,{state}"
+            if rest:
+                base = f"{base},{rest}"
+            base = f"{base}#"
+            return f"ATSMS:{base}"
+
+        # Special handling for SPEED: when state is OFF, do not include trailing numeric fields
+        if command == 'SPEED':
+            # Accept values like 'OFF', 'OFF,15,0,0', 'ON,80,1,0' etc.
+            parts = [p.strip() for p in value.split(',') if p is not None]
+            if len(parts) == 0:
+                raise ValueError("SPEED command requires at least a state value")
+            state = parts[0].upper()
+            if state == 'OFF':
+                return f"ATSMS:SPEED,OFF#"
+            # For non-OFF states, preserve original formatting and append '#'
+            rest = ','.join(parts[1:]) if len(parts) > 1 else ''
+            base = f"SPEED,{state}"
+            if rest:
+                base = f"{base},{rest}"
+            base = f"{base}#"
+            return f"ATSMS:{base}"
+
         self._validate_write_command_value(command, value)
-        
+
         base_command = self.WRITE_COMMAND_MAPPINGS[command].format(value=value)
         return f"ATSMS:{base_command}"
     

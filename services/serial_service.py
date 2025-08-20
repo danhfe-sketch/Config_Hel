@@ -17,6 +17,8 @@ class SerialService:
         self.is_connected = False
         self.read_thread = None
         self.stop_thread = False
+
+        # Device info
         self.device_info = {
             'imei': None,
             'iccid': None,
@@ -25,7 +27,7 @@ class SerialService:
         self.response_buffer = []
         self.waiting_for_response = False
         self.current_command_type = None
-        
+
         # Command queue for bulk operations
         self.command_queue = queue.Queue()
         self.queue_processing = False
@@ -33,13 +35,15 @@ class SerialService:
         self.queue_delay = 0.5  # Delay between commands in seconds
         self.queue_callback = None
         self.queue_results = {}  # Store results from command queue execution
-        
+        # How long to wait for a device response between queued commands
+        self.queue_response_timeout = 3.0  # seconds
+
         # Connection monitoring
         self.last_activity_time = None
         self.connection_monitor_thread = None
         self.stop_monitor = False
         self.connection_timeout = 3600  # seconds without activity before checking connection (1 hour)
-        
+
         # Configuration reader service
         self.configuration_reader = None
 
@@ -205,6 +209,22 @@ class SerialService:
             self.configuration_reader.cancel_requested):
             self.app.log_frame.log_message("INFO: Command not sent - operation was canceled\n")
             return False
+
+        # Block new commands if a bulk operation is in progress, but allow
+        # the internal queue processing thread to send commands.
+        if self.queue_processing:
+            try:
+                current = threading.current_thread()
+                # If the call originates from the queue thread, allow it.
+                if hasattr(self, 'queue_thread') and current is self.queue_thread:
+                    pass
+                else:
+                    self.app.log_frame.log_message(f"INFO: Command '{command}' blocked - bulk operation in progress\n")
+                    return False
+            except Exception:
+                # On any error determining the thread, conservatively block external sends
+                self.app.log_frame.log_message(f"INFO: Command '{command}' blocked - bulk operation in progress\n")
+                return False
                 
         if not self.is_connected or not self.serial_port:
             self.app.log_frame.log_message("ERROR: Not connected to device\n")
@@ -247,10 +267,31 @@ class SerialService:
         
         # Send the command
         try:
-            encoded_command = f"{command}\r\n".encode('utf-8')
-            self.app.log_frame.log_message(f"DEBUG: Sending bytes: {encoded_command!r}\n")
+            # Ensure command has ATSMS: prefix for consistency across the codebase
+            send_command = command
+            if not isinstance(send_command, str):
+                send_command = str(send_command)
+            if not send_command.startswith("ATSMS:"):
+                # Preserve original command in logs but send a prefixed command to device
+                prefixed = f"ATSMS:{send_command}"
+            else:
+                prefixed = send_command
+    
+            encoded_command = f"{prefixed}\r\n".encode('utf-8')
+            # Log both what we intended to send and the final bytes for transparency
+            try:
+                self.app.log_frame.log_message(f"DEBUG: Sending command (original): {command}\n")
+                self.app.log_frame.log_message(f"DEBUG: Sending bytes: {encoded_command!r}\n")
+            except Exception:
+                print(f"DEBUG: Sending command (original): {command}")
+                print(f"DEBUG: Sending bytes: {encoded_command!r}")
+    
             self.serial_port.write(encoded_command)
-            self.app.log_frame.log_message(f"APP: {command}\n")
+            # Log the human-readable command that was sent to the device
+            try:
+                self.app.log_frame.log_message(f"APP: {prefixed}\n")
+            except Exception:
+                print(f"APP: {prefixed}")
             
             # Set the current command type for response processing
             self.current_command_type = command_type
@@ -450,7 +491,24 @@ class SerialService:
                 command, command_type = self.command_queue.get()
                 
                 # Send the command
-                self.send_command(command, command_type)
+                sent_ok = self.send_command(command, command_type)
+
+                # If send succeeded, wait for the device response or timeout
+                if sent_ok:
+                    start_wait = time.time()
+                    waited = 0.0
+                    # Only wait while waiting_for_response is True and we haven't exceeded the timeout
+                    while self.waiting_for_response and (time.time() - start_wait) < self.queue_response_timeout:
+                        time.sleep(0.05)
+                        waited = time.time() - start_wait
+                    # If still waiting after timeout, log timeout notice
+                    if self.waiting_for_response:
+                        self.app.after(0, self.app.log_frame.log_message, f"INFO: Response timeout after {self.queue_response_timeout}s for command: {command}\n")
+                        # reset waiting flag to avoid blocking future commands
+                        self.waiting_for_response = False
+                else:
+                    # If send failed, log and continue to next command
+                    self.app.after(0, self.app.log_frame.log_message, f"WARNING: Failed to send queued command: {command}\n")
                 
                 # Increment processed commands counter
                 self.processed_commands += 1

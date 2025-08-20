@@ -503,10 +503,22 @@ class DeviceCommandMapper:
                 
                 self.logger.debug(f"Using template for {param_name}: {template}")
                 
-                # Format the command using the mapped parameters
+                # Special-case: when certain multi-field parameters are disabled, the
+                # device expects a minimal command with only the state (e.g. "JAMMER,OFF#",
+                # "SPEED,OFF#") instead of the full expanded template.
                 try:
-                    command = template.format(**command_params)
-                    self.logger.debug(f"Formatted command for {param_name}: {command}")
+                    if param_name == 'jammer_detection' and command_params.get('state') == 'OFF':
+                        # Generate minimal jammer command when disabled
+                        command = f"JAMMER,{command_params.get('state')}#"
+                        self.logger.debug(f"Using minimal command for disabled jammer_detection: {command}")
+                    elif param_name == 'speed_alert' and command_params.get('enabled') == 'OFF':
+                        # Generate minimal speed command when disabled
+                        command = f"SPEED,OFF#"
+                        self.logger.debug(f"Using minimal command for disabled speed_alert: {command}")
+                    else:
+                        # Format the command using the mapped parameters
+                        command = template.format(**command_params)
+                        self.logger.debug(f"Formatted command for {param_name}: {command}")
                 except KeyError as e:
                     missing_key = str(e).strip("'")
                     available_keys = list(command_params.keys())
@@ -581,6 +593,19 @@ class DeviceCommandMapper:
                 self.logger.debug(f"Command validation passed for {param_name}: {full_command}")
             else:
                 self.logger.debug(f"Command validation skipped for {param_name}")
+            
+            # Remove trailing '#' for SZCS commands during profile loading
+            if full_command.startswith("ATSMS:SZCS#") and full_command.endswith('#'):
+                # Check if this is a multi-part command like ACCLINE#ACC_CFG (these should keep their structure)
+                command_body = full_command[6:]  # Remove "ATSMS:" prefix
+                # Multi-part commands have multiple '=' signs or specific patterns like ACCLINE#ACC_CFG
+                if 'ACCLINE=' in command_body and 'ACC_CFG=' in command_body:
+                    # This is a multi-part ignition command, don't remove trailing '#'
+                    self.logger.debug(f"Keeping multi-part SZCS command structure: {full_command}")
+                else:
+                    # This is a single SZCS command with trailing '#', remove it
+                    full_command = full_command[:-1]
+                    self.logger.debug(f"Removed trailing '#' for SZCS command: {full_command}")
             
             self.logger.info(f"Successfully generated command for {param_name}: {full_command}")
             return full_command
@@ -662,6 +687,28 @@ class DeviceCommandMapper:
             ValueError: If value mapping fails
         """
         try:
+            # Special handling for boolean values in specific parameters
+            if param_name == 'speed_buzzer' and isinstance(value, bool):
+                # Map boolean to 1/0 for speed buzzer
+                mapped_value = '1' if value else '0'
+                self.logger.debug(f"Mapped boolean value for {param_name}: {value} -> {mapped_value}")
+                return mapped_value
+            
+            # Special handling for sleep mode values
+            if param_name == 'sleep_mode':
+                # Use the specification mapping for sleep mode
+                from .parameter_specification import get_command_value_mapping
+                sleep_mapping = get_command_value_mapping('sleep_mode')
+                if sleep_mapping and value in sleep_mapping:
+                    mapped_value = str(sleep_mapping[value])
+                    self.logger.debug(f"Mapped sleep_mode value: {value} -> {mapped_value}")
+                    return mapped_value
+                # Fallback to internal mapping
+                elif value in self.value_mappings.get('sleep_mode', {}):
+                    mapped_value = str(self.value_mappings['sleep_mode'][value])
+                    self.logger.debug(f"Mapped sleep_mode value (fallback): {value} -> {mapped_value}")
+                    return mapped_value
+            
             # Check if parameter has value mappings defined
             if param_name in self.value_mappings:
                 mapping = self.value_mappings[param_name]
@@ -1016,6 +1063,10 @@ class DeviceCommandMapper:
                     if group_params:  # Only process if we have some parameters
                         command = group['method'](group_params, validate_commands)
                         if command:
+                            # Remove trailing '#' for SZCS commands during profile loading
+                            if command.startswith("ATSMS:SZCS#") and command.endswith('#'):
+                                command = command[:-1]
+                                self.logger.debug(f"Removed trailing '#' for SZCS command in bulk operation: {command}")
                             commands.append(command)
                             self.logger.info(f"Added bulk command for {group['name']}: {command}")
                             # Mark these parameters as processed
@@ -1055,6 +1106,10 @@ class DeviceCommandMapper:
                 try:
                     command = self._generate_individual_command(param_name, param_value, validate_commands)
                     if command:
+                        # Remove trailing '#' for SZCS commands during profile loading
+                        if command.startswith("ATSMS:SZCS#") and command.endswith('#'):
+                            command = command[:-1]
+                            self.logger.debug(f"Removed trailing '#' for SZCS command in bulk operation: {command}")
                         commands.append(command)
                         self.logger.info(f"Added bulk command for {param_name}: {command}")
                         processed_params.add(param_name)
@@ -1086,6 +1141,10 @@ class DeviceCommandMapper:
                 try:
                     command = self._generate_individual_command(param_name, param_value, validate_commands)
                     if command:
+                        # Remove trailing '#' for SZCS commands during profile loading
+                        if command.startswith("ATSMS:SZCS#") and command.endswith('#'):
+                            command = command[:-1]
+                            self.logger.debug(f"Removed trailing '#' for SZCS command in bulk operation: {command}")
                         commands.append(command)
                         self.logger.info(f"Added bulk command for additional parameter {param_name}: {command}")
                     else:
@@ -1184,8 +1243,12 @@ class DeviceCommandMapper:
     def format_speed_alert_command(self, enabled: bool, detection_time: int, speed_limit: int, alert_type: str) -> str:
         """Format speed alert configuration command."""
         enabled_str = 'ON' if enabled else 'OFF'
-        alert_type_code = self._map_alert_type(alert_type)
-        command = f"ATSMS:SPEED,{enabled_str},{detection_time},{speed_limit},{alert_type_code}#"
+        # When disabled, device expects a minimal SPEED,OFF# command (no extra numeric fields)
+        if not enabled:
+            command = f"ATSMS:SPEED,OFF#"
+        else:
+            alert_type_code = self._map_alert_type(alert_type)
+            command = f"ATSMS:SPEED,{enabled_str},{detection_time},{speed_limit},{alert_type_code}#"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1193,6 +1256,24 @@ class DeviceCommandMapper:
             except ValueError as e:
                 raise ValueError(f"Speed alert command validation failed: {str(e)}")
         return command
+
+    def _generate_jammer_detection_command(self, values: Dict[str, Any]) -> Optional[str]:
+        """
+        Generate JAMMER command from specification-based parameter values.
+
+        Accepts both {'value': bool} and {'enabled': bool} formats and returns
+        the fully formatted ATSMS: command string.
+        """
+        try:
+            enabled = values.get('value') if 'value' in values else values.get('enabled', False)
+            if not isinstance(enabled, bool):
+                enabled = bool(enabled)
+
+            # Delegate to existing formatter which already implements minimal form for OFF
+            return self.format_jammer_detection_command(enabled)
+        except Exception as e:
+            self.logger.error(f"Error generating jammer detection command: {str(e)}")
+            return None
     
     def format_main_power_alert_command(self, enabled: bool, alert_type: str, detection_time: int, min_charge_time: int) -> str:
         """Format main power alert configuration command."""
@@ -1342,7 +1423,11 @@ class DeviceCommandMapper:
     def format_jammer_detection_command(self, enabled: bool) -> str:
         """Format jammer detection configuration command."""
         state = 'ON' if enabled else 'OFF'
-        command = f"ATSMS:JAMMER,{state},0#"
+        
+        if not enabled:
+            command = f"ATSMS:JAMMER,{state}#"
+        else:
+            command = f"ATSMS:JAMMER,{state},0#"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1374,34 +1459,73 @@ class DeviceCommandMapper:
         return command
 
     def _generate_apn_command(self, apn_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
-        """Generate APN command from flattened parameters."""
+        """Generate APN command from flattened parameters.
+        
+        Accept multiple incoming key names for robustness: 'apn_server'|'apn'|'server' and
+        'apn_user'|'user', 'apn_password'|'password'. Ensure values are stringified and
+        return None if APN server is missing.
+        """
         try:
-            apn_server = apn_params.get('apn_server', '')
-            apn_user = apn_params.get('apn_user', '')
-            apn_password = apn_params.get('apn_password', '')
-            
-            if not apn_server:
+            # Accept several possible keys coming from different parts of the codebase
+            apn_server = apn_params.get('apn_server') or apn_params.get('apn') or apn_params.get('server') or ''
+            apn_user = apn_params.get('apn_user') or apn_params.get('user') or ''
+            apn_password = apn_params.get('apn_password') or apn_params.get('password') or ''
+    
+            # Normalize to strings and guard against None
+            apn_server = '' if apn_server is None else str(apn_server)
+            apn_user = '' if apn_user is None else str(apn_user)
+            apn_password = '' if apn_password is None else str(apn_password)
+    
+            if not apn_server.strip():
                 self.logger.warning("APN server is required for APN command")
                 return None
-                
+    
             return self.format_apn_command(apn_server, apn_user, apn_password)
-            
+    
         except Exception as e:
             self.logger.error(f"Error generating APN command: {str(e)}")
             return None
     
     def _generate_server_command(self, server_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
-        """Generate server command from flattened parameters."""
+        """Generate server command from flattened parameters.
+        
+        Be tolerant of different key names produced by various code paths:
+        accept 'server_address'|'address'|'server_ip'|'server_domain' and
+        'server_port'|'port'. Coerce port to integer and return None when required
+        pieces are missing.
+        """
         try:
-            server_address = server_params.get('server_address')
-            server_port = server_params.get('server_port')
-            
-            if not server_address or not server_port:
+            # Try multiple possible keys for address and port
+            server_address = (server_params.get('server_address') or
+                              server_params.get('address') or
+                              server_params.get('server_ip') or
+                              server_params.get('server_domain') or
+                              '')
+    
+            server_port = (server_params.get('server_port') or
+                           server_params.get('port') or
+                           '')
+    
+            # Normalize and validate
+            server_address = '' if server_address is None else str(server_address)
+    
+            if server_port is None or server_port == '':
                 self.logger.warning("Both server address and port are required for server command")
                 return None
-                
-            return self.format_server_command(server_address, server_port)
-            
+    
+            # Coerce port to integer where possible, fall back to 0
+            try:
+                server_port_int = int(float(server_port))
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid server port value '{server_port}', defaulting to 0")
+                server_port_int = 0
+    
+            if not server_address.strip():
+                self.logger.warning("Server address is required for server command")
+                return None
+    
+            return self.format_server_command(str(server_address), str(server_port_int))
+    
         except Exception as e:
             self.logger.error(f"Error generating server command: {str(e)}")
             return None
@@ -1487,8 +1611,25 @@ class DeviceCommandMapper:
         """Generate angle report command from flattened parameters."""
         try:
             enabled = angle_params.get('angle_report_enabled', False)
-            min_speed = angle_params.get('angle_report_min_speed', 8)
-            angle_variation = angle_params.get('angle_report_angle_variation', 15)
+            
+            # Use actual values from profile instead of defaults
+            min_speed_raw = angle_params.get('angle_report_min_speed', '08')
+            angle_variation_raw = angle_params.get('angle_report_angle_variation', '015')
+            
+            # Convert to int for the format_angle_report_command method but preserve original formatting
+            try:
+                min_speed = int(str(min_speed_raw))
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid min_speed value: {min_speed_raw}, using default 8")
+                min_speed = 8
+            
+            try:
+                angle_variation = int(str(angle_variation_raw))
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid angle_variation value: {angle_variation_raw}, using default 15")
+                angle_variation = 15
+            
+            self.logger.debug(f"Using angle_report values from profile: min_speed={min_speed}, angle_variation={angle_variation}")
             
             return self.format_angle_report_command(enabled, min_speed, angle_variation)
             
@@ -2075,13 +2216,20 @@ class DeviceCommandMapper:
         elif param_config.name == 'speed_alert':
             return self._generate_speed_alert_command(values, True)
         elif param_config.name == 'angle_report':
-            return self._generate_angle_report_command(values, True)
+            # Use the multi-field parameter handler that preserves original values
+            command_params = self._handle_angle_report_fields(values)
+            template = self.command_templates.get('angle_report')
+            if template:
+                command = template.format(**command_params)
+                return f"{self.command_prefix}{command}"
+            else:
+                raise ValueError(f"No command template found for angle_report")
         elif param_config.name == 'main_power_alert':
             return self._generate_power_alert_command(values, True)
         elif param_config.name == 'jammer_relay_action':
             return self._generate_jammer_relay_command(values, True)
         elif param_config.name == 'vibration_sensitivity':
-            return self._generate_vibration_sensitivity_command(values, True)
+            return self._generate_vibration_sensitivity_command(values)
         else:
             # Generic multi-field command generation
             # Get the set command template - try different command keys
@@ -2092,6 +2240,44 @@ class DeviceCommandMapper:
                 raise ValueError(f"No set command defined for parameter {param_config.name}")
             
             return self._generate_generic_multi_field_command(param_config, values, set_command)
+    
+    def _generate_single_field_command(self, param_config: ParameterConfig, values: Dict[str, Any]) -> str:
+        """
+        Generate command for single-field parameters using parameter specification.
+        
+        Args:
+            param_config: Parameter configuration from specification
+            values: Dictionary of parameter values
+            
+        Returns:
+            Formatted AT command string
+            
+        Raises:
+            ValueError: If command generation fails
+        """
+        try:
+            # Get the set command template
+            set_command = param_config.commands.get('set')
+            if not set_command:
+                raise ValueError(f"No set command defined for parameter {param_config.name}")
+            
+            # Get the parameter value
+            if isinstance(values, dict):
+                value = values.get('value', values.get(param_config.name, ''))
+            else:
+                value = values
+            
+            # Apply value mapping based on parameter type
+            mapped_value = self._get_mapped_parameter_value(param_config, {'value': value})
+            
+            # Replace placeholder in command template
+            command = self._replace_command_placeholders(set_command, param_config.name, mapped_value)
+            
+            return f"{self.command_prefix}{command}"
+            
+        except Exception as e:
+            self.logger.error(f"Error generating single-field command for {param_config.name}: {str(e)}")
+            raise ValueError(f"Failed to generate single-field command for {param_config.name}: {str(e)}")
     
     def _get_mapped_parameter_value(self, param_config: ParameterConfig, values: Dict[str, Any]) -> Any:
         """Get parameter value with appropriate mapping based on UI element type."""
@@ -2180,7 +2366,7 @@ class DeviceCommandMapper:
         if enabled is False:
             level_out = 0
         elif level is not None:
-            level_out = level
+            level_out = int(level)
         else:
             level_out = 1 if (enabled or enabled is None) else 0
         command = f"SZCS#VIBL={level_out}"
@@ -2760,8 +2946,25 @@ class DeviceCommandMapper:
                 self.logger.warning(f"Invalid enabled field type for jammer_relay_action: {type(enabled).__name__}, converting to boolean")
                 enabled = bool(enabled)
             
-            # Map output operation to command value - always use the actual value from file
+            # Map output operation to command value - handle both string and numeric values
             output_operation = values.get('output_operation', 'Sem Ação')
+            
+            # Convert numeric values (as int or string) to string equivalents
+            if isinstance(output_operation, (int, float)) or (isinstance(output_operation, str) and output_operation.isdigit()):
+                numeric_to_string_map = {
+                    0: 'Sem Ação',
+                    1: 'Ativar e Manter',
+                    2: 'Ativar e Desativar com Jammer'
+                }
+                original_value = output_operation
+                output_operation = numeric_to_string_map.get(int(output_operation))
+                if output_operation is None:
+                    # Handle unexpected numeric values - default to 'Sem Ação'
+                    self.logger.warning(f"Unexpected numeric output_operation value: {original_value}, defaulting to 'Sem Ação'")
+                    output_operation = 'Sem Ação'
+                else:
+                    self.logger.debug(f"Converted numeric output_operation value to string: {original_value} -> {output_operation}")
+            
             if output_operation not in ['Sem Ação', 'Ativar e Manter', 'Ativar e Desativar com Jammer']:
                 raise ValueError(f"Invalid output_operation value: {output_operation}. Must be one of: 'Sem Ação', 'Ativar e Manter', 'Ativar e Desativar com Jammer'")
             
@@ -2884,8 +3087,18 @@ class DeviceCommandMapper:
             state = 'ON' if enabled_raw else 'OFF'
             self.logger.debug(f"Mapped backup_battery_alert state: {state}")
             
-            # Validate and map mode
+            # Validate and map mode - handle both string and numeric values
             mode_raw = values.get('mode', 'Apenas GPRS')
+            
+            # Convert numeric values (as int or string) to string equivalents
+            if isinstance(mode_raw, (int, float)) or (isinstance(mode_raw, str) and mode_raw.isdigit()):
+                numeric_to_string_map = {
+                    0: 'Apenas GPRS',
+                    1: 'GPRS+SMS'
+                }
+                mode_raw = numeric_to_string_map.get(int(mode_raw), 'Apenas GPRS')
+                self.logger.debug(f"Converted numeric mode value to string: {values.get('mode')} -> {mode_raw}")
+            
             if mode_raw not in ['Apenas GPRS', 'GPRS+SMS']:
                 raise ValueError(f"Invalid mode value: {mode_raw}. Must be 'Apenas GPRS' or 'GPRS+SMS'")
             
@@ -2926,6 +3139,8 @@ class DeviceCommandMapper:
                 self.logger.warning(f"Invalid enabled field type for angle_report: {type(enabled_raw).__name__}, converting to boolean")
                 enabled_raw = bool(enabled_raw)
             
+            self.logger.debug(f"Angle report enabled status: {enabled_raw}")
+            
             if not enabled_raw:
                 self.logger.debug("Angle report disabled, setting parameters to 0")
                 return {
@@ -2934,8 +3149,10 @@ class DeviceCommandMapper:
                 }
             
             # Read raw inputs (preserve strings if provided by UI)
-            raw_min_speed = values.get('min_speed', 0)
-            raw_angle_variation = values.get('angle_variation', 0)
+            raw_min_speed = values.get('min_speed', '08')  # Use string default to preserve formatting
+            raw_angle_variation = values.get('angle_variation', '015')  # Use string default to preserve formatting
+            
+            self.logger.debug(f"Processing angle_report with raw values - min_speed: {raw_min_speed} (type: {type(raw_min_speed)}), angle_variation: {raw_angle_variation} (type: {type(raw_angle_variation)})")
             
             # Convert to int for validation but preserve original string formatting when available
             try:
@@ -2954,16 +3171,20 @@ class DeviceCommandMapper:
             if not (0 <= angle_variation_int <= 180):
                 raise ValueError("angle_report.angle_variation must be between 0 and 180")
             
-            # Preserve the exact UI string when it was provided as a string; otherwise use the integer representation
-            if isinstance(raw_min_speed, str):
+            # Always preserve the exact string values from the profile when they exist
+            if isinstance(raw_min_speed, str) and raw_min_speed.strip():
                 min_speed_out = raw_min_speed
+                self.logger.debug(f"Preserving original min_speed string: '{raw_min_speed}'")
             else:
                 min_speed_out = str(min_speed_int)
+                self.logger.debug(f"Using converted min_speed: {min_speed_out}")
             
-            if isinstance(raw_angle_variation, str):
+            if isinstance(raw_angle_variation, str) and raw_angle_variation.strip():
                 angle_variation_out = raw_angle_variation
+                self.logger.debug(f"Preserving original angle_variation string: '{raw_angle_variation}'")
             else:
                 angle_variation_out = str(angle_variation_int)
+                self.logger.debug(f"Using converted angle_variation: {angle_variation_out}")
             
             result = {
                 'min_speed': min_speed_out,
@@ -3291,26 +3512,35 @@ class DeviceCommandMapper:
             self.logger.error(f"Error processing jammer_detection fields: {str(e)}")
             raise ValueError(f"Failed to process jammer_detection fields: {str(e)}")
     
-    def _extract_time_value(self, time_str: str) -> int:
+    def _extract_time_value(self, time_str: Any) -> int:
         """
         Extract numeric time value from time string.
         
         Args:
-            time_str: Time string like '10s', '1800s', 'ACC OFF:1800s'
+            time_str: Time string like '10s', '1800s', 'ACC OFF:1800s' or numeric values.
             
         Returns:
             Numeric time value in seconds
         """
         import re
         
+        if time_str is None:
+            return 0
+        
+        # Ensure we operate on a string to avoid TypeError when using 'in'
+        s = str(time_str)
+        
         # Handle special format like 'ACC OFF:1800s'
-        if ':' in time_str:
-            time_str = time_str.split(':')[1]
+        if ':' in s:
+            s = s.split(':', 1)[1]
         
         # Extract numeric value
-        match = re.search(r'(\d+)', time_str)
+        match = re.search(r'(\d+)', s)
         if match:
-            return int(match.group(1))
+            try:
+                return int(match.group(1))
+            except (ValueError, TypeError):
+                return 0
         else:
             return 0
     

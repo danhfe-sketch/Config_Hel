@@ -45,6 +45,7 @@
     "save_profile": "Save Profile",
     "load_from_device": "Load from Device",
     "load_profile_to_device": "Load Profile to Device",
+    "load_profile_to_device_confirmation": "This will load the profile from:\\n\\n{profile_path}\\n\\nand deploy it to the device.\\n\\nContinue?",
     "language": "Language",
     "help": "Help",
     "install_driver": "Install Configuration Cable Driver",

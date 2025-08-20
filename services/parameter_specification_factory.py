@@ -773,10 +773,12 @@ class ParameterSpecificationFactory:
                 self.i18n_service.get("apn_server_required", "APN server is required")
             )
             return
-        
+
         command = f"ATSMS:APN,{server},{user},{password}#"
-        self.serial_service.send_command(command)
-        
+        # This is a direct UI-initiated send; bypass pre-send validation to avoid
+        # blocking well-formed APN commands from the user's Send button.
+        self.serial_service.send_command(command, command_type='apn', bypass_validation=True)
+
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("apn_command_sent", "APN configuration sent to device")
@@ -798,10 +800,11 @@ class ParameterSpecificationFactory:
         import re
         ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
         server_type = '0' if re.match(ip_pattern, address) else '1'
-        
+
         command = f"ATSMS:SERVER,{server_type},{address},{port},0#"
-        self.serial_service.send_command(command)
-        
+        # Bypass validation for UI-initiated server configuration sends
+        self.serial_service.send_command(command, command_type='server', bypass_validation=True)
+
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("server_command_sent", "Server configuration sent to device")

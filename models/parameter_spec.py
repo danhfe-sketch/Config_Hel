@@ -54,7 +54,7 @@ class ParameterField:
         # Check validation rules for other types
         if self.validation is None:
             return True
-            
+         
         # Basic validation logic - can be extended
         if self.ui_element == UIElementType.NUMBER_INPUT and self.validation:
             try:
@@ -63,7 +63,16 @@ class ParameterField:
                 hyphen_match = re.match(r"^\s*(-?\d+)\s*-\s*(-?\d+)\s*$", validation_text)
                 if hyphen_match:
                     min_val, max_val = int(hyphen_match.group(1)), int(hyphen_match.group(2))
-                    return min_val <= int(value) <= max_val
+                    try:
+                        int_value = int(value)
+                        # Special tolerance: device dumps sometimes use 0 to indicate "not set".
+                        # If the reported value is 0 and the spec requires min_val>0, treat it as acceptable (return True)
+                        # but this will be surfaced as a warning at a higher level if desired.
+                        if int_value == 0 and min_val > 0:
+                            return True
+                        return min_val <= int_value <= max_val
+                    except (ValueError, TypeError):
+                        return False
 
                 # Case 2: prose containing two numbers, e.g. "Must be a number between 1 and 65535."
                 numbers = re.findall(r"-?\d+", validation_text)
@@ -72,11 +81,20 @@ class ParameterField:
                     # ensure ordering in case they appear reversed
                     if min_val > max_val:
                         min_val, max_val = max_val, min_val
-                    return min_val <= int(value) <= max_val
+                    try:
+                        int_value = int(value)
+                        if int_value == 0 and min_val > 0:
+                            return True
+                        return min_val <= int_value <= max_val
+                    except (ValueError, TypeError):
+                        return False
 
                 # Case 3: single numeric equality (rare)
                 if len(numbers) == 1:
-                    return int(value) == int(numbers[0])
+                    try:
+                        return int(value) == int(numbers[0])
+                    except (ValueError, TypeError):
+                        return False
 
                 # If no numbers found, consider it valid (no enforceable rule)
                 return True
@@ -262,13 +280,36 @@ class ParameterSpec:
                     try:
                         if "-" in self.validation:
                             min_val, max_val = map(int, self.validation.split("-"))
-                            if not (min_val <= int(value) <= max_val):
-                                errors.append(f"Value {value} not in range {min_val}-{max_val}")
+                            # Special handling: device dumps may use 0 to indicate "not set".
+                            # If received value is 0 and the spec requires min_val>0, treat as a warning instead of hard failure.
+                            try:
+                                int_value = int(value)
+                                if int_value == 0 and min_val > 0:
+                                    warnings.append(f"Value {value} interpreted as 'not set' for field {self.name}")
+                                elif not (min_val <= int_value <= max_val):
+                                    errors.append(f"Value {value} not in range {min_val}-{max_val}")
+                            except (ValueError, TypeError):
+                                errors.append(f"Invalid numeric value: {value}")
                     except (ValueError, TypeError):
                         errors.append(f"Invalid numeric value: {value}")
                         
-            if self.options and str(value) not in self.options:
-                errors.append(f"Value {value} not in allowed options: {self.options}")
+            # Tolerant options checking: trim strings and accept boolean mappings for common toggles
+            if self.options:
+                normalized_options = [str(opt).strip() for opt in self.options]
+                # If value is boolean, map True/False to Enabled/Disabled when applicable
+                if isinstance(value, bool):
+                    if "Enabled" in normalized_options and "Disabled" in normalized_options:
+                        mapped = "Enabled" if value else "Disabled"
+                        if mapped not in normalized_options:
+                            errors.append(f"Value {value} not in allowed options: {self.options}")
+                    else:
+                        # Fallback: represent boolean as string
+                        if str(value) not in normalized_options:
+                            errors.append(f"Value {value} not in allowed options: {self.options}")
+                else:
+                    # Compare trimmed string form
+                    if str(value).strip() not in normalized_options:
+                        errors.append(f"Value {value} not in allowed options: {self.options}")
         
         return ValidationResult(len(errors) == 0, errors, warnings)
     

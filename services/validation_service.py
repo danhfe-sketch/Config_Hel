@@ -726,6 +726,23 @@ class ValidationService:
         start_time = datetime.now()
         result = None
         param_type = 'unknown'
+
+        # Short-circuit: if speed alert is disabled, skip validation for speed fields
+        try:
+            if param_name in ('speed_detection_time', 'speed_limit') and context:
+                # Context may include either a flattened flag or a grouped dict
+                enabled = None
+                if isinstance(context, dict):
+                    if 'speed_alert_enabled' in context:
+                        enabled = context.get('speed_alert_enabled')
+                    elif 'speed_alert' in context and isinstance(context.get('speed_alert'), dict):
+                        enabled = context.get('speed_alert', {}).get('enabled')
+                # Treat common false-ish values
+                if enabled is False or (isinstance(enabled, str) and enabled.lower() in ('false', 'off', '0', 'no')):
+                    return ValidationResult(is_valid=True)
+        except Exception:
+            # If any error occurs while checking context, fall back to normal validation
+            pass
         
         # Create default security context if not provided
         if security_context is None:
@@ -1715,7 +1732,11 @@ class ValidationService:
                 
             if isinstance(section_data, dict):
                 for param_name, param_value in section_data.items():
-                    result = self.validate_parameter(param_name, param_value)
+                    # Pass the whole section as context so conditional validations
+                    # (for example: skip speed_detection_time/speed_limit when
+                    # speed_alert_enabled is False) can make decisions based on
+                    # sibling fields.
+                    result = self.validate_parameter(param_name, param_value, context=section_data)
                     if not result.is_valid:
                         errors.append(f"{section_name}.{param_name}: {result.error_message}")
         

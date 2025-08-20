@@ -240,6 +240,92 @@ class ProfileFileHandler:
             # Read and parse JSON file
             with open(file_path, 'r', encoding='utf-8') as file:
                 profile_data = json.load(file)
+
+            # Normalize parameter values that were produced by device dumps and may contain
+            # Python-style stringified dicts (single quotes) or literal values.
+            # This makes the loader tolerant of the two sample files you provided.
+            try:
+                import ast
+                import json as _json
+                if isinstance(profile_data, dict) and "parameters" in profile_data and isinstance(profile_data["parameters"], dict):
+                    for p_name, p_data in profile_data["parameters"].items():
+                        # Expect param entry to be a dict with a "value" key in most cases
+                        if not isinstance(p_data, dict):
+                            continue
+                        if "value" not in p_data:
+                            continue
+                        val = p_data["value"]
+                        # Only attempt parsing for string values that look like structured data or literals
+                        if isinstance(val, str):
+                            v = val.strip()
+                            parsed = None
+                            try:
+                                # Use ast.literal_eval first — safe for Python-style dicts/literals
+                                if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")) or v in ("True", "False", "None") or v.replace('.', '', 1).isdigit():
+                                    parsed = ast.literal_eval(v)
+                            except Exception:
+                                parsed = None
+                            if parsed is None:
+                                # Try a JSON-safe fallback by converting single quotes to double quotes
+                                try:
+                                    if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")):
+                                        parsed = _json.loads(v.replace("'", "\""))
+                                except Exception:
+                                    parsed = None
+                            if parsed is not None:
+                                p_data["value"] = parsed
+
+                        # Targeted normalization for known problematic device dump structures
+                        # - server_settings: ensure port is an integer and address is clean
+                        # - tcp_ack and other single-field toggle params: unwrap dicts like {'tcp_ack': 'Disabled'} to 'Disabled'
+                        try:
+                            # Handle server_settings entries which may appear as 'network_parameters.server_settings' or similar
+                            if isinstance(p_data.get("value"), dict) and p_name.endswith("server_settings"):
+                                sv = p_data["value"]
+                                # Normalize port
+                                if "port" in sv:
+                                    port_val = sv["port"]
+                                    if isinstance(port_val, str):
+                                        port_str = port_val.strip()
+                                        if port_str.isdigit():
+                                            sv["port"] = int(port_str)
+                                        else:
+                                            # try extracting digits
+                                            import re
+                                            digits = re.findall(r'\d+', port_str)
+                                            sv["port"] = int(digits[-1]) if digits else 0
+                                    elif isinstance(port_val, (int, float)):
+                                        sv["port"] = int(port_val)
+                                # Clean address string
+                                if "address" in sv and isinstance(sv["address"], str):
+                                    sv["address"] = sv["address"].strip()
+                                p_data["value"] = sv
+
+                            # Unwrap single-key dict values for single-value parameters like tcp_ack
+                            if isinstance(p_data.get("value"), dict) and len(p_data["value"]) == 1:
+                                sole_key = next(iter(p_data["value"]))
+                                sole_val = p_data["value"][sole_key]
+                                # If key matches the parameter short name, unwrap it
+                                short_name = p_name.split('.')[-1]
+                                if sole_key == short_name:
+                                    # Map boolean-like strings to normalized labels (trim)
+                                    if isinstance(sole_val, str):
+                                        sv = sole_val.strip()
+                                        # Accept 'True'/'False' or '1'/'0' or 'Enabled'/'Disabled'
+                                        if sv.lower() in ("true", "1"):
+                                            p_data["value"] = True
+                                        elif sv.lower() in ("false", "0"):
+                                            p_data["value"] = False
+                                        else:
+                                            p_data["value"] = sv
+                                    else:
+                                        p_data["value"] = sole_val
+                        except Exception:
+                            # Ignore normalization errors per-profile entry
+                            pass
+            except Exception:
+                # Keep original data if normalization fails for any reason
+                pass
             
             # Validate file format
             validation_result = self._validate_profile_data(profile_data)

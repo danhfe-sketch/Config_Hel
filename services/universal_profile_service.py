@@ -76,8 +76,7 @@ class UniversalProfileService:
                 param_value = ParameterValue(
                     value=value,
                     source="user",
-                    timestamp=now,
-                    is_modified=True
+                    timestamp=now
                 )
                 
                 # Validate the value
@@ -90,8 +89,7 @@ class UniversalProfileService:
                 param_value = ParameterValue(
                     value=value,
                     source="user",
-                    timestamp=now,
-                    is_modified=True
+                    timestamp=now
                 )
                 
                 # Create a warning validation result
@@ -152,8 +150,7 @@ class UniversalProfileService:
                 param_value = ParameterValue(
                     value=processed_value,
                     source="device",
-                    timestamp=now,
-                    is_modified=False
+                    timestamp=now
                 )
                 
                 # Validate the processed value
@@ -168,8 +165,7 @@ class UniversalProfileService:
                 param_value = ParameterValue(
                     value=processed_value,
                     source="device",
-                    timestamp=now,
-                    is_modified=False
+                    timestamp=now
                 )
                 
                 # Create a warning validation result
@@ -483,28 +479,137 @@ class UniversalProfileService:
         
         # Validate individual parameters
         for param_name, param_value in profile.parameters.items():
+            # Try exact lookup first; if not found, try the short parameter name after the last dot
             param_spec = self.spec_parser.get_parameter_spec(param_name)
-            
+            lookup_name = param_name
+            if not param_spec:
+                short_name = param_name.split('.')[-1]
+                param_spec = self.spec_parser.get_parameter_spec(short_name)
+                if param_spec:
+                    lookup_name = short_name
+
             if param_spec:
                 value_to_validate = param_value.value
 
-                # If parameter has conditional fields, validate only visible fields
+                # If the profile stored a dict like {'tcp_ack': 'Disabled'} for a single-field parameter,
+                # unwrap it to the inner value (common when loading device dump outputs).
+                if not param_spec.fields and isinstance(value_to_validate, dict):
+                    # If dict has a single key that matches the short parameter name, extract it
+                    if len(value_to_validate) == 1:
+                        sole_key = next(iter(value_to_validate))
+                        if sole_key == lookup_name or sole_key.endswith(lookup_name):
+                            value_to_validate = value_to_validate[sole_key]
+
+                # If parameter has conditional fields and value is a dict, attempt coercion then validate visible fields
                 if param_spec.fields and isinstance(value_to_validate, dict):
-                    context = value_to_validate.copy()
-                    visible_fields = {f.name for f in param_spec.get_visible_fields(context)}
-                    # Filter out non-visible fields prior to validation
-                    filtered_value = {k: v for k, v in value_to_validate.items() if k in visible_fields}
-                    # Preserve original non-visible fields for storage but validate filtered
-                    param_validation = param_spec.validate_value(filtered_value)
+                    # Normalize fields container
+                    fields_list = param_spec.fields
+                    if isinstance(fields_list, dict):
+                        fields_list = list(fields_list.values())
+                    coerced = dict(value_to_validate)  # shallow copy to avoid mutating original
+
+                    # Coerce common device dump formats to expected UI types
+                    for field in fields_list:
+                        field_name = getattr(field, "name", None) or (field.get("name") if isinstance(field, dict) else None)
+                        if not field_name or field_name not in coerced:
+                            continue
+                        v = coerced[field_name]
+
+                        ui_type = getattr(field, "ui_element", None) or (field.get("ui_element") if isinstance(field, dict) else None)
+                        options = getattr(field, "options", None) or (field.get("options") if isinstance(field, dict) else None) or []
+
+                        # Coerce numeric strings to ints/floats for number_input
+                        if ui_type == "number_input" and isinstance(v, str):
+                            s = v.strip()
+                            try:
+                                if s.isdigit():
+                                    coerced[field_name] = int(s)
+                                else:
+                                    coerced[field_name] = float(s)
+                            except Exception:
+                                coerced[field_name] = v
+
+                        # Map booleans/numeric flags to option labels for toggle_switch
+                        if ui_type == "toggle_switch" and options:
+                            opts = [opt.strip() for opt in options]
+                            if isinstance(v, bool):
+                                coerced[field_name] = opts[0] if v else (opts[1] if len(opts) > 1 else opts[0])
+                            elif isinstance(v, (int, float)):
+                                coerced[field_name] = opts[0] if int(v) == 1 else (opts[1] if len(opts) > 1 else opts[0])
+                            elif isinstance(v, str) and v.strip().lower() in ("true", "false", "1", "0", "enabled", "disabled"):
+                                s = v.strip().lower()
+                                if s in ("true", "1", "enabled"):
+                                    coerced[field_name] = opts[0]
+                                else:
+                                    coerced[field_name] = opts[1] if len(opts) > 1 else opts[0]
+
+                    # If numeric fields coerced to 0 but validation expects min>0, replace with default instead of failing
+                    try:
+                        for field in fields_list:
+                            field_name = getattr(field, "name", None) or (field.get("name") if isinstance(field, dict) else None)
+                            if not field_name or field_name not in coerced:
+                                continue
+                            validation_rule = getattr(field, "validation", None) or (field.get("validation") if isinstance(field, dict) else None) or ""
+                            val = coerced.get(field_name)
+                            if isinstance(val, (int, float)) and int(val) == 0 and validation_rule and "-" in validation_rule:
+                                parts = validation_rule.split("-", 1)
+                                try:
+                                    min_val = int(parts[0])
+                                    if min_val > 0:
+                                        # replace with the field's default if available
+                                        default = getattr(field, "get_default_value", None)
+                                        if callable(default):
+                                            coerced[field_name] = default()
+                                        else:
+                                            # try attribute default or leave removed
+                                            fld_def = getattr(field, "default", None) or None
+                                            if fld_def is not None:
+                                                coerced[field_name] = fld_def
+                                            else:
+                                                coerced.pop(field_name, None)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+                    # Evaluate visible fields based on coerced context
+                    context = coerced.copy()
+                    try:
+                        visible_fields = {f.name for f in param_spec.get_visible_fields(context)}
+                    except Exception:
+                        visible_fields = set(coerced.keys())
+                    filtered_value = {k: v for k, v in coerced.items() if k in visible_fields}
+
+                    # Validate using the filtered/coerced structure
+                    try:
+                        param_validation = param_spec.validate_value(filtered_value)
+                    except Exception as e:
+                        pv = ValidationResult(is_valid=False)
+                        pv.add_error(f"Validation exception: {e}")
+                        param_validation = pv
                 else:
-                    param_validation = param_spec.validate_value(value_to_validate)
+                    # Handle single-value toggle switches stored as booleans by mapping them to option labels
+                    ui_type = getattr(param_spec, "ui_element", None)
+                    if ui_type == "toggle_switch" and isinstance(value_to_validate, bool):
+                        options = getattr(param_spec, "options", []) or []
+                        opts = [opt.strip() for opt in options]
+                        if opts:
+                            value_to_validate = opts[0] if value_to_validate else (opts[1] if len(opts) > 1 else opts[0])
+
+                    # Normal validation (guard against exceptions)
+                    try:
+                        param_validation = param_spec.validate_value(value_to_validate)
+                    except Exception as e:
+                        pv = ValidationResult(is_valid=False)
+                        pv.add_error(f"Validation exception: {e}")
+                        param_validation = pv
 
                 if not param_validation.is_valid:
                     for error in param_validation.errors:
-                        result.add_error(f"Parameter '{param_name}': {error}")
+                        result.add_error(f"Parameter '{lookup_name}': {error}")
                 
                 for warning in param_validation.warnings:
-                    result.add_warning(f"Parameter '{param_name}': {warning}")
+                    result.add_warning(f"Parameter '{lookup_name}': {warning}")
                 
                 # Update parameter's validation status
                 param_value.set_validation_result(param_validation)
@@ -574,17 +679,29 @@ class UniversalProfileService:
         migrated_profile = profile.clone()
         
         # Add missing parameters with default values (do not mark as modified)
+        # But avoid adding defaults if an equivalent parameter already exists with a section prefix
         all_param_names = self.spec_parser.get_all_parameters()
+        existing_keys = set(migrated_profile.parameters.keys())
         for param_name in all_param_names:
-            if param_name not in migrated_profile.parameters:
-                param_spec = self.spec_parser.get_parameter_spec(param_name)
-                if param_spec:
-                    default_value = param_spec.get_default_value()
-                    migrated_profile.parameters[param_name] = ParameterValue(
-                        value=default_value,
-                        source="default",
-                        is_modified=False
-                    )
+            # Detect equivalent present keys (exact or with section prefixes, e.g. 'network_parameters.server_settings')
+            def _has_equivalent(name: str) -> bool:
+                if name in existing_keys:
+                    return True
+                for k in existing_keys:
+                    if k == name or k.endswith("." + name):
+                        return True
+                return False
+
+            if _has_equivalent(param_name):
+                continue
+
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            if param_spec:
+                default_value = param_spec.get_default_value()
+                migrated_profile.parameters[param_name] = ParameterValue(
+                    value=default_value,
+                    source="default"
+                )
 
         # Clean up field visibility: remove fields that should not be visible
         for param_name, param_value in list(migrated_profile.parameters.items()):
@@ -613,8 +730,7 @@ class UniversalProfileService:
                 else:
                     migrated_profile.parameters[param_name] = ParameterValue(
                         value=cleaned,
-                        source="device",
-                        is_modified=False
+                        source="device"
                     )
         
         # Update metadata to reflect migration
@@ -634,7 +750,6 @@ class UniversalProfileService:
             Dict[str, Any]: Profile summary information
         """
         total_params = len(profile.parameters)
-        modified_params = len(profile.get_modified_parameters())
         device_params = len(profile.get_parameters_by_source("device"))
         user_params = len(profile.get_parameters_by_source("user"))
         default_params = len(profile.get_parameters_by_source("default"))
@@ -654,7 +769,6 @@ class UniversalProfileService:
             "created_at": profile.created_at.isoformat(),
             "modified_at": profile.modified_at.isoformat(),
             "total_parameters": total_params,
-            "modified_parameters": modified_params,
             "device_parameters": device_params,
             "user_parameters": user_params,
             "default_parameters": default_params,

@@ -394,8 +394,10 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
 
         # Construct the command. User and password can be empty.
         command = f"ATSMS:APN,{server},{user},{password}#"
-        self.serial_service.send_command(command)
-        
+        # Direct UI send - bypass command validation to avoid blocking
+        # well-formed APN commands initiated by the user.
+        self.serial_service.send_command(command, command_type='apn', bypass_validation=True)
+
         # Show success feedback
         show_info(
             self,

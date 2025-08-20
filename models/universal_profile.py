@@ -53,7 +53,6 @@ class ParameterValue:
     value: Any
     source: str = "user"  # "user", "device", "default"
     timestamp: Optional[datetime] = None
-    is_modified: bool = False
     validation_status: Optional[ValidationResult] = None
     
     def __post_init__(self):
@@ -65,9 +64,8 @@ class ParameterValue:
         """Convert parameter value to dictionary."""
         result = {
             "value": self.value,
-            "source": self.source,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
-            "is_modified": self.is_modified
+            # "source": self.source,
+            # "timestamp": self.timestamp.isoformat() if self.timestamp else None,
         }
         
         if self.validation_status:
@@ -116,16 +114,10 @@ class ParameterValue:
         
         return cls(
             value=data.get("value"),
-            source=data.get("source", "user"),
-            timestamp=timestamp,
-            is_modified=data.get("is_modified", False),
+            # source=data.get("source", "user"),
+            # timestamp=timestamp,
             validation_status=validation_status
         )
-    
-    def mark_modified(self) -> None:
-        """Mark this parameter value as modified."""
-        self.is_modified = True
-        self.timestamp = datetime.now()
     
     def set_validation_result(self, result: ValidationResult) -> None:
         """Set the validation result for this parameter value."""
@@ -153,7 +145,8 @@ class UniversalProfile:
             self.modified_at = datetime.fromisoformat(self.modified_at)
     
     def to_dict(self, for_save: bool = False) -> Dict[str, Any]:
-        """Convert profile to dictionary for serialization.
+        """
+        Convert profile to dictionary for serialization.
         
         Args:
             for_save: If True, omits runtime metadata fields from parameters
@@ -235,12 +228,11 @@ class UniversalProfile:
         if param_name in self.parameters:
             self.parameters[param_name].value = value
             self.parameters[param_name].source = source
-            self.parameters[param_name].mark_modified()
+            self.parameters[param_name].timestamp = datetime.now()
         else:
             self.parameters[param_name] = ParameterValue(
                 value=value,
-                source=source,
-                is_modified=True
+                source=source
             )
         
         self.modified_at = datetime.now()
@@ -294,19 +286,6 @@ class UniversalProfile:
         
         return result
     
-    def get_modified_parameters(self) -> Dict[str, ParameterValue]:
-        """
-        Get all parameters that have been modified.
-        
-        Returns:
-            Dict[str, ParameterValue]: Dictionary of modified parameters
-        """
-        return {
-            name: param_value
-            for name, param_value in self.parameters.items()
-            if param_value.is_modified
-        }
-    
     def get_parameters_by_source(self, source: str) -> Dict[str, ParameterValue]:
         """
         Get all parameters from a specific source.
@@ -322,11 +301,6 @@ class UniversalProfile:
             for name, param_value in self.parameters.items()
             if param_value.source == source
         }
-    
-    def clear_modifications(self) -> None:
-        """Clear the modification flags on all parameters."""
-        for param_value in self.parameters.values():
-            param_value.is_modified = False
     
     def to_json(self, indent: int = 2) -> str:
         """
@@ -377,9 +351,5 @@ class UniversalProfile:
         now = datetime.now()
         profile_dict["created_at"] = now.isoformat()
         profile_dict["modified_at"] = now.isoformat()
-        
-        # Clear modification flags
-        for param_data in profile_dict["parameters"].values():
-            param_data["is_modified"] = False
         
         return self.from_dict(profile_dict)

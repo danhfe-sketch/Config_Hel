@@ -219,7 +219,7 @@ After installation, restart the application and check available COM ports.
         try:
             # Look for PDF manual in the application directory
             manual_files = [
-                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.00-032025.pdf",
+                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.03-072025.pdf",
                 "manual.pdf",
                 "LT32Pro_Manual.pdf"
             ]
@@ -705,13 +705,14 @@ For technical support, contact Lumini Tracker support team.
             if not profile_path:
                 return  # User canceled
             
-            # Show confirmation dialog
+            # Show confirmation dialog (use i18n for title and message)
             result = ask_yes_no(
                 self.app,
-                "Load Profile to Device",
-                f"This will load the profile from:\n\n{profile_path}\n\n"
-                "and deploy it to the device.\n\n"
-                "Continue?"
+                self.i18n.get("load_profile_to_device", "Load Profile to Device"),
+                self.i18n.get(
+                    "load_profile_to_device_confirmation",
+                    "This will load the profile from:\n\n{profile_path}\n\nand deploy it to the device.\n\nContinue?"
+                ).format(profile_path=profile_path)
             )
             
             if not result:
@@ -731,6 +732,10 @@ For technical support, contact Lumini Tracker support team.
     
     def _load_profile_to_device_worker(self, profile_path):
         """Worker method to load profile from file and deploy to device."""
+        
+        self.app.profile_operation_in_progress = True
+        loop = None
+        
         try:
             import asyncio
             
@@ -745,13 +750,11 @@ For technical support, contact Lumini Tracker support team.
                 # Handle load failure
                 self.app.after(0, self._handle_load_to_device_completion, load_result)
                 return
-            
-            # Mark all parameters as modified so they will be written to device
-            # This is necessary because save_to_device only writes modified parameters
-            if hasattr(self.app.profile_manager, '_current_profile') and self.app.profile_manager._current_profile:
-                for param_name, param_value in self.app.profile_manager._current_profile.parameters.items():
-                    param_value.is_modified = True
-                    param_value.source = "user"  # Mark as user-initiated to ensure deployment
+
+            # Mark all parameters as from user so they will be written to device
+            if self.app.profile_manager._current_profile:
+                for param_value in self.app.profile_manager._current_profile.parameters.values():
+                    param_value.source = "user"
             
             # Save the loaded profile to device
             save_result = loop.run_until_complete(self.app.profile_manager.save_to_device())
@@ -773,7 +776,8 @@ For technical support, contact Lumini Tracker support team.
             error_result.add_error(str(e))
             self.app.after(0, self._handle_load_to_device_completion, error_result)
         finally:
-            if 'loop' in locals():
+            self.app.profile_operation_in_progress = False
+            if loop:
                 loop.close()
 
     def _handle_load_to_device_completion(self, result):
@@ -1204,40 +1208,6 @@ For technical support, contact Lumini Tracker support team.
             print(f"Error creating progress dialog: {e}")
             return None
     
-    def _load_profile_to_device_worker(self, profile_path):
-        """Worker method to load profile from file and deploy to device."""
-        try:
-            import asyncio
-            
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Load profile from file
-            load_result = loop.run_until_complete(self.app.profile_manager.load_from_file(profile_path))
-            
-            if not load_result.success:
-                self.app.after(0, self._handle_profile_operation_completion, load_result)
-                return
-            
-            # Deploy profile to device
-            deploy_result = loop.run_until_complete(self.app.profile_manager.save_to_device())
-            
-            # Handle completion on the main thread
-            self.app.after(0, self._handle_profile_operation_completion, deploy_result)
-            
-        except Exception as e:
-            from models.operation_result import ProfileOperationResult, OperationType
-            error_result = ProfileOperationResult(
-                operation_type=OperationType.SAVE_TO_DEVICE,
-                success=False
-            )
-            error_result.add_error(str(e))
-            self.app.after(0, self._handle_profile_operation_completion, error_result)
-        finally:
-            if 'loop' in locals():
-                loop.close()
-    
     def _save_profile_from_ui(self):
         """Save current UI values to a profile file."""
         try:
@@ -1306,9 +1276,9 @@ For technical support, contact Lumini Tracker support team.
                     parameters=parameter_values
                 )
                 
-                # Save the profile to file using the profile's to_dict method
+                # Save the profile to file using the profile's to_dict method (omit runtime metadata)
                 import json
-                profile_data = profile.to_dict()
+                profile_data = profile.to_dict(for_save=True)
                 
                 with open(profile_path, 'w', encoding='utf-8') as f:
                     json.dump(profile_data, f, indent=2, ensure_ascii=False)
@@ -1466,171 +1436,6 @@ For technical support, contact Lumini Tracker support team.
             print(error_msg)
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-
-    def _save_profile_from_ui(self):
-        """Save current UI values to a profile file."""
-        try:
-            # Check if we have access to the parameters frame
-            if not hasattr(self.app, 'params_frame'):
-                show_error(
-                    self.app,
-                    "Save Profile Error",
-                    "Parameters frame is not available. Cannot save profile."
-                )
-                return
-            
-            # Show file save dialog
-            from tkinter import filedialog
-            
-            profile_path = filedialog.asksaveasfilename(
-                title=self.i18n.get("save_profile", "Save Profile"),
-                defaultextension=".json",
-                filetypes=[
-                    ("JSON Profile Files", "*.json"),
-                    ("All Files", "*.*")
-                ]
-            )
-            
-            if not profile_path:
-                return  # User canceled
-            
-            # Extract values from UI
-            try:
-                # Use the extract_validated_field_values method from ParametersFrame
-                field_values, validation_result = self.app.params_frame.extract_validated_field_values()
-                
-                if not validation_result.is_valid:
-                    # Show validation errors
-                    error_msg = "Cannot save profile due to validation errors:\n\n"
-                    error_msg += "\n".join(validation_result.errors)
-                    show_error(self.app, "Validation Error", error_msg)
-                    return
-                
-                # Create a profile from the UI values
-                from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
-                from datetime import datetime
-                
-                # Create metadata
-                metadata = ProfileMetadata(
-                    parameter_spec_version="1.0",
-                    created_by="LT32 PRO Configurator",
-                    device_model="LT32 PRO"
-                )
-                
-                # Convert field values to ParameterValue objects
-                parameter_values = {}
-                for param_name, value in field_values.items():
-                    parameter_values[param_name] = ParameterValue(
-                        value=value,
-                        source="user"
-                    )
-                
-                now = datetime.now()
-                profile = UniversalProfile(
-                    name=f"UI_Profile_{now.strftime('%Y%m%d_%H%M%S')}",
-                    version="1.0",
-                    created_at=now,
-                    modified_at=now,
-                    metadata=metadata,
-                    parameters=parameter_values
-                )
-                
-                # Save the profile to file using the profile's to_dict method
-                import json
-                profile_data = profile.to_dict()
-                
-                with open(profile_path, 'w', encoding='utf-8') as f:
-                    json.dump(profile_data, f, indent=2, ensure_ascii=False)
-                
-                # Show success message
-                show_info(
-                    self.app,
-                    "Profile Saved",
-                    f"Profile successfully saved to:\n{profile_path}"
-                )
-                
-                # Log success
-                if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                    self.app.log_frame.log_message(f"Profile saved successfully to: {profile_path}\n")
-                
-            except Exception as extract_error:
-                error_msg = f"Failed to extract UI values: {str(extract_error)}"
-                show_error(self.app, "Save Profile Error", error_msg)
-                
-                if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-                
-        except Exception as e:
-            error_msg = f"Save profile failed: {str(e)}"
-            if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            show_error(self.app, "Save Profile Error", error_msg)
-    
-    def _load_profile_to_ui(self):
-        """Load profile from file and populate UI."""
-        try:
-            # Show file open dialog
-            from tkinter import filedialog
-            
-            profile_path = filedialog.askopenfilename(
-                title=self.i18n.get("load_profile", "Load Profile"),
-                filetypes=[
-                    ("JSON Profile Files", "*.json"),
-                    ("All Files", "*.*")
-                ]
-            )
-            
-            if not profile_path:
-                return  # User canceled
-            
-            # Load profile from file
-            try:
-                import json
-                with open(profile_path, 'r', encoding='utf-8') as f:
-                    profile_data = json.load(f)
-                
-                # Create UniversalProfile object
-                from models.universal_profile import UniversalProfile
-                from datetime import datetime
-                
-                # Use the from_dict method to properly reconstruct the profile
-                profile = UniversalProfile.from_dict(profile_data)
-                
-                # Populate UI with profile values
-                if hasattr(self.app, 'params_frame'):
-                    populate_result = self.app.params_frame.populate_ui_from_profile(profile)
-                    
-                    if populate_result.is_valid:
-                        title = self.i18n.get("profile_loaded_title", "Profile Loaded")
-                        message = self.i18n.get("profile_loaded_successfully", "Profile successfully loaded from {file_path}").format(file_path=profile_path)
-                        show_info(self.app, title, message)
-                        
-                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                            self.app.log_frame.log_message(f"Profile loaded successfully from: {profile_path}\n")
-                    else:
-                        # Show warnings if there were issues
-                        warning_msg = "Profile loaded with warnings:\n\n"
-                        warning_msg += "\n".join(populate_result.errors)
-                        show_warning(self.app, "Profile Load Warning", warning_msg)
-                else:
-                    show_error(
-                        self.app,
-                        "Load Profile Error",
-                        "Parameters frame is not available. Cannot load profile."
-                    )
-                
-            except Exception as load_error:
-                error_msg = f"Failed to load profile file: {str(load_error)}"
-                show_error(self.app, "Load Profile Error", error_msg)
-                
-                if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-                
-        except Exception as e:
-            error_msg = f"Load profile failed: {str(e)}"
-            if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            show_error(self.app, "Load Profile Error", error_msg)
 
     def _update_ui_with_loaded_profile(self, profile):
         """Update UI with loaded profile values."""

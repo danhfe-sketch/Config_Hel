@@ -47,7 +47,16 @@ class I18nService:
 
     def get(self, key, default_value=''):
         """Returns the translated string for a given key."""
-        return self.language_map.get(key, default_value or f"_{key}_")
+        value = self.language_map.get(key, default_value or f"_{key}_")
+        # If the locale file contains escaped newline sequences (e.g. "\\n")
+        # convert them to real newlines so dialogs and labels render correctly.
+        try:
+            if isinstance(value, str):
+                value = value.replace('\\n', '\n').replace('\\r', '\r')
+        except Exception:
+            # If any unexpected type or issue occurs, fall back to the raw value
+            pass
+        return value
     
     def get_current_language(self):
         """Returns the current language code."""

@@ -101,6 +101,25 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set': 'SERVER,<type>,<address>,<port>,0#',
                     'read': 'SERVER#'
                 }
+            ),
+            'network_settings': ParameterConfig(
+                name='network_settings',
+                label='Seleção de Rede',
+                ui_element='dropdown',
+                options=['AUTO', '4G', '2G'],
+                commands={
+                    'set': 'NETSELECT,<value>#',
+                    'read': 'NETSELECT#'
+                }
+            ),
+            'volte_settings': ParameterConfig(
+                name='volte_settings',
+                label='VoLTE',
+                ui_element='toggle_switch',
+                commands={
+                    'set': 'VOLTESWITCH,<value>#',
+                    'read': 'VOLTESWITCH#'
+                }
             )
         }
     ),
@@ -421,6 +440,28 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set_level': 'SZCS#VIBL=<level>',
                     'read': 'CXCS#VIBL'
                 }
+            ),
+            'vibration_window': ParameterConfig(
+                name='vibration_window',
+                label='Janela de Vibração',
+                fields={
+                    'window': FieldConfig(
+                        name='window',
+                        label='Janela de tempo (s)',
+                        ui_element='number_input',
+                        validation='1-60'
+                    ),
+                    'threshold': FieldConfig(
+                        name='threshold',
+                        label='Threshold',
+                        ui_element='number_input',
+                        validation='1-10'
+                    )
+                },
+                commands={
+                    'set': 'VIBCHK,<window>,<threshold>#',
+                    'read': 'VIBCHK#'
+                }
             )
         }
     ),
@@ -476,10 +517,27 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
         }
     ),
     
+    'security': SectionConfig(
+        name='security',
+        label='Segurança',
+        order=11,
+        parameters={
+            'defense_settings': ParameterConfig(
+                name='defense_settings',
+                label='Modo Defesa',
+                ui_element='toggle_switch',
+                commands={
+                    'set': 'DEFENSE,<value>#',
+                    'read': 'DEFENSE#'
+                }
+            )
+        }
+    ),
+
     'miscellaneous': SectionConfig(
         name='miscellaneous',
         label='Diversos',
-        order=11,
+        order=12,
         parameters={
             'odometer': ParameterConfig(
                 name='odometer',

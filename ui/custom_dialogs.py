@@ -50,26 +50,42 @@ class CTkMessageBox(ctk.CTkToplevel):
         self._center_window()
     
     def _calculate_size(self):
-        """Calculate appropriate window size based on message length."""
-        # Base dimensions
-        base_width = 400
-        base_height = 150
-        
+        """Calculate appropriate window size based on message length.
+
+        This method computes a sensible width/height for the dialog based on
+        the longest message line and the number of lines. It also reserves a
+        bit of extra vertical space for the button area to avoid clipping.
+        """
+        # Base dimensions (increased to reduce clipping further)
+        base_width = 520
+        base_height = 190
+
         # Adjust width based on message length
-        message_lines = self.message.split('\n')
-        max_line_length = max(len(line) for line in message_lines) if message_lines else 0
-        
+        try:
+            message_lines = str(self.message).split('\n')
+        except Exception:
+            message_lines = [str(self.message)]
+
+        max_line_length = max((len(line) for line in message_lines), default=0)
+
         if max_line_length > 50:
-            base_width = min(600, base_width + (max_line_length - 50) * 8)
-        
+            base_width = min(900, base_width + (max_line_length - 50) * 8)
+
         # Adjust height based on number of lines
         num_lines = len(message_lines)
         if num_lines > 3:
-            base_height += (num_lines - 3) * 20
-        
+            base_height += (num_lines - 3) * 22
+
+        # Reserve extra space for buttons and padding to avoid clipping
+        # slightly larger to ensure buttons don't wrap on small screens
+        button_area_height = 88
+        base_height += button_area_height
+
         self.window_width = base_width
         self.window_height = base_height
-        
+
+        # Set an initial geometry; final positioning will be recalculated
+        # after widgets are created to ensure buttons are included.
         self.geometry(f"{self.window_width}x{self.window_height}")
     
     def _center_window(self):
@@ -156,8 +172,8 @@ class CTkMessageBox(ctk.CTkToplevel):
             buttons = [self.option_1, self.option_2]
         else:
             buttons = [self.option_1]
-        
-        # Pack buttons from right to left
+        # Pack buttons from right to left and keep references
+        self._buttons = []
         for i, button_text in enumerate(reversed(buttons)):
             btn = ctk.CTkButton(
                 button_frame,
@@ -167,10 +183,19 @@ class CTkMessageBox(ctk.CTkToplevel):
                 height=32
             )
             btn.pack(side="right", padx=(10, 0) if i > 0 else (10, 10))
-        
-        # Focus on the first button
-        if hasattr(self, '_buttons') and self._buttons:
-            self._buttons[0].focus()
+            self._buttons.append(btn)
+
+        # Ensure widgets are laid out and recentre the dialog so buttons are visible
+        try:
+            self.update_idletasks()
+            # Recalculate center based on actual widget sizes
+            self._center_window()
+            # Give focus to first button
+            if self._buttons:
+                self._buttons[0].focus()
+        except Exception:
+            # If layout calls fail for any reason, silently continue
+            pass
     
     def _get_icon_text(self) -> str:
         """Get icon text based on icon type."""
@@ -262,7 +287,13 @@ def show_error(parent, title: str, message: str) -> None:
 
 def ask_yes_no(parent, title: str, message: str) -> bool:
     """Show a confirmation dialog with localized Confirm/Cancel if available."""
-    i18n = getattr(parent, 'i18n_service', None)
+    # Prefer i18n service attached to the parent under common attribute names
+    i18n = None
+    if hasattr(parent, 'i18n'):
+        i18n = getattr(parent, 'i18n')
+    elif hasattr(parent, 'i18n_service'):
+        i18n = getattr(parent, 'i18n_service')
+
     if i18n:
         confirm_label = i18n.get('confirm', 'Confirm')
         cancel_label = i18n.get('cancel', 'Cancel')

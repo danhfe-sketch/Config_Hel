@@ -813,22 +813,25 @@ class CoreProfileManager:
             # Use the device command mapper to generate the proper command
             try:
                 command = self.app.device_command_mapper.get_command(
-                    param_name, 
-                    param_value, 
-                    context={}, 
-                    confirm_destructive=False, 
+                    param_name,
+                    param_value,
+                    context={},
+                    confirm_destructive=False,
                     validate_command=True
                 )
-                
+
                 if not command:
                     self.logger.warning(f"No command generated for parameter {param_name}")
                     return False
-                
+
             except Exception as cmd_error:
                 self.logger.warning(f"Failed to generate command for {param_name}: {str(cmd_error)}")
                 # Fallback to simple command format
                 command = f"ATSMS:{param_name.upper()},{param_value}#"
-            
+
+            # SZCS command formatting is now handled by DeviceCommandMapper.get_command()
+            # No additional processing needed here
+
             # Send command to device
             response = self.app.serial_service.send_command(command)
             

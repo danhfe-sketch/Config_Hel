@@ -55,6 +55,7 @@ class App(ctk.CTk):
         self.theme_service = ThemeService(self)  # Initialize theme service (loads saved theme)
         self.operation_confirmation_service = OperationConfirmationService(self)  # Initialize operation confirmation service
         self.profile_manager = UniversalProfileManager(self.serial_service, "Parameter UI List.md")  # Initialize profile manager
+        self.profile_operation_in_progress = False
         
         # Initialize configuration reader service in serial service
         self.serial_service.initialize_configuration_reader()

@@ -45,6 +45,7 @@
     "save_profile": "Salvar Perfil",
     "load_from_device": "Carregar do Dispositivo",
     "load_profile_to_device": "Carregar Perfil para o Dispositivo",
+    "load_profile_to_device_confirmation": "Isto irá carregar o perfil de:\\n\\n{profile_path}\\n\\ne implantá-lo no dispositivo.\\n\\nContinuar?",
     "language": "Idioma",
     "help": "Ajuda",
     "install_driver": "Instalar Driver Cabo de Configuração",

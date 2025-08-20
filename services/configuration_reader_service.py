@@ -139,7 +139,6 @@ class ConfigurationReaderService:
             'main_power_alert': ('POWERALM', 'get_main_power_alert'),
             # Vibration Sensor Parameters
             'vibration_sensitivity': ('VIBL', 'get_vibration_sensitivity'),
-            'vibration_settings': ('VIBL', 'get_vibl'),
             'vibration_window': ('VIBCHK', 'get_vibchk'),
             # Jammer Detection Parameters
             'jammer_detection': ('JAMMER', 'get_jammer_detection'),
@@ -869,6 +868,8 @@ class ConfigurationReaderService:
             # Network Parameters
             'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
             'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
+            # Legacy/alternate network parameter keys
+            'network_settings': {'section': 'network_parameters', 'parameter': 'network_settings'},
             
             # Time Parameters
             'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
@@ -898,6 +899,7 @@ class ConfigurationReaderService:
             
             # Vibration Sensor Parameters
             'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
+            'vibration_window': {'section': 'vibration_sensor', 'parameter': 'vibration_window'},
             
             # Jammer Detection Parameters
             'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
@@ -906,6 +908,9 @@ class ConfigurationReaderService:
             # Miscellaneous Parameters
             'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
             'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
+            ,
+            # Defense / security settings mapping
+            'defense_settings': {'section': 'miscellaneous', 'parameter': 'defense_settings'}
         }
 
     def _is_time_parameter(self, param_widget) -> bool:

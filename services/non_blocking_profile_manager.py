@@ -580,9 +580,10 @@ class NonBlockingProfileManager:
         """
         operation_id = context.operation_id
         file_path = context.file_path
+        parameters = context.parameters
         
-        if not file_path:
-            raise ValueError("file_path is required for load_to_device operation")
+        if not file_path and not parameters:
+            raise ValueError("Either file_path or parameters is required for load_to_device operation")
         
         # Check if operation was cancelled before starting
         if context.cancellation_token and context.cancellation_token.is_set():
@@ -601,23 +602,82 @@ class NonBlockingProfileManager:
             if not self._is_device_connected():
                 raise RuntimeError("Device not connected")
             
-            # Use core profile manager to load profile to device
-            if hasattr(self.app, 'core_profile_manager'):
-                core_manager = self.app.core_profile_manager
-                success = core_manager.load_profile_to_device(file_path)
+            # If parameters not provided, read from file
+            if not parameters:
+                self._send_progress_update(context, 10, 100, "", "Reading profile file...")
                 
-                if success:
-                    self._send_progress_update(context, 100, 100, "", "Profile loaded to device successfully")
+                # Use SimplifiedProfileFileHandler to read the profile
+                from services.simplified_profile_file_handler import SimplifiedProfileFileHandler
+                file_handler = SimplifiedProfileFileHandler()
+                parameters, error = file_handler.read_universal_profile(file_path)
+                
+                if error:
+                    raise RuntimeError(f"Failed to read profile file: {error}")
+                
+                if not parameters:
+                    raise RuntimeError("No parameters found in profile file")
+            
+            self._send_progress_update(context, 20, 100, "", "Preparing device communication...")
+            
+            # Get device communication manager directly
+            if not hasattr(self.app, 'device_communication_manager') or not self.app.device_communication_manager:
+                raise RuntimeError("Device communication manager not available")
+            
+            device_manager = self.app.device_communication_manager
+            
+            # Create progress callback for device operations
+            def device_progress_callback(current_step, total_steps, current_param, status_msg):
+                # Map device progress to overall progress (20-95%)
+                if total_steps > 0:
+                    device_progress = (current_step / total_steps) * 75  # 75% of total progress
+                    overall_progress = 20 + device_progress
+                    self._send_progress_update(context, int(overall_progress), 100, current_param, status_msg)
+            
+            self._send_progress_update(context, 25, 100, "", "Writing parameters to device...")
+            
+            # Write parameters to device using DeviceCommunicationManager
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                write_results = loop.run_until_complete(
+                    device_manager.write_all_parameters(parameters, device_progress_callback)
+                )
+                
+                # Check for cancellation after device operation
+                if context.cancellation_token and context.cancellation_token.is_set():
+                    return OperationResult(
+                        operation_id=operation_id,
+                        operation_type=OperationType.LOAD_TO_DEVICE,
+                        success=False,
+                        error_message="Operation cancelled during device writing",
+                        parameters_processed=len([r for r in write_results.values() if r])
+                    )
+                
+                # Process results
+                successful_writes = sum(1 for success in write_results.values() if success)
+                failed_parameters = [param for param, success in write_results.items() if not success]
+                
+                self._send_progress_update(context, 95, 100, "", "Finalizing operation...")
+                
+                # Determine success based on write results
+                if successful_writes > 0:
+                    self._send_progress_update(context, 100, 100, "", f"Successfully wrote {successful_writes}/{len(parameters)} parameters")
+                    
                     return OperationResult(
                         operation_id=operation_id,
                         operation_type=OperationType.LOAD_TO_DEVICE,
                         success=True,
-                        metadata={'file_path': file_path}
+                        parameters_processed=successful_writes,
+                        failed_parameters=failed_parameters,
+                        metadata={'file_path': file_path, 'total_parameters': len(parameters)}
                     )
                 else:
-                    raise RuntimeError("Failed to load profile to device")
-            else:
-                raise RuntimeError("Core profile manager not available")
+                    raise RuntimeError(f"Failed to write any parameters to device. Failed parameters: {failed_parameters}")
+                    
+            finally:
+                loop.close()
                 
         except Exception as e:
             self._send_progress_update(context, 0, 100, "", f"Error: {str(e)}")

@@ -45,6 +45,7 @@
     "save_profile": "Guardar perfil",
     "load_from_device": "Cargar desde el dispositivo",
     "load_profile_to_device": "Cargar perfil al dispositivo",
+    "load_profile_to_device_confirmation": "Esto cargará el perfil desde:\\n\\n{profile_path}\\n\\ny lo desplegará en el dispositivo.\\n\\n¿Continuar?",
     "language": "Idioma",
     "help": "Ayuda",
     "install_driver": "Instalar controlador de cable de configuración",

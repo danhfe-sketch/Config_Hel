@@ -215,10 +215,16 @@ class UniversalProfileManager:
             
             # Prepare parameters for device writing
             parameters_to_write = {}
+            unique_parameters = {}
             for param_name, param_value in self._current_profile.parameters.items():
-                # Only write parameters that have been modified or are from user input
-                if param_value.is_modified or param_value.source == "user":
-                    parameters_to_write[param_name] = param_value.value
+                if param_value.source == "user":
+                    short_name = param_name.split('.')[-1]
+                    # If we haven't seen this parameter, or the new one has a longer name, we prefer it.
+                    if short_name not in unique_parameters or len(param_name) > len(unique_parameters[short_name][0]):
+                        unique_parameters[short_name] = (param_name, param_value)
+
+            for param_name, param_value in unique_parameters.values():
+                parameters_to_write[param_name] = param_value.value
             
             if not parameters_to_write:
                 result.add_warning("No modified parameters to write to device")
@@ -259,10 +265,7 @@ class UniversalProfileManager:
                 if progress_callback:
                     progress_callback(90, 100, "Finalizing save operation", None)
                 
-                # Clear modification flags for successfully written parameters
-                for param_name, success in write_results.items():
-                    if success and param_name in self._current_profile.parameters:
-                        self._current_profile.parameters[param_name].is_modified = False
+                
                 
                 # Determine overall success
                 if successful_writes > 0:
@@ -1105,3 +1108,28 @@ class UniversalProfileManager:
             operation_info = f"Operation: {self._current_operation}"
         
         return f"UniversalProfileManager({profile_info}, {operation_info})"
+def create_recovery_summary(self, recovery_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a recovery summary from the given context.
+        
+        Args:
+            recovery_context: Dictionary with recovery information
+        
+        Returns:
+            Dictionary with a summary of the recovery actions
+        """
+        if not recovery_context:
+            return {}
+
+        summary = {
+            'total_parameters': recovery_context.get('total_parameters', 0),
+            'successful_parameters': recovery_context.get('successful_parameters', 0),
+            'failed_parameters': recovery_context.get('failed_parameters', 0),
+            'recovery_actions': recovery_context.get('recovery_actions', 0),
+            'success_rate_percent': 0
+        }
+        
+        if summary['total_parameters'] > 0:
+            summary['success_rate_percent'] = (summary['successful_parameters'] / summary['total_parameters']) * 100
+            
+        return summary

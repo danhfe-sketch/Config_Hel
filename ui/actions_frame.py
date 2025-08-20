@@ -37,6 +37,9 @@ class ActionsFrame(ctk.CTkFrame):
         self.factory_reset_button.grid(row=4, column=0, padx=10, pady=(5, 10), sticky="ew")
 
     def send_all_parameters(self):
+        if self.serial_service.app.profile_operation_in_progress:
+            self.serial_service.app.log_frame.log_message("INFO: Suppressed send_all_parameters during profile operation.")
+            return
         """Sends all current UI parameters to the device in the correct sequence."""
         if not self.serial_service.is_connected:
             title = self.i18n.get("error")
