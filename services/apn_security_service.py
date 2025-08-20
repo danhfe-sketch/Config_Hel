@@ -609,6 +609,7 @@ class APNSecurityService:
             },
             "bypass_secret": "lt32pro_bypass_secret_2024_change_in_production",
             "audit_log_file": "apn_security_audit.log",
+            "persist_audit_log": False,
             "sanitization": {
                 "max_field_length": 255,
                 "allow_unicode": True,
@@ -777,9 +778,13 @@ class APNSecurityService:
     
     def _write_audit_log_entry(self, entry: AuditLogEntry):
         """Write audit log entry to persistent storage"""
+        # Only persist audit logs to disk when explicitly enabled in configuration
+        if not self.security_config.get('persist_audit_log', False):
+            return
+
         try:
             log_file = self.security_config.get("audit_log_file", "apn_security_audit.log")
-            
+
             log_data = {
                 "timestamp": entry.timestamp.isoformat(),
                 "action": entry.action.value,
@@ -793,10 +798,10 @@ class APNSecurityService:
                 "success": entry.success,
                 "error_message": entry.error_message
             }
-            
+
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(log_data) + '\n')
-                
+
         except Exception as e:
             self.logger.error(f"Failed to write audit log entry: {e}")
     
@@ -818,17 +823,27 @@ class APNSecurityService:
     
     def _init_audit_logging(self):
         """Initialize audit logging system"""
-        self.logger.info("Audit logging system initialized")
-        
-        # Create audit log file if it doesn't exist
+        self.logger.info("Audit logging system initialized (persistence disabled by default)")
+        # By default we do not create or write audit log files on disk.
+        # If persistent audit logs are required, set 'persist_audit_log': True
+        # in the security config and provide an 'audit_log_file' path.
+
+        # If persistence is disabled, try to remove legacy audit log file to
+        # avoid leaving artifacts behind from previous runs.
         try:
             import os
-            log_file = self.security_config.get("audit_log_file", "apn_security_audit.log")
-            if not os.path.exists(log_file):
-                with open(log_file, 'w') as f:
-                    f.write("")  # Create empty file
-        except Exception as e:
-            self.logger.warning(f"Could not initialize audit log file: {e}")
+            if not self.security_config.get('persist_audit_log', False):
+                audit_file = self.security_config.get('audit_log_file', 'apn_security_audit.log')
+                if os.path.exists(audit_file):
+                    try:
+                        os.remove(audit_file)
+                        self.logger.info(f"Removed legacy audit log file: {audit_file}")
+                    except Exception as _:
+                        # Non-fatal: just log at debug level
+                        self.logger.debug(f"Could not remove legacy audit log file: {audit_file}")
+        except Exception:
+            # Do not raise on cleanup errors
+            pass
     
     def _init_integrity_checks(self):
         """Initialize validation integrity checking"""

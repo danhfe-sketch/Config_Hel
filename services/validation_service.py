@@ -1998,29 +1998,52 @@ class ValidationService:
         # Create file handlers for different log types
         try:
             import os
+            # Only create on-disk logs if explicitly enabled by environment/config
+            persist_logs = False
+            try:
+                persist_logs = bool(__import__('os').environ.get('PERSIST_VALIDATION_LOGS', 'false').lower() == 'true')
+            except Exception:
+                persist_logs = False
+
             log_dir = os.path.join(os.getcwd(), 'logs')
-            os.makedirs(log_dir, exist_ok=True)
+            if persist_logs:
+                os.makedirs(log_dir, exist_ok=True)
+
+            # If persistence is disabled, try to remove legacy logs folder to avoid leaving artifacts
+            if not persist_logs:
+                try:
+                    import shutil
+                    if os.path.exists(log_dir):
+                        shutil.rmtree(log_dir)
+                        self.logger.info(f"Removed legacy logs directory: {log_dir}")
+                except Exception:
+                    # Non-fatal cleanup errors
+                    pass
             
             # Main validation log
             validation_log_file = os.path.join(log_dir, 'validation.log')
-            self.validation_file_handler = logging.FileHandler(validation_log_file, encoding='utf-8')
-            self.validation_file_handler.setFormatter(validation_formatter)
-            self.validation_logger.addHandler(self.validation_file_handler)
+            if persist_logs:
+                self.validation_file_handler = logging.FileHandler(validation_log_file, encoding='utf-8')
+                self.validation_file_handler.setFormatter(validation_formatter)
+                self.validation_logger.addHandler(self.validation_file_handler)
             
             # Debug log for detailed troubleshooting
             debug_log_file = os.path.join(log_dir, 'validation_debug.log')
-            self.debug_file_handler = logging.FileHandler(debug_log_file, encoding='utf-8')
-            self.debug_file_handler.setFormatter(debug_formatter)
+            if persist_logs:
+                self.debug_file_handler = logging.FileHandler(debug_log_file, encoding='utf-8')
+                self.debug_file_handler.setFormatter(debug_formatter)
             
             # Metrics log for performance and analytics
             metrics_log_file = os.path.join(log_dir, 'validation_metrics.log')
-            self.metrics_file_handler = logging.FileHandler(metrics_log_file, encoding='utf-8')
-            self.metrics_file_handler.setFormatter(metrics_formatter)
+            if persist_logs:
+                self.metrics_file_handler = logging.FileHandler(metrics_log_file, encoding='utf-8')
+                self.metrics_file_handler.setFormatter(metrics_formatter)
             
             # Analytics log for error pattern analysis
             analytics_log_file = os.path.join(log_dir, 'validation_analytics.log')
-            self.analytics_file_handler = logging.FileHandler(analytics_log_file, encoding='utf-8')
-            self.analytics_file_handler.setFormatter(analytics_formatter)
+            if persist_logs:
+                self.analytics_file_handler = logging.FileHandler(analytics_log_file, encoding='utf-8')
+                self.analytics_file_handler.setFormatter(analytics_formatter)
             
             # Create separate loggers for different purposes
             self.debug_logger = logging.getLogger(f"{__name__}.debug")
