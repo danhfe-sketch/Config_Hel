@@ -361,12 +361,6 @@ class DeviceCommandMapper:
                 False: '0'
             },
 
-            # Vibration sensor enabled mapping
-            'vibration_sensor_enabled': {
-                True: '1',
-                False: '0'
-            },
-
             # Heartbeat Intervals (converted to seconds)
             'heartbeat_interval': {
                 '30s': '30',
@@ -1032,8 +1026,8 @@ class DeviceCommandMapper:
             # Vibration Configuration
             {
                 'name': 'vibration',
-                'params': ['vibration_enabled', 'vibration_level'],
-                'required': ['vibration_enabled'],
+                'params': ['vibration_level'],
+                'required': ['vibration_level'],
                 'method': self._generate_vibration_command
             },
             
@@ -1302,12 +1296,9 @@ class DeviceCommandMapper:
                 raise ValueError(f"Angle report command validation failed: {str(e)}")
         return command
     
-    def format_vibration_sensitivity_command(self, enabled: bool, level: int) -> str:
+    def format_vibration_sensitivity_command(self, level: int) -> str:
         """Format vibration sensitivity configuration command."""
-        if enabled:
-            command = f"ATSMS:SZCS#VIBL={level}"
-        else:
-            command = f"ATSMS:SZCS#VIBL=0"
+        command = f"ATSMS:SZCS#VIBL={level}"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1640,10 +1631,9 @@ class DeviceCommandMapper:
     def _generate_vibration_command(self, vibration_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate vibration command from flattened parameters."""
         try:
-            enabled = vibration_params.get('vibration_enabled', False)
             level = vibration_params.get('vibration_level', 1)
             
-            return self.format_vibration_sensitivity_command(enabled, level)
+            return self.format_vibration_sensitivity_command( level)
             
         except Exception as e:
             self.logger.error(f"Error generating vibration command: {str(e)}")
@@ -2096,12 +2086,8 @@ class DeviceCommandMapper:
         
         elif parameter_name == 'vibration_sensitivity':
             # Vibration sensitivity might need both enable and level commands
-            if values.get('enabled'):
-                level = values.get('level', '1')
-                commands.append(f"{self.command_prefix}SZCS#VIBL={level}")
-            else:
-                # Disable vibration
-                commands.append(f"{self.command_prefix}SZCS#VIBL=0")
+            level = values.get('level', '1')
+            commands.append(f"{self.command_prefix}SZCS#VIBL={level}")
         
         elif parameter_name == 'jammer_relay_action':
             # Handle jammer relay action using multi-field parameter handler
@@ -2449,9 +2435,6 @@ class DeviceCommandMapper:
         if param_name in ['speed_alert', 'angle_report', 'main_power_alert', 'jammer_relay_action']:
             # These parameters use ON/OFF for enabled state
             return 'ON' if ui_value else 'OFF'
-        elif param_name == 'vibration_sensitivity' and field_name == 'enabled':
-            # Vibration uses 1/0 for enabled state
-            return 1 if ui_value else 0
         
         # Default toggle mapping
         return self._map_toggle_value(field_name, ui_value)
@@ -3417,14 +3400,7 @@ class DeviceCommandMapper:
             Dictionary with mapped command parameters for VIBL template
         """
         try:
-            # Handle different input formats
-            enabled = None
             level = None
-            
-            if 'enabled' in values:
-                enabled_val = values.get('enabled')
-                if enabled_val is not None:
-                    enabled = bool(enabled_val)
             
             if 'level' in values:
                 level_val = values.get('level')
@@ -3441,30 +3417,20 @@ class DeviceCommandMapper:
                 if value is not None and value != '':
                     if isinstance(value, (int, float)):
                         level = int(value)
-                        enabled = level > 0
                     elif isinstance(value, str) and value.strip():
                         try:
                             level = int(value.strip())
-                            enabled = level > 0
                         except ValueError:
-                            # If string is not numeric, treat as boolean
-                            enabled = bool(value.strip().lower() not in ('false', '0', 'off', 'disabled'))
-                            level = 1 if enabled else 0
+                            level = 1
                     else:
-                        enabled = bool(value)
-                        level = 1 if enabled else 0
+                        level = 1
                 else:
                     # Empty or None value
-                    enabled = False
                     level = 0
             
             # Determine final level with proper defaults
-            if enabled is False:
-                final_level = 0  # Disabled
-            elif level is not None:
+            if level is not None:
                 final_level = max(0, min(6, int(level)))  # Ensure level is between 0-6
-            elif enabled is True:
-                final_level = 1  # Default enabled level
             else:
                 final_level = 0  # Default disabled
             

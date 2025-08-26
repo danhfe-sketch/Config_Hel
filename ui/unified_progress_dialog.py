@@ -70,7 +70,7 @@ class UnifiedProgressDialog:
             self.dialog.title(title)
             
             # Set dialog properties
-            self.dialog.geometry("480x320")
+            self.dialog.geometry("480x360")
             self.dialog.resizable(False, False)
             self.dialog.transient(self.parent)
             self.dialog.grab_set()
@@ -147,7 +147,7 @@ class UnifiedProgressDialog:
             
             # Calculate center position
             dialog_width = 480
-            dialog_height = 320
+            dialog_height = 360
             x = parent_x + (parent_width - dialog_width) // 2
             y = parent_y + (parent_height - dialog_height) // 2
             
@@ -162,7 +162,7 @@ class UnifiedProgressDialog:
             
         except Exception:
             # Fallback positioning
-            self.dialog.geometry("480x320+400+200")
+            self.dialog.geometry("480x360+400+200")
             
     def _create_ui(self):
         """Create the clean, minimal UI elements."""

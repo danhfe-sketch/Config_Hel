@@ -661,6 +661,8 @@ class ParameterSpecificationFactory:
                 self._send_odometer_command(param_values)
             elif param_name == 'hourmeter':
                 self._send_hourmeter_command(param_values)
+            elif param_name == 'network_settings':
+                self._send_network_settings_command(param_values)
             else:
                 # Generic parameter sending
                 self._send_generic_parameter_command(param_name, param_values)
@@ -1118,16 +1120,39 @@ class ParameterSpecificationFactory:
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("main_power_sent", "Main power alert configuration sent to device")
         )
+
+    def _send_network_settings_command(self, values: dict):
+        """Send network settings command"""
+        network_mode = str(values.get('main', '')).strip()
+        
+        if not network_mode:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("network_mode_required", "Network mode selection is required")
+            )
+            return
+        
+        # Map network mode to command value
+        network_mode_mapping = {
+            'AUTO': '0',
+            '4G': '1',
+            '2G': '2'
+        }
+        
+        mode_value = network_mode_mapping.get(network_mode, '0')
+        command = f"ATSMS:NETSELECT,{mode_value}#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("network_settings_sent", "Network settings sent to device")
+        )
     
     def _send_vibration_sensitivity_command(self, values: dict):
         """Send vibration sensitivity configuration command"""
-        enabled = values.get('enabled', False)
         level = str(values.get('level', '1')).strip()
         
-        if enabled:
-            command = f"ATSMS:SZCS#VIBL={level}"
-        else:
-            command = "ATSMS:SZCS#VIBL=0"
+        command = f"ATSMS:SZCS#VIBL={level}"
         
         self.serial_service.send_command(command)
         messagebox.showinfo(

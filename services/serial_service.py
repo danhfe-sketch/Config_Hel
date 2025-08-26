@@ -54,9 +54,9 @@ class SerialService:
 
     @staticmethod
     def list_com_ports():
-        """Returns a list of available COM ports."""
+        """Returns a list of available COM ports with descriptions."""
         ports = serial.tools.list_ports.comports()
-        return [port.device for port in ports] if ports else ["N/A"]
+        return [f"{port.device} - {port.description}" for port in ports] if ports else ["N/A"]
 
     def connect(self, port, baudrate=115200):
         """Connects to the specified serial port."""
@@ -64,7 +64,9 @@ class SerialService:
             self.disconnect()
 
         try:
-            self.serial_port = serial.Serial(port, baudrate, timeout=1)
+            # Extract port device name from "COMx - Description"
+            port_device = port.split(' - ')[0]
+            self.serial_port = serial.Serial(port_device, baudrate, timeout=1)
             self.is_connected = True
             self.stop_thread = False
             
@@ -862,9 +864,7 @@ class SerialService:
                                         elif field_name == 'min_charge_time':
                                             flattened['main_power_min_charge_time'] = field_value
                                     elif param_name == 'vibration_sensitivity':
-                                        if field_name == 'enabled':
-                                            flattened['vibration_enabled'] = field_value
-                                        elif field_name == 'level':
+                                        if field_name == 'level':
                                             flattened['vibration_level'] = field_value
                                     elif param_name == 'jammer_relay_action':
                                         if field_name == 'enabled':

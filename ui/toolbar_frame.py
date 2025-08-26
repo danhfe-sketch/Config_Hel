@@ -88,7 +88,6 @@ class ToolbarFrame(ctk.CTkFrame):
         self.help_dropdown = ctk.CTkOptionMenu(
             left_frame,
             values=[
-                self.i18n.get("install_driver", "Install Driver"),
                 self.i18n.get("open_manuals", "Open Manuals")
             ],
             command=self._on_help_action,
@@ -177,9 +176,7 @@ class ToolbarFrame(ctk.CTkFrame):
     def _on_help_action(self, choice):
         """Handle help menu actions."""
         try:
-            if choice == self.i18n.get("install_driver", "Install Driver"):
-                self._show_driver_installation_guide()
-            elif choice == self.i18n.get("open_manuals", "Open Manuals"):
+            if choice == self.i18n.get("open_manuals", "Open Manuals"):
                 self._open_manuals()
             
             # Reset dropdown to default text
@@ -191,35 +188,12 @@ class ToolbarFrame(ctk.CTkFrame):
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
             show_error(self.app, "Help Error", error_msg)
     
-    def _show_driver_installation_guide(self):
-        """Show driver installation guidance."""
-        driver_info = """
-Driver Installation Guide:
-
-1. Download the USB-to-Serial driver for your operating system
-2. For Windows: Install CH340/CH341 driver
-3. For macOS: Install CH34x_Install_V1.5.pkg
-4. For Linux: Driver is usually included in kernel
-
-Common driver sources:
-- Manufacturer website
-- Windows Update
-- Device Manager > Update Driver
-
-After installation, restart the application and check available COM ports.
-        """
-        
-        show_info(self.app, "Driver Installation", driver_info.strip())
-        
-        if hasattr(self.app, 'log_frame') and self.app.log_frame:
-            self.app.log_frame.log_message("Driver installation guide displayed.\n")
-    
     def _open_manuals(self):
         """Open equipment manuals."""
         try:
             # Look for PDF manual in the application directory
             manual_files = [
-                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.03-072025.pdf",
+                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.04-082025.pdf",
                 "manual.pdf",
                 "LT32Pro_Manual.pdf"
             ]
@@ -1159,7 +1133,7 @@ For technical support, contact Lumini Tracker support team.
             # Create progress window
             progress_window = tk.Toplevel(self.app)
             progress_window.title(title)
-            progress_window.geometry("400x150")
+            progress_window.geometry("400x160")
             progress_window.resizable(False, False)
             progress_window.transient(self.app)
             progress_window.grab_set()

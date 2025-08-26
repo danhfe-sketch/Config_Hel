@@ -244,7 +244,7 @@ class OperationConfirmationService:
         # Create the dialog window
         dialog = ctk.CTkToplevel(self.app)
         dialog.title(title)
-        dialog.geometry("400x150")
+        dialog.geometry("400x170")
         dialog.resizable(False, False)
         dialog.transient(self.app)  # Make it float on top of the main window
         dialog.grab_set()  # Make it modal

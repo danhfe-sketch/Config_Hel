@@ -265,14 +265,12 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'detection_time': FieldConfig(
                         name='detection_time',
                         label='Tempo para detectar (s)',
-                        ui_element='number_input',
-                        validation='5-600'
+                        ui_element='number_input'
                     ),
                     'speed_limit': FieldConfig(
                         name='speed_limit',
                         label='Velocidade (km/h)',
-                        ui_element='number_input',
-                        validation='1-255'
+                        ui_element='number_input'
                     ),
                     'alert_type': FieldConfig(
                         name='alert_type',
@@ -397,14 +395,12 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'detection_time': FieldConfig(
                         name='detection_time',
                         label='Tempo de detecção (s)',
-                        ui_element='number_input',
-                        validation='2-60'
+                        ui_element='number_input'
                     ),
                     'min_charge_time': FieldConfig(
                         name='min_charge_time',
                         label='Tempo mínimo de carga (s)',
-                        ui_element='number_input',
-                        validation='1-3600'
+                        ui_element='number_input'
                     )
                 },
                 commands={
@@ -424,11 +420,6 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 name='vibration_sensitivity',
                 label='Sensibilidade à Vibração',
                 fields={
-                    'enabled': FieldConfig(
-                        name='enabled',
-                        label='Habilitar sensor de vibração',
-                        ui_element='toggle_switch'
-                    ),
                     'level': FieldConfig(
                         name='level',
                         label='Nível da sensibilidade (1=Baixa, 6=Alta)',

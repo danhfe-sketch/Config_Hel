@@ -49,7 +49,7 @@ class SimpleDeviceProgressDialog:
         # Create dialog window
         self.dialog = ctk.CTkToplevel(parent)
         self.dialog.title(self._get_dialog_title())
-        self.dialog.geometry("450x200")
+        self.dialog.geometry("450x220")
         self.dialog.resizable(False, False)
         
         # Center the dialog
@@ -89,7 +89,7 @@ class SimpleDeviceProgressDialog:
         
         # Calculate center position
         dialog_width = 450
-        dialog_height = 200
+        dialog_height = 220
         x = parent_x + (parent_width - dialog_width) // 2
         y = parent_y + (parent_height - dialog_height) // 2
         
