@@ -1287,7 +1287,6 @@ class ConfigurationReaderService:
             if 'vibration_sensitivity' in parsed_parameters:
                 vib_data = parsed_parameters['vibration_sensitivity']
                 self._update_widget_value('vibration_level', vib_data.get('level', ''))
-                self._update_widget_value('vibration_enabled', vib_data.get('enabled', False))
             
             # Power Saving Parameters
             if 'sleep_time' in parsed_parameters:
@@ -1949,7 +1948,6 @@ class ConfigurationReaderService:
                 elif command_type == 'get_vibration_sensitivity':
                     level = match.group(1)
                     parsed_values['level'] = level
-                    parsed_values['enabled'] = level != '0'  # Enabled if level > 0
                 
                 # Jammer Detection Parameters
                 elif command_type == 'get_jammer_detection':
