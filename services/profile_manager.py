@@ -319,7 +319,6 @@ class ProfileManager:
             'sleep_mode': 'Advanced_Settings',
             'sleep_time': 'Advanced_Settings',
             'network_select': 'Advanced_Settings',
-            'volte_switch': 'Advanced_Settings',
             'defense_time': 'Advanced_Settings',
             'vibration_window': 'Advanced_Settings',
             'blind_speed': 'Advanced_Settings',

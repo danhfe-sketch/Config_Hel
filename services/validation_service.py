@@ -508,10 +508,6 @@ class ValidationService:
                 'type': 'dropdown',
                 'allowed_values': ['GT06-0x60', 'GT06-0x12', 'CRX3']
             },
-            'volte_switch': {
-                'type': 'dropdown',
-                'allowed_values': ['2G', '4G']
-            },
             'relay_state': {
                 'type': 'dropdown',
                 'allowed_values': ['OFF', 'ON']

@@ -46,8 +46,7 @@ class UnifiedDeviceCommunicator:
         'jammer_relay_action',
         'odometer',
         'hourmeter',
-        'defense_settings',
-        'volte_settings'
+        'defense_settings'
     ]
     
     def __init__(self, configuration_reader_service: ConfigurationReaderService):

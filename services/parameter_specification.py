@@ -111,15 +111,6 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set': 'NETSELECT,<value>#',
                     'read': 'NETSELECT#'
                 }
-            ),
-            'volte_settings': ParameterConfig(
-                name='volte_settings',
-                label='VoLTE',
-                ui_element='toggle_switch',
-                commands={
-                    'set': 'VOLTESWITCH,<value>#',
-                    'read': 'VOLTESWITCH#'
-                }
             )
         }
     ),
@@ -476,11 +467,6 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 label='Ação da Saída por Jammer',
                 description='Configures the relay (output) behavior upon jammer detection.',
                 fields={
-                    'enabled': FieldConfig(
-                        name='enabled',
-                        label='Ativar saída (bloqueio) ao detectar Jammer',
-                        ui_element='toggle_switch'
-                    ),
                     'output_operation': FieldConfig(
                         name='output_operation',
                         label='Operação da Saída',
@@ -515,8 +501,9 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
         parameters={
             'defense_settings': ParameterConfig(
                 name='defense_settings',
-                label='Modo Defesa',
-                ui_element='toggle_switch',
+                label='Defense Time (min):',
+                ui_element='number_input',
+                validation='1-60',
                 commands={
                     'set': 'DEFENSE,<value>#',
                     'read': 'DEFENSE#'

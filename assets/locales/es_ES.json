@@ -200,7 +200,6 @@
     "reconnection_successful": "Reconexión exitosa",
     "operation_in_progress": "Operación en curso...",
     "apply": "Aplicar",
-    "confirm_operation": "Confirmar operación",
     "confirm_factory_reset_detail": "El dispositivo se reiniciará después del restablecimiento de fábrica.",
     "confirm_device_reset_title": "Confirmar reinicio del dispositivo",
     "confirm_device_reset_message": "Esto reiniciará el dispositivo.\n\nLa conexión actual se perderá y deberá reconectarse después del reinicio del dispositivo.\n\n¿Desea continuar?",

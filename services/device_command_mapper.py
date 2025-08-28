@@ -118,7 +118,6 @@ class DeviceCommandMapper:
             'query_protocol': "CXCS#GT06SEL",
             'query_tcp_ack': "CXCS#POSBYACK",
             'query_network': "CXCS#NETSELECT",
-            'query_volte': "CXCS#VOLTESWITCH",
             'query_sleep_mode': "CXCS#SLPDISCONNECT",
             'query_sleep_time': "CXCS#SLEEPT",
             'query_ignition': "CXCS#ACCLINE#ACC_CFG",
@@ -163,7 +162,7 @@ class DeviceCommandMapper:
             'vibration_window': "SZCS#VIBCHK={window}:{value}#",  # Changed from CXCS to SZCS for writing to device
             'defense_time': "DEFENSE,{value}#",
 
-            # Speed and Angle Reporting (legacy - replaced by Parameter UI List compliant version above)
+            # Speed and Angle Reporting (legacy - replaced with Parameter UI List compliant version above)
             'angle_reporting': "SZCS#ANGLEVALUE={speed}-{value}#",  # Changed from CXCS to SZCS for writing to device
             'blind_speed': "SZCS#BLINDSPD={value}#",  # Changed from CXCS to SZCS for writing to device
 
@@ -181,7 +180,6 @@ class DeviceCommandMapper:
             # Network and Protocol Settings
             'gt06_protocol': "SZCS#GT06SEL={value}#",  # Changed from CXCS to SZCS based on device feedback
             'network_select': "SZCS#NETSELECT={value}#",  # Changed from CXCS to SZCS for writing to device
-            'volte_switch': "SZCS#VOLTESWITCH={value}#",  # Changed from CXCS to SZCS for writing to device
             # Removed 'transmission_mode' as it doesn't exist in the device
 
             # Sleep Mode Configuration
@@ -240,10 +238,6 @@ class DeviceCommandMapper:
                 'AUTO': '0',  # Auto-select between 2G and 4G
                 '4G': '1',    # 4G only
                 '2G': '2'     # 2G only
-            },
-            'volte_switch': {
-                '2G': '0',    # Use 2G for SMS
-                '4G': '1'     # Use 4G for SMS
             },
 
             # Sleep Mode Configuration
@@ -509,6 +503,22 @@ class DeviceCommandMapper:
                         # Generate minimal speed command when disabled
                         command = f"SPEED,OFF#"
                         self.logger.debug(f"Using minimal command for disabled speed_alert: {command}")
+                    elif param_name == 'backup_battery_alert' and command_params.get('state') == 'OFF':
+                        # Generate minimal backup battery command when disabled
+                        command = "BATALM,OFF#"
+                        self.logger.debug(f"Using minimal command for disabled backup_battery_alert: {command}")
+                    elif param_name == 'backup_battery_alert':
+                        # Enabled backup battery -> include mode (A)
+                        mode = command_params.get('mode', '0')
+                        # ensure numeric mode
+                        try:
+                            mode_int = int(mode)
+                        except Exception:
+                            mode_int = 0
+                        if mode_int not in (0, 1):
+                            mode_int = 0
+                        command = f"BATALM,ON,{mode_int}#"
+                        self.logger.debug(f"Using full command for backup_battery_alert: {command}")
                     else:
                         # Format the command using the mapped parameters
                         command = template.format(**command_params)
@@ -751,7 +761,7 @@ class DeviceCommandMapper:
         elif param_name.startswith('heartbeat_'):
             return 'heartbeat'
         elif param_name in ['vibration', 'sensitivity', 'gt06_protocol', 'network_select', 
-                           'volte_switch', 'sleep_mode', 'sleep_time', 'ignition_type',
+                           'sleep_mode', 'sleep_time', 'ignition_type',
                            'angle_reporting', 'blind_speed', 'curve_sensor', 'lock_type']:
             return 'szcs'
         else:
@@ -1273,7 +1283,7 @@ class DeviceCommandMapper:
         """Format main power alert configuration command."""
         enabled_str = 'ON' if enabled else 'OFF'
         alert_type_code = self._map_alert_type(alert_type)
-        command = f"ATSMS:POWERALM,{enabled_str},{alert_type_code},{detection_time},{min_charge_time}#"
+        command = f"ATSMS:POWERALM,{enabled_str},{alert_type_code},{int(detection_time)},{int(min_charge_time)}#"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1284,10 +1294,13 @@ class DeviceCommandMapper:
     
     def format_angle_report_command(self, enabled: bool, min_speed: int, angle_variation: int) -> str:
         """Format angle report configuration command."""
+        # Ensure formatting: min_speed -> 2 digits, angle_variation -> 3 digits
         if enabled:
-            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed}-{angle_variation}"
+            min_speed_str = f"{int(min_speed):02d}"
+            angle_variation_str = f"{int(angle_variation):03d}"
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}#"
         else:
-            command = f"ATSMS:SZCS#ANGLEVALUE=0-0"
+            command = f"ATSMS:SZCS#ANGLEVALUE=00-000#"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1390,7 +1403,7 @@ class DeviceCommandMapper:
     
     def format_sleep_time_command(self, sleep_time: int) -> str:
         """Format sleep time configuration command."""
-        command = f"ATSMS:SZCS#SLEEPT={sleep_time}"
+        command = f"ATSMS:SZCS#SLEEPT={int(sleep_time)}"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1440,7 +1453,7 @@ class DeviceCommandMapper:
     
     def format_hourmeter_command(self, value: int) -> str:
         """Format hourmeter configuration command."""
-        command = f"ATSMS:ACCONT={value}#"
+        command = f"ATSMS:ACCONT,{value}#"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1699,6 +1712,7 @@ class DeviceCommandMapper:
         Args:
             parameters: Dictionary of parameter names and values
             
+                               
         Returns:
             Dictionary with validation results and recommendations
         """
@@ -1983,7 +1997,7 @@ class DeviceCommandMapper:
         # Check for valid read command patterns
         valid_patterns = [
             r'^[A-Z]+#$',  # Simple query commands like APN#, SERVER#
-            r'^SZCS#[A-Z0-9_]+$',  # Configuration query commands
+            r'^SZCS#[A-Z0-9_]+=.+#',  # Configuration query commands
             r'^SZCS#[A-Z0-9_]+#[A-Z0-9_]+$',  # Multi-part configuration queries
             r'^CXCS#[A-Z0-9_]+$',  # Legacy configuration query commands
             r'^CXCS#[A-Z0-9_]+#[A-Z0-9_]+$'  # Legacy multi-part configuration queries
@@ -2117,54 +2131,42 @@ class DeviceCommandMapper:
         """
         commands = []
         
-        # Define command sequence priority for proper device configuration
-        priority_order = [
-            'network_parameters.apn_settings',
-            'network_parameters.server_settings', 
-            'service_parameters.protocol',
-            'service_parameters.tcp_ack',
-            'time_parameters.report_intervals',
-            'time_parameters.heartbeat_intervals',
-            'ignition.ignition_type',
-            'speed.speed_alert',
-            'speed.speed_buzzer',
-            'power_saving.sleep_mode',
-            'power_saving.sleep_time',
-            'angle.angle_report',
-            'battery_alerts.backup_battery_alert',
-            'battery_alerts.main_power_alert',
-            'vibration_sensor.vibration_sensitivity',
-            'jammer_detection.jammer_detection',
-            'jammer_detection.jammer_relay_action',
-            'miscellaneous.odometer',
-            'miscellaneous.hourmeter'
+        # Define parameter processing order for optimal device configuration
+        processing_order = [
+            ('network_parameters', 'apn_settings'),
+            ('network_parameters', 'server_settings'),
+            ('time_parameters', 'report_intervals'),
+            ('time_parameters', 'heartbeat_intervals'),
+            ('service_parameters', 'protocol'),
+            ('service_parameters', 'tcp_ack'),
+            ('ignition', 'ignition_type'),
+            ('speed', 'speed_alert'),
+            ('speed', 'speed_buzzer'),
+            ('power_saving', 'sleep_mode'),
+            ('power_saving', 'sleep_time'),
+            ('angle', 'angle_report'),
+            ('battery_alerts', 'backup_battery_alert'),
+            ('battery_alerts', 'main_power_alert'),
+            ('vibration_sensor', 'vibration_sensitivity'),
+            ('jammer_detection', 'jammer_detection'),
+            ('jammer_detection', 'jammer_relay_action'),
+            ('miscellaneous', 'odometer'),
+            ('miscellaneous', 'hourmeter')
         ]
         
-        # Process parameters in priority order
-        for param_key in priority_order:
-            if param_key in parameters:
-                try:
-                    section_name, parameter_name = param_key.split('.', 1)
-                    param_commands = self.get_parameter_command_variations(
-                        section_name, parameter_name, parameters[param_key]
-                    )
-                    commands.extend(param_commands)
-                except Exception as e:
-                    self._log_message(f"Error generating commands for {param_key}: {str(e)}")
-                    continue
-        
-        # Process any remaining parameters not in priority order
-        for param_key, param_values in parameters.items():
-            if param_key not in priority_order:
-                try:
-                    section_name, parameter_name = param_key.split('.', 1)
-                    param_commands = self.get_parameter_command_variations(
-                        section_name, parameter_name, param_values
-                    )
-                    commands.extend(param_commands)
-                except Exception as e:
-                    self._log_message(f"Error generating commands for {param_key}: {str(e)}")
-                    continue
+        # Process parameters in the defined order
+        for section_name, parameter_name in processing_order:
+            if (section_name in parameters and 
+                parameter_name in parameters[section_name]):
+                
+                values = parameters[section_name][parameter_name]
+                if values:  # Only process if values are provided
+                    try:
+                        command = self.get_parameter_command(section_name, parameter_name, values)
+                        commands.append(command)
+                    except ValueError as e:
+                        self._log_message(f"Error generating command for {section_name}.{parameter_name}: {str(e)}")
+                        continue
         
         return commands
     
@@ -2180,8 +2182,8 @@ class DeviceCommandMapper:
         elif ignition_mode == 'Virtual por acelerômetro (Virtual by accelerometer)':
             command = 'SZCS#ACCLINE=0#ACC_CFG=0-000-000'
         elif ignition_mode == 'Virtual por bateria (Virtual by battery)':
-            on_voltage = values.get('on_voltage', '000')
-            off_voltage = values.get('off_voltage', '000')
+            on_voltage = values.get('on_voltage', '000')  # Default 13.5V as 135
+            off_voltage = values.get('off_voltage', '000')  # Default 13.0V as 130
             command = f'SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage}-{off_voltage}'
         else:
             raise ValueError(f"Unknown ignition mode: {ignition_mode}")
@@ -2333,10 +2335,11 @@ class DeviceCommandMapper:
     def _generate_vibration_sensitivity_command(self, values: Dict[str, Any]) -> str:
         """Generate vibration sensitivity command: SZCS#VIBL=<level>
         If disabled, map level to 0; if enabled without level, default to 1.
-        Accepts {'enabled': bool, 'level': int} or {'value': bool/int}.
+        Accepts {'enabled': bool, 'level': int} or {'value': {...}} (profile wrapping)
         """
         enabled = None
         level = None
+
         if isinstance(values, dict):
             if 'enabled' in values:
                 enabled = bool(values.get('enabled'))
@@ -2906,7 +2909,6 @@ class DeviceCommandMapper:
         Handle jammer_relay_action parameter fields mapping to JAMRELAY command parameters.
         
         Maps parameter fields to command parameters:
-        - enabled → determines if command should be sent
         - output_operation → maps to operation code (0=Sem Ação, 1=Ativar e Manter, 2=Ativar e Desativar com Jammer)
         - confirmation_time → direct value
         - speed_limit → direct value
@@ -2922,61 +2924,26 @@ class DeviceCommandMapper:
             ValueError: If field values are invalid or out of range
         """
         try:
-            enabled = values.get('enabled', False)
-            
-            # Validate enabled field type
-            if not isinstance(enabled, bool):
-                self.logger.warning(f"Invalid enabled field type for jammer_relay_action: {type(enabled).__name__}, converting to boolean")
-                enabled = bool(enabled)
-            
-            # Map output operation to command value - handle both string and numeric values
             output_operation = values.get('output_operation', 'Sem Ação')
-            
-            # Convert numeric values (as int or string) to string equivalents
-            if isinstance(output_operation, (int, float)) or (isinstance(output_operation, str) and output_operation.isdigit()):
-                numeric_to_string_map = {
-                    0: 'Sem Ação',
-                    1: 'Ativar e Manter',
-                    2: 'Ativar e Desativar com Jammer'
-                }
-                original_value = output_operation
-                output_operation = numeric_to_string_map.get(int(output_operation))
-                if output_operation is None:
-                    # Handle unexpected numeric values - default to 'Sem Ação'
-                    self.logger.warning(f"Unexpected numeric output_operation value: {original_value}, defaulting to 'Sem Ação'")
-                    output_operation = 'Sem Ação'
-                else:
-                    self.logger.debug(f"Converted numeric output_operation value to string: {original_value} -> {output_operation}")
-            
-            if output_operation not in ['Sem Ação', 'Ativar e Manter', 'Ativar e Desativar com Jammer']:
-                raise ValueError(f"Invalid output_operation value: {output_operation}. Must be one of: 'Sem Ação', 'Ativar e Manter', 'Ativar e Desativar com Jammer'")
-            
             operation_code = self._map_value('jammer_output_operation', output_operation)
-            self.logger.debug(f"Mapped output_operation '{output_operation}' to code: {operation_code}")
-            
-            # Get confirmation time and speed limit with validation - always use actual values from file
+
+            if operation_code == '0': # Sem Ação
+                return {
+                    'op': '0', 'time': '0', 'speed': '0',
+                    'd': '0', 'e': '0', 'f': '0', 'g': '0'
+                }
+
             confirmation_time_raw = values.get('confirmation_time', 0)
             speed_limit_raw = values.get('speed_limit', 0)
             
-            try:
-                confirmation_time = self._validate_number_value(confirmation_time_raw, '0-1800')
-                self.logger.debug(f"Validated confirmation_time: {confirmation_time}")
-            except ValueError as e:
-                raise ValueError(f"Invalid confirmation_time value: {str(e)}")
+            confirmation_time = self._validate_number_value(confirmation_time_raw, '0-1800')
+            speed_limit = self._validate_number_value(speed_limit_raw, '0-255')
             
-            try:
-                speed_limit = self._validate_number_value(speed_limit_raw, '0-255')
-                self.logger.debug(f"Validated speed_limit: {speed_limit}")
-            except ValueError as e:
-                raise ValueError(f"Invalid speed_limit value: {str(e)}")
-            
-            # Handle default values for undefined command parameters (D, E, F, G)
-            # These are additional parameters that may be used for future extensions
             d_param = self._validate_optional_parameter(values.get('d_parameter', 0), 'd_parameter', '0-255')
             e_param = self._validate_optional_parameter(values.get('e_parameter', 0), 'e_parameter', '0-255')
             f_param = self._validate_optional_parameter(values.get('f_parameter', 0), 'f_parameter', '0-255')
             g_param = self._validate_optional_parameter(values.get('g_parameter', 0), 'g_parameter', '0-255')
-        
+
             result = {
                 'op': str(operation_code),
                 'time': str(confirmation_time),
@@ -2986,11 +2953,6 @@ class DeviceCommandMapper:
                 'f': str(f_param),
                 'g': str(g_param)
             }
-            
-            if not enabled:
-                self.logger.debug(f"Jammer relay action disabled, but sending actual values from file: {result}")
-            else:
-                self.logger.debug(f"Jammer relay action enabled, sending values: {result}")
             
             return result
             
@@ -3125,10 +3087,10 @@ class DeviceCommandMapper:
             self.logger.debug(f"Angle report enabled status: {enabled_raw}")
             
             if not enabled_raw:
-                self.logger.debug("Angle report disabled, setting parameters to 0")
+                self.logger.debug("Angle report disabled, setting parameters to 00-000")
                 return {
-                    'min_speed': '0',
-                    'angle_variation': '0'
+                    'min_speed': '00',
+                    'angle_variation': '000'
                 }
             
             # Read raw inputs (preserve strings if provided by UI)
@@ -3154,20 +3116,10 @@ class DeviceCommandMapper:
             if not (0 <= angle_variation_int <= 180):
                 raise ValueError("angle_report.angle_variation must be between 0 and 180")
             
-            # Always preserve the exact string values from the profile when they exist
-            if isinstance(raw_min_speed, str) and raw_min_speed.strip():
-                min_speed_out = raw_min_speed
-                self.logger.debug(f"Preserving original min_speed string: '{raw_min_speed}'")
-            else:
-                min_speed_out = str(min_speed_int)
-                self.logger.debug(f"Using converted min_speed: {min_speed_out}")
-            
-            if isinstance(raw_angle_variation, str) and raw_angle_variation.strip():
-                angle_variation_out = raw_angle_variation
-                self.logger.debug(f"Preserving original angle_variation string: '{raw_angle_variation}'")
-            else:
-                angle_variation_out = str(angle_variation_int)
-                self.logger.debug(f"Using converted angle_variation: {angle_variation_out}")
+            # Return formatted strings for consistent formatting in the final command generator
+            min_speed_out = f"{min_speed_int:02d}"
+            angle_variation_out = f"{angle_variation_int:03d}"
+            self.logger.debug(f"Using formatted string outputs for angle_report: min_speed={min_speed_out}, angle_variation={angle_variation_out}")
             
             result = {
                 'min_speed': min_speed_out,
@@ -3398,6 +3350,9 @@ class DeviceCommandMapper:
             
         Returns:
             Dictionary with mapped command parameters for VIBL template
+            
+        Raises:
+            ValueError: If field values are invalid
         """
         try:
             level = None
@@ -3549,8 +3504,8 @@ class DeviceCommandMapper:
     
     def _validate_apn_command(self, command_body: str) -> Tuple[bool, str]:
         """Validate APN command format: APN,<apn>,<user>,<password>#"""
-        if not re.match(r'^APN,[^,]*,[^,]*,[^#]*#$', command_body):
-            return False, "Invalid APN command format. Should be APN,<apn>,<user>,<password>#"
+        if not re.match(r'^APN,[^,]*,[^,]*,[^#\r\n]*#$', command_body):
+            return False, "Invalid APN command format. Should be APN,server,user,password#"
         return True, ""
     
     def _validate_server_command(self, command_body: str) -> Tuple[bool, str]:
@@ -3646,7 +3601,6 @@ class DeviceCommandMapper:
             # Network and protocol settings
             (self.get_command('query_protocol', None), 'query_protocol'),
             (self.get_command('query_network', None), 'query_network'),
-            (self.get_command('query_volte', None), 'query_volte'),
 
             # Sleep mode settings
             (self.get_command('query_sleep_mode', None), 'query_sleep_mode'),
@@ -3754,455 +3708,3 @@ class DeviceCommandMapper:
                         continue
         
         return commands
-    
-
-
-    def get_parameter_query_commands(self) -> Dict[str, str]:
-        """
-        Get mapping of parameter names to their query commands.
-        
-        Returns:
-            Dictionary mapping parameter names to query command types
-        """
-        return {
-            'apn_server': 'query_apn',
-            'apn_user': 'query_apn', 
-            'apn_password': 'query_apn',
-            'server_ip': 'query_server',
-            'server_domain': 'query_server',
-            'server_port': 'query_server',
-            'server_protocol': 'query_server',
-            'timer_ign_on': 'query_timer',
-            'timer_ign_off': 'query_timer',
-            'heartbeat_ign_on': 'query_heartbeat',
-            'heartbeat_ign_off': 'query_heartbeat',
-            'heartbeat_interval': 'query_heartbeat',
-            'vibration': 'query_vibration',
-            'defense_time': 'query_defense',
-            'gt06_protocol': 'query_protocol',
-            'network_select': 'query_network',
-            'volte_switch': 'query_volte',
-            'sleep_mode': 'query_sleep_mode',
-            'sleep_time': 'query_sleep_time',
-            'ignition_type': 'query_ignition',
-            'vibration_window': 'query_vibration_window',
-            'blind_speed': 'query_blind_speed',
-            'angle_reporting': 'query_angle_reporting',
-            'relay_gps_check': 'query_relay_gps',
-            'curve_sensor': 'query_curve_sensor',
-            'lock_type': 'query_lock_type',
-            'sensitivity': 'query_sensitivity',
-            'imsi': 'get_imsi',
-            'device_status': 'get_status'
-        }
-
-    def get_response_patterns(self) -> Dict[str, str]:
-        """
-        Get regex patterns for parsing device responses.
-        
-        Returns:
-            Dictionary mapping command types to their response patterns
-        """
-        return {
-            # APN response pattern: "APN:server,user,password"
-            'query_apn': r'APN:([^,]*),([^,]*),([^#\r\n]*)',
-            
-            # SERVER response pattern: "SERVER:type,address,port,protocol"
-            'query_server': r'SERVER:(\d+),([^,]*),(\d+),(\d+)',
-            
-            # TIMER response pattern: "TIMER ACC ON:30s,ACC OFF:300s"
-            'query_timer': r'TIMER ACC ON:(\d+)s,ACC OFF:(\d+)s',
-            
-            # HBT response pattern: "HBT ACC ON:180s,ACC OFF:180s"
-            'query_heartbeat': r'HBT ACC ON:(\d+)s,ACC OFF:(\d+)s',
-            
-            # VIBL response pattern: "READOK: VIBL=3"
-            'query_vibration': r'(?:READOK:\s*)?VIBL=(\d+)',
-            
-            # DEFENSE response pattern: "DEFENSE:3"
-            'query_defense': r'DEFENSE:(\d+)',
-            
-            # GT06SEL response pattern: "READOK: GT06SEL=0"
-            'query_protocol': r'(?:READOK:\s*)?GT06SEL=(\d+)',
-            
-            # NETSELECT response pattern: "READOK: NETSELECT=0"
-            'query_network': r'(?:READOK:\s*)?NETSELECT=(\d+)',
-            
-            # VOLTESWITCH response pattern: "READOK: VOLTESWITCH=0"
-            'query_volte': r'(?:READOK:\s*)?VOLTESWITCH=(\d+)',
-            
-            # SLPDISCONNECT response pattern: "READOK: SLPDISCONNECT=0"
-            'query_sleep_mode': r'(?:READOK:\s*)?SLPDISCONNECT=(\d+)',
-            
-            # SLEEPT response pattern: "READOK: SLEEPT=60"
-            'query_sleep_time': r'(?:READOK:\s*)?SLEEPT=(\d+)',
-            
-            # ACCLINE response pattern: "READOK: ACCLINE=0#ACC_CFG=0-000-000"
-            'query_ignition': r'(?:READOK:\s*)?ACCLINE=(\d+)(?:#ACC_CFG=([^#\r\n]*))?',
-            
-            # VIBCHK response pattern: "READOK: VIBCHK=3:5"
-            'query_vibration_window': r'(?:READOK:\s*)?VIBCHK=(\d+):(\d+)',
-            
-            # BLINDSPD response pattern: "READOK: BLINDSPD=5"
-            'query_blind_speed': r'(?:READOK:\s*)?BLINDSPD=(\d+)',
-            
-            # ANGLEVALUE response pattern: "READOK: ANGLEVALUE=10-30"
-            'query_angle_reporting': r'(?:READOK:\s*)?ANGLEVALUE=(\d+)-(\d+)',
-            
-            # SOURCE_OFF_TYPE response pattern: "READOK: SOURCE_OFF_TYPE=0"
-            'query_relay_gps': r'(?:READOK:\s*)?SOURCE_OFF_TYPE=(\d+)',
-            
-            # CURVE response pattern: "READOK: CURVE=1"
-            'query_curve_sensor': r'(?:READOK:\s*)?CURVE=(\d+)',
-            
-            # LOCKTYPE response pattern: "READOK: LOCKTYPE=0"
-            'query_lock_type': r'(?:READOK:\s*)?LOCKTYPE=(\d+)',
-            
-            # SENSITIVITY response pattern: "READOK: SENSITIVITY=5"
-            'query_sensitivity': r'(?:READOK:\s*)?SENSITIVITY=(\d+)',
-            
-            # Device info patterns
-            'get_imei': r'(?:READOK:\s*)?IMEI[=:]?\s*(\d+)',
-            'get_iccid': r'(?:READOK:\s*)?ICCID[=:]?\s*(\d+)',
-            'get_imsi': r'(?:READOK:\s*)?IMSI[=:]?\s*(\d+)',
-            'get_version': r'([A-Z0-9_]+\s+\d{4}\s+\d{1,2}\s+\d{1,2})',
-            
-            # Generic success pattern
-            'success': r'(?:SETOK|READOK|OK)',
-            
-            # Error patterns
-            'error': r'(?:ERROR|FAIL|INVALID)',
-            
-            # Missing patterns for comprehensive coverage
-            'get_status': r'Battery:([^;]+);GPRS:([^;]+);GSMSignalLevel:([^;]+);ACC:([^;]+);GPS:([^;]+);Defense:([^;]+);',
-            'get_all_params': r'IMEI:([^;]+);TIMER:([^;]+);SEMDS:([^;]+);HBT:([^;]+);Defense:([^;]+);'
-        }
-
-    def parse_query_response(self, response: str, command_type: str) -> Dict[str, Any]:
-        """
-        Parse device response for query commands with enhanced pattern matching.
-        
-        Args:
-            response: The device response string
-            command_type: The type of query command that was sent
-            
-        Returns:
-            Dictionary with parsed parameter values and metadata
-        """
-        result = {
-            'success': False,
-            'command_type': command_type,
-            'raw_response': response.strip(),
-            'parameters': {},
-            'error_message': None
-        }
-        
-        patterns = self.get_response_patterns()
-        
-        # Check for error responses first
-        if re.search(patterns.get('error', ''), response, re.IGNORECASE):
-            result['error_message'] = f"Device returned error for {command_type}"
-            return result
-            
-        # Check for success indicators
-        if re.search(patterns.get('success', ''), response, re.IGNORECASE):
-            result['success'] = True
-        
-        # Parse specific command responses
-        if command_type in patterns:
-            pattern = patterns[command_type]
-            match = re.search(pattern, response, re.IGNORECASE)
-            
-            if match:
-                result['success'] = True
-                
-                # Parse based on command type
-                if command_type == 'query_apn':
-                    result['parameters'] = {
-                        'apn_server': match.group(1).strip(),
-                        'apn_user': match.group(2).strip(),
-                        'apn_password': match.group(3).strip()
-                    }
-                    
-                elif command_type == 'query_server':
-                    server_type = match.group(1)
-                    result['parameters'] = {
-                        'server_type': server_type,
-                        'server_address': match.group(2).strip(),
-                        'server_port': match.group(3).strip(),
-                        'server_protocol': match.group(4).strip()
-                    }
-                    # Map to UI field names
-                    if server_type == '0':  # IP address
-                        result['parameters']['server_ip'] = result['parameters']['server_address']
-                    else:  # Domain name
-                        result['parameters']['server_domain'] = result['parameters']['server_address']
-                        
-                elif command_type == 'query_timer':
-                    result['parameters'] = {
-                        'timer_ign_on': match.group(1),
-                        'timer_ign_off': match.group(2)
-                    }
-                    
-                elif command_type == 'query_heartbeat':
-                    result['parameters'] = {
-                        'heartbeat_ign_on': match.group(1),
-                        'heartbeat_ign_off': match.group(2)
-                    }
-                    
-                elif command_type == 'query_vibration':
-                    result['parameters'] = {
-                        'vibration': match.group(1)
-                    }
-                    
-                elif command_type == 'query_defense':
-                    result['parameters'] = {
-                        'defense_time': match.group(1)
-                    }
-                    
-                elif command_type == 'query_protocol':
-                    protocol_value = match.group(1)
-                    # Map numeric value back to string
-                    protocol_map = {'0': 'GT06-0x60', '1': 'CRX3', '2': 'GT06-0x12'}
-                    result['parameters'] = {
-                        'protocol': protocol_map.get(protocol_value, protocol_value)
-                    }
-                    
-                elif command_type == 'query_network':
-                    network_value = match.group(1)
-                    # Map numeric value back to string
-                    network_map = {'0': 'AUTO', '1': '4G', '2': '2G'}
-                    result['parameters'] = {
-                        'network_select': network_map.get(network_value, network_value)
-                    }
-                    
-                elif command_type == 'query_volte':
-                    volte_value = match.group(1)
-                    # Map numeric value back to string
-                    volte_map = {'0': '2G', '1': '4G'}
-                    result['parameters'] = {
-                        'volte_switch': volte_map.get(volte_value, volte_value)
-                    }
-                    
-                elif command_type == 'query_sleep_mode':
-                    sleep_value = match.group(1)
-                    # Map numeric value back to string
-                    sleep_map = {'0': 'Disabled', '1': 'Sleep', '2': 'Deep Sleep'}
-                    result['parameters'] = {
-                        'sleep_mode': sleep_map.get(sleep_value, sleep_value)
-                    }
-                    
-                elif command_type == 'query_sleep_time':
-                    result['parameters'] = {
-                        'sleep_time': match.group(1)
-                    }
-                    
-                elif command_type == 'query_ignition':
-                    ignition_value = match.group(1)
-                    # Map numeric value back to string
-                    ignition_map = {'0': 'Digital', '1': 'Analog'}
-                    result['parameters'] = {
-                        'ignition_type': ignition_map.get(ignition_value, ignition_value)
-                    }
-                    if len(match.groups()) > 1 and match.group(2):
-                        result['parameters']['ignition_config'] = match.group(2)
-                        
-                elif command_type == 'query_vibration_window':
-                    result['parameters'] = {
-                        'vibration_window': match.group(2),
-                        'vibration_window_base': match.group(1)
-                    }
-                    
-                elif command_type == 'query_blind_speed':
-                    result['parameters'] = {
-                        'blind_speed': match.group(1)
-                    }
-                    
-                elif command_type == 'query_angle_reporting':
-                    result['parameters'] = {
-                        'angle_speed': match.group(1),
-                        'angle_value': match.group(2)
-                    }
-                    
-                elif command_type == 'query_relay_gps':
-                    relay_value = match.group(1)
-                    # Map numeric value back to string
-                    relay_map = {'0': 'Check GPS', '1': 'Immediate'}
-                    result['parameters'] = {
-                        'relay_gps_check': relay_map.get(relay_value, relay_value)
-                    }
-                    
-                elif command_type == 'query_curve_sensor':
-                    curve_value = match.group(1)
-                    # Map numeric value back to string
-                    curve_map = {'0': 'Disabled', '1': 'Enabled', '2': 'Auto'}
-                    result['parameters'] = {
-                        'curve_sensor': curve_map.get(curve_value, curve_value)
-                    }
-                    
-                elif command_type == 'query_lock_type':
-                    lock_value = match.group(1)
-                    # Map numeric value back to string
-                    lock_map = {'0': 'PIN', '1': 'Card'}
-                    result['parameters'] = {
-                        'lock_type': lock_map.get(lock_value, lock_value)
-                    }
-                    
-                elif command_type == 'query_sensitivity':
-                    result['parameters'] = {
-                        'sensitivity': match.group(1)
-                    }
-                    
-                # Handle device info queries
-                elif command_type == 'get_imei':
-                    result['parameters'] = {
-                        'imei': match.group(1)
-                    }
-                    
-                elif command_type == 'get_iccid':
-                    result['parameters'] = {
-                        'iccid': match.group(1)
-                    }
-                    
-                elif command_type == 'get_imsi':
-                    result['parameters'] = {
-                        'imsi': match.group(1)
-                    }
-                    
-                elif command_type == 'get_version':
-                    result['parameters'] = {
-                        'version': match.group(1).strip()
-                    }
-                    
-                elif command_type == 'get_status':
-                    result['parameters'] = {
-                        'battery': match.group(1).strip(),
-                        'gprs_status': match.group(2).strip(),
-                        'signal_level': match.group(3).strip(),
-                        'acc_status': match.group(4).strip(),
-                        'gps_status': match.group(5).strip(),
-                        'defense_status': match.group(6).strip()
-                    }
-                    
-                elif command_type == 'get_all_params':
-                    result['parameters'] = {
-                        'imei': match.group(1).strip(),
-                        'timer_settings': match.group(2).strip(),
-                        'semds': match.group(3).strip(),
-                        'heartbeat_settings': match.group(4).strip(),
-                        'defense_settings': match.group(5).strip()
-                    }
-            else:
-                result['error_message'] = f"Could not parse response for {command_type}: {response}"
-                
-        else:
-            result['error_message'] = f"No pattern defined for command type: {command_type}"
-            
-        return result
-
-    def get_query_timeout_settings(self) -> Dict[str, float]:
-        """
-        Get timeout settings for different types of query commands.
-        
-        Returns:
-            Dictionary mapping command types to timeout values in seconds
-        """
-        return {
-            # Basic parameter queries - shorter timeout
-            'query_apn': 5.0,
-            'query_server': 5.0,
-            'query_timer': 5.0,
-            'query_heartbeat': 5.0,
-            'query_vibration': 3.0,
-            'query_defense': 3.0,
-            'query_protocol': 3.0,
-            'query_network': 3.0,
-            'query_volte': 3.0,
-            'query_sleep_mode': 3.0,
-            'query_sleep_time': 3.0,
-            'query_ignition': 5.0,
-            'query_vibration_window': 3.0,
-            'query_blind_speed': 3.0,
-            'query_angle_reporting': 3.0,
-            'query_relay_gps': 3.0,
-            'query_curve_sensor': 3.0,
-            'query_lock_type': 3.0,
-            'query_sensitivity': 3.0,
-            
-            # Device info queries - longer timeout as they may take more time
-            'get_imei': 10.0,
-            'get_iccid': 10.0,
-            'get_imsi': 10.0,
-            'get_status': 8.0,
-            'get_version': 8.0,
-            'get_all_params': 15.0,  # Longest timeout for comprehensive query
-            
-            # Default timeout for unknown commands
-            'default': 5.0
-        }
-
-    def get_command_timeout(self, command_type: str) -> float:
-        """
-        Get timeout value for a specific command type.
-        
-        Args:
-            command_type: The type of command
-            
-        Returns:
-            Timeout value in seconds
-        """
-        timeouts = self.get_query_timeout_settings()
-        return timeouts.get(command_type, timeouts['default'])
-
-    def create_parameter_mapping(self) -> Dict[str, List[str]]:
-        """
-        Create mapping from UI parameter names to the query commands needed to retrieve them.
-        
-        Returns:
-            Dictionary mapping UI parameter names to list of required query command types
-        """
-        return {
-            # APN parameters - all retrieved with single APN query
-            'apn_server': ['query_apn'],
-            'apn_user': ['query_apn'],
-            'apn_password': ['query_apn'],
-            
-            # Server parameters - all retrieved with single SERVER query
-            'server_ip': ['query_server'],
-            'server_domain': ['query_server'],
-            'server_port': ['query_server'],
-            'server_protocol': ['query_server'],
-            
-            # Timer parameters - all retrieved with single TIMER query
-            'timer_ign_on': ['query_timer'],
-            'timer_ign_off': ['query_timer'],
-            
-            # Heartbeat parameters - all retrieved with single HBT query
-            'heartbeat_ign_on': ['query_heartbeat'],
-            'heartbeat_ign_off': ['query_heartbeat'],
-            'heartbeat_interval': ['query_heartbeat'],
-            
-            # Individual parameter queries
-            'vibration': ['query_vibration'],
-            'defense_time': ['query_defense'],
-            'protocol': ['query_protocol'],
-            'network_select': ['query_network'],
-            'volte_switch': ['query_volte'],
-            'sleep_mode': ['query_sleep_mode'],
-            'sleep_time': ['query_sleep_time'],
-            'ignition_type': ['query_ignition'],
-            'vibration_window': ['query_vibration_window'],
-            'blind_speed': ['query_blind_speed'],
-            'angle_reporting': ['query_angle_reporting'],
-            'relay_gps_check': ['query_relay_gps'],
-            'curve_sensor': ['query_curve_sensor'],
-            'lock_type': ['query_lock_type'],
-            'sensitivity': ['query_sensitivity'],
-            
-            # Device information
-            'imei': ['get_imei'],
-            'iccid': ['get_iccid'],
-            'imsi': ['get_imsi'],
-            'version': ['get_version'],
-            'device_status': ['get_status']
-        }

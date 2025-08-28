@@ -29,7 +29,6 @@ class LT32ProCommandFormatter:
         'GT06SEL': 'CXCS#GT06SEL',
         'POSBYACK': 'CXCS#POSBYACK',
         'NETSELECT': 'CXCS#NETSELECT',
-        'VOLTESWITCH': 'CXCS#VOLTESWITCH',
         'TERIID': 'CXCS#TERIID',
         'TIMER': 'TIMER#',
         'HBT': 'HBT#',
@@ -63,7 +62,6 @@ class LT32ProCommandFormatter:
         'GT06SEL': ['CXCS#GT06SEL'],
         'POSBYACK': ['CXCS#POSBYACK'],
         'NETSELECT': ['CXCS#NETSELECT'],
-        'VOLTESWITCH': ['CXCS#VOLTESWITCH'],
         'SPD_LED_SHOW': ['CXCS#SPD_LED_SHOW'],
         'IMEI': ['CXCS#IMEI', 'STATUS#'],
         'ICCID': ['CXCS#ICCID', 'STATUS#'],
@@ -99,7 +97,7 @@ class LT32ProCommandFormatter:
         'JAMMER': 'JAMMER,{value}#',
         'JAMRELAY': 'JAMRELAY,{value}#',
         'MILEAGE': 'MILEAGE={value}#',
-        'ACCONT': 'ACCONT={value}#',
+        'ACCONT': 'ACCONT,{value}#',
     }
     
     # Valid protocol values for GT06SEL

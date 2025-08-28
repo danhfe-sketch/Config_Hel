@@ -467,7 +467,6 @@ class CommandValidationGateway:
             'SENSITIVITY': 'sensitivity',
             'GT06SEL': 'gt06_protocol',
             'NETSELECT': 'network_select',
-            'VOLTESWITCH': 'volte_switch',
             'SLPDISCONNECT': 'sleep_mode',
             'SLEEPT': 'sleep_time',
             'ACCLINE': 'ignition_type',

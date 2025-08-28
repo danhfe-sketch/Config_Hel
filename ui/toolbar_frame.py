@@ -726,9 +726,9 @@ For technical support, contact Lumini Tracker support team.
                 return
 
             # Mark all parameters as from user so they will be written to device
-            if self.app.profile_manager._current_profile:
-                for param_value in self.app.profile_manager._current_profile.parameters.values():
-                    param_value.source = "user"
+            # if self.app.profile_manager._current_profile:
+            #     for param_value in self.app.profile_manager._current_profile.parameters.values():
+            #         param_value.source = "user"
             
             # Save the loaded profile to device
             save_result = loop.run_until_complete(self.app.profile_manager.save_to_device())

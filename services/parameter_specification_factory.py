@@ -591,6 +591,7 @@ class ParameterSpecificationFactory:
                         print(f"WARNING: Failed to update language display for {param_name}.{field_name}: {e}")
     
     def _send_parameter_command(self, param_name: str):
+        print(f"Sending command for parameter: {param_name}")
         """Send command for a specific parameter to the device"""
         if not self.serial_service:
             messagebox.showerror(
@@ -653,6 +654,8 @@ class ParameterSpecificationFactory:
                 self._send_main_power_alert_command(param_values)
             elif param_name == 'vibration_sensitivity':
                 self._send_vibration_sensitivity_command(param_values)
+            elif param_name == 'vibration_window':
+                self._send_vibration_window_command(param_values)
             elif param_name == 'jammer_detection':
                 self._send_jammer_detection_command(param_values)
             elif param_name == 'jammer_relay_action':
@@ -1029,7 +1032,7 @@ class ParameterSpecificationFactory:
             )
             return
         
-        command = f"ATSMS:SZCS#SLEEPT={sleep_time}"
+        command = f"ATSMS:SZCS#SLEEPT={int(sleep_time)}"
         self.serial_service.send_command(command)
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
@@ -1058,9 +1061,11 @@ class ParameterSpecificationFactory:
                 )
                 return
             # Use the exact strings (preserve leading zeros) that were captured from UI
-            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed}-{angle_variation}"
+            min_speed_str = f"{int(min_speed):02d}"
+            angle_variation_str = f"{int(angle_variation):03d}"
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}#"
         else:
-            command = "ATSMS:SZCS#ANGLEVALUE=0-0"
+            command = f"ATSMS:SZCS#ANGLEVALUE=00-000#"
         
         # Log the final command for debugging
         try:
@@ -1152,7 +1157,7 @@ class ParameterSpecificationFactory:
         """Send vibration sensitivity configuration command"""
         level = str(values.get('level', '1')).strip()
         
-        command = f"ATSMS:SZCS#VIBL={level}"
+        command = f"ATSMS:SZCS#VIBL={level}#"
         
         self.serial_service.send_command(command)
         messagebox.showinfo(
@@ -1177,17 +1182,9 @@ class ParameterSpecificationFactory:
     
     def _send_jammer_relay_action_command(self, values: dict):
         """Send jammer relay action configuration command"""
-        enabled = values.get('enabled', False)
         output_operation = str(values.get('output_operation', '')).strip()
         confirmation_time = str(values.get('confirmation_time', '')).strip()
         speed_limit = str(values.get('speed_limit', '')).strip()
-        
-        if enabled and (not confirmation_time or not speed_limit):
-            messagebox.showerror(
-                self.i18n_service.get("error", "Error"),
-                self.i18n_service.get("jammer_relay_values_required", "Confirmation time and speed limit are required when jammer relay action is enabled")
-            )
-            return
         
         # Map output operation to command value
         operation_mapping = {
@@ -1197,7 +1194,13 @@ class ParameterSpecificationFactory:
         }
         op_value = operation_mapping.get(output_operation, '0')
         
-        if enabled:
+        if op_value != '0':
+            if not confirmation_time or not speed_limit:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("jammer_relay_values_required", "Confirmation time and speed limit are required when jammer relay action is enabled")
+                )
+                return
             # JAMRELAY command format: op,time,speed,d,e,f,g
             command = f"ATSMS:JAMRELAY,{op_value},{confirmation_time},{speed_limit},0,0,0,0"
         else:
@@ -1268,4 +1271,17 @@ class ParameterSpecificationFactory:
         messagebox.showinfo(
             self.i18n_service.get("info", "Info"),
             f"{self.i18n_service.get('parameter_command_sent', 'Parameter command sent')}: {param_name}"
+        )
+
+    def _send_vibration_window_command(self, values: dict):
+        """Send vibration window configuration command"""
+        window = str(values.get('window', '10')).strip()
+        threshold = str(values.get('threshold', '3')).strip()
+        
+        command = f"ATSMS:SZCS#VIBCHK={window}:{threshold}"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("vibration_window_sent", "Vibration window configuration sent to device")
         )

@@ -449,9 +449,9 @@ class UniversalProfileService:
                     raise ValueError(result.error_message)
             
             # Migrate profile if needed
-            migrated_profile = self.migrate_profile(profile)
+#            migrated_profile = self.migrate_profile(profile)
             
-            return migrated_profile
+            return profile
             
         except (FileNotFoundError, ValueError):
             raise

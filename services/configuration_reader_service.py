@@ -147,7 +147,6 @@ class ConfigurationReaderService:
             'odometer': ('MILEAGE', 'get_odometer'),
             'hourmeter': ('ACCONT', 'get_hourmeter'),
             'defense_settings': ('DEFENSE', 'get_defense'),
-            'volte_settings': ('VOLTESWITCH', 'get_volteswitch'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
         }
@@ -209,7 +208,6 @@ class ConfigurationReaderService:
             'get_defense': r'DEFENSE:(\d+)',
             'get_gt06sel': r'READOK:\s*GT06SEL=(\d+)',
             'get_netselect': r'READOK:\s*NETSELECT=(\d+)',
-            'get_volteswitch': r'READOK:\s*VOLTESWITCH=(\d+)',
             'get_slpdisconnect': r'READOK:\s*SLPDISCONNECT=(\d+)',
             'get_sleept': r'READOK:\s*SLEEPT=(\d+)',
             
@@ -907,10 +905,9 @@ class ConfigurationReaderService:
             
             # Miscellaneous Parameters
             'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
-            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
-            ,
-            # Defense / security settings mapping
-            'defense_settings': {'section': 'miscellaneous', 'parameter': 'defense_settings'}
+            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
+            # Defense / security settings mapping (spec places this under 'security')
+            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'}
         }
 
     def _is_time_parameter(self, param_widget) -> bool:
@@ -1657,7 +1654,6 @@ class ConfigurationReaderService:
             'vibration_window': 'get_vibchk',
             'defense_settings': 'get_defense',
             'network_settings': 'get_netselect',
-            'volte_settings': 'get_volteswitch',
             'sleep_mode_settings': 'get_slpdisconnect',
             'sleep_time_settings': 'get_sleept',
             'ignition_settings': 'get_accline'
@@ -2033,8 +2029,15 @@ class ConfigurationReaderService:
                     parsed_values['vibration'] = match.group(1)
                     
                 elif command_type == 'get_vibchk':
-                    parsed_values['vibration_window'] = match.group(1)
-                    parsed_values['vibration_threshold'] = match.group(2)
+                    # VIBCHK returns two groups: window:threshold
+                    w = match.group(1)
+                    t = match.group(2)
+                    # Keep legacy keys for backwards compatibility
+                    parsed_values['vibration_window'] = w
+                    parsed_values['vibration_threshold'] = t
+                    # Provide field-level keys that match the parameter specification
+                    parsed_values['window'] = w
+                    parsed_values['threshold'] = t
                     
                 elif command_type == 'get_defense':
                     parsed_values['defense_time'] = match.group(1)
@@ -2050,13 +2053,7 @@ class ConfigurationReaderService:
                     network_map = {'0': 'AUTO', '1': '4G', '2': '2G'}
                     network_value = match.group(1)
                     parsed_values['network_select'] = network_map.get(network_value, network_value)
-                    
-                elif command_type == 'get_volteswitch':
-                    # Map numeric values back to network names
-                    volte_map = {'0': '2G', '1': '4G'}
-                    volte_value = match.group(1)
-                    parsed_values['volte_switch'] = volte_map.get(volte_value, volte_value)
-                    
+         
                 elif command_type == 'get_slpdisconnect':
                     # Map numeric values back to sleep mode names
                     sleep_map = {'0': 'Disabled', '1': 'Sleep', '2': 'Deep Sleep'}
@@ -2209,8 +2206,6 @@ class ConfigurationReaderService:
             return parsed_values.get('defense_time', '')
         elif param_name == 'network_settings':
             return parsed_values.get('network_select', '')
-        elif param_name == 'volte_settings':
-            return parsed_values.get('volte_switch', '')
         elif param_name == 'all_parameters':
             return parsed_values.get('imei', '')
         

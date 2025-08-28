@@ -167,67 +167,34 @@ class DeviceCommunicationManager:
         self._current_operation = "write_all_parameters"
         
         try:
-            # Get parameter specifications for validation and command formatting
             all_specs = self.spec_parser.parse_specifications()
             
-            # Filter parameters that have write commands and validate values
-            # Be tolerant of parameter keys that include section prefixes (e.g. 'network_parameters.server_settings')
             writable_params = []
             for param_name, value in parameters.items():
-                # Try exact lookup first
                 spec = all_specs.get(param_name)
-                used_param_key = param_name
-                # Fallback: try short name (after last dot) or any spec that endswith the name
-                if spec is None:
-                    short_name = param_name.split('.')[-1]
-                    spec = all_specs.get(short_name)
-                    if spec:
-                        used_param_key = short_name
-                    else:
-                        # As a last resort, try any key that endswith the short_name
-                        for key, s in all_specs.items():
-                            if key.endswith("." + short_name) or key.endswith(short_name):
-                                spec = s
-                                used_param_key = key
-                                break
                 if spec and self._has_write_command(spec):
-                    # Validate parameter value
-                    try:
-                        validation_result = spec.validate_value(value)
-                    except Exception:
-                        # If spec validation raises, treat it as invalid and log
-                        validation_result = None
-                    if validation_result and validation_result.is_valid:
+                    validation_result = spec.validate_value(value)
+                    if validation_result.is_valid:
                         writable_params.append((param_name, value, spec))
-                    elif validation_result is None:
-                        # Log unexpected validation exception
-                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
-                            self.serial_service.app.log_frame.log_message(
-                                f"ERROR: Exception while validating {param_name} against spec {spec.name}\n"
-                            )
                     else:
-                        # Log validation error
                         if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
                             error_msg = f"Validation failed for {param_name}: {', '.join(validation_result.errors)}"
                             self.serial_service.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            
+
             if not writable_params:
                 return {}
-            
+
             total_params = len(writable_params)
             write_results = {}
-            
-            # Write each parameter
+
             for i, (param_name, value, spec) in enumerate(writable_params):
                 if self._operation_cancelled:
                     break
-                
-                # Update progress
+
                 if progress_callback:
                     progress_callback(i, total_params, f"Writing {param_name}", None)
-                
+
                 try:
-                    # Debug: log parameter being written
                     if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
                         try:
                             self.serial_service.app.log_frame.log_message(
@@ -237,44 +204,38 @@ class DeviceCommunicationManager:
                             pass
                     else:
                         print(f"DEBUG: Preparing to write parameter '{param_name}' with value: {repr(value)} and spec: {getattr(spec, 'name', 'unknown')}")
-    
-                    # Format and execute the write command
+
                     success = await self._execute_write_command(spec, param_name, value)
                     write_results[param_name] = success
-    
-                    # Update progress with result
+
                     if progress_callback:
                         status_msg = "Success" if success else "Failed"
                         progress_callback(i + 1, total_params,
                                         f"{param_name}: {status_msg}", success)
-    
+
                 except Exception as e:
                     write_results[param_name] = False
-    
-                    # Log error
+
                     if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
                         self.serial_service.app.log_frame.log_message(
                             f"ERROR: Failed to write {param_name}: {str(e)}\n"
                         )
-    
-                    # Update progress with failure
+
                     if progress_callback:
                         progress_callback(i + 1, total_params,
                                         f"Error writing {param_name}: {str(e)}", False)
                 
-                # Small delay between commands
                 if i < total_params - 1:
                     await asyncio.sleep(0.5)
-            
-            # Final progress update
+
             if progress_callback:
                 success_count = sum(1 for success in write_results.values() if success)
-                progress_callback(total_params, total_params, 
-                                f"Completed: {success_count}/{total_params} parameters written", 
+                progress_callback(total_params, total_params,
+                                f"Completed: {success_count}/{total_params} parameters written",
                                 success_count > 0)
-            
+
             return write_results
-            
+
         finally:
             self._current_operation = None
     
@@ -339,6 +300,17 @@ class DeviceCommunicationManager:
                     prepared_value = value['value']
                 else:
                     prepared_value = value
+
+            # Diagnostic: log the prepared_value before passing to DeviceCommandMapper
+            try:
+                if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                    self.serial_service.app.log_frame.log_message(
+                        f"DEBUG: Prepared value for {param_spec.name}: {repr(prepared_value)}\n"
+                    )
+                else:
+                    print(f"DEBUG: Prepared value for {param_spec.name}: {repr(prepared_value)}")
+            except Exception:
+                pass
             
             # Generate command using DeviceCommandMapper
             # Keep the full command (including ATSMS: prefix) so the serial layer sends exactly what the mapper produced.
