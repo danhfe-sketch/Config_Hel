@@ -666,6 +666,16 @@ class ParameterSpecificationFactory:
                 self._send_hourmeter_command(param_values)
             elif param_name == 'network_settings':
                 self._send_network_settings_command(param_values)
+            elif param_name == 'source_off_type':
+                self._send_source_off_type_command(param_values)
+            elif param_name == 'relay_control':
+                self._send_relay_control_command(param_values)
+            elif param_name == 'sends_control':
+                self._send_sends_control_command(param_values)
+            elif param_name == 'movement_alert':
+                self._send_movement_alert_command(param_values)
+            elif param_name == 'backup_battery_protection_voltage':
+                self._send_backup_battery_protection_voltage_command(param_values)
             else:
                 # Generic parameter sending
                 self._send_generic_parameter_command(param_name, param_values)
@@ -1264,6 +1274,89 @@ class ParameterSpecificationFactory:
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("hourmeter_sent", "Hourmeter configuration sent to device")
+        )
+
+    def _send_source_off_type_command(self, values: dict):
+        """Send source off type configuration command"""
+        source_off_type = str(values.get('source_off_type', '')).strip()
+        
+        # Map source off type to command value
+        source_off_type_mapping = {
+            'Verifica FIX de GPS': '0',
+            'Não verifica FIX de GPS': '1'
+        }
+        
+        value = source_off_type_mapping.get(source_off_type, '0')
+        command = f"ATSMS:SZCS#SOURCE_OFF_TYPE={value}"
+        
+        self.serial_service.send_command(command, command_type='source_off_type')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("source_off_type_sent", "Source off type configuration sent to device")
+        )
+
+    def _send_relay_control_command(self, values: dict):
+        """Send relay control command"""
+        relay_control = str(values.get('relay_control', '')).strip()
+        
+        # Map relay control to command value
+        relay_control_mapping = {
+            'Desabilitada': '0',
+            'Habilitada': '1'
+        }
+        
+        value = relay_control_mapping.get(relay_control, '0')
+        command = f"ATSMS:RELAY,{value}#"
+        
+        self.serial_service.send_command(command, command_type='relay_control')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("relay_control_sent", "Relay control configuration sent to device")
+        )
+
+    def _send_sends_control_command(self, values: dict):
+        """Send sends control command"""
+        sends_control = str(values.get('sends_control', '')).strip()
+        
+        command = f"ATSMS:SENDS,{sends_control}#"
+        
+        self.serial_service.send_command(command, command_type='sends_control')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("sends_control_sent", "Sends control configuration sent to device")
+        )
+
+    def _send_movement_alert_command(self, values: dict):
+        """Send movement alert command"""
+        enabled = values.get('enabled', False)
+        alert_type = str(values.get('alert_type', '')).strip()
+
+        if enabled:
+            alert_type_mapping = {
+                'Apenas GPRS': '0',
+                'SMS+GPRS': '1'
+            }
+            alert_value = alert_type_mapping.get(alert_type, '0')
+            command = f"ATSMS:SENALM,ON,{alert_value}#"
+        else:
+            command = "ATSMS:SENALM,OFF#"
+
+        self.serial_service.send_command(command, command_type='movement_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("movement_alert_sent", "Movement alert configuration sent to device")
+        )
+
+    def _send_backup_battery_protection_voltage_command(self, values: dict):
+        """Send backup battery protection voltage command"""
+        voltage = str(values.get('backup_battery_protection_voltage', '')).strip()
+        
+        command = f"ATSMS:SZCS#BATSLPVALUE={voltage}"
+        
+        self.serial_service.send_command(command, command_type='backup_battery_protection_voltage')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("backup_battery_protection_voltage_sent", "Backup battery protection voltage configuration sent to device")
         )
 
     def _send_generic_parameter_command(self, param_name: str, values: dict):

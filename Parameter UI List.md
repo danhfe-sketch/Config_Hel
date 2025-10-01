@@ -182,6 +182,33 @@ This document provides a structured specification of the user interface componen
     *   **set:** `SZCS#SPD_LED_SHOW=A` (Note: A=1 to enable, 0 to disable)
     *   **read:** "N/A"
 
+## Section: Movement Alerts
+
+### Config: Moving Alert
+
+*   **name:** moving_alert
+*   **label:** "Habilitar alerta de movimento (por distância)"
+*   **description:** "Configures movement alert based on distance."
+*   **fields:**
+    *   **field_1:**
+        *   **name:** enabled
+        *   **label:** "Habilitar Alerta de movimento"
+        *   **ui_element:** "toggle_switch"
+    *   **field_2:**
+        *   **name:** radius
+        *   **label:** "Raio de movimentação"
+        *   **ui_element:** "number_input"
+        *   **validation:** "100-1000"
+        *   **unit:** "meters"
+    *   **field_3:**
+        *   **name:** alert_type
+        *   **label:** "Tipo de Alerta"
+        *   **ui_element:** "dropdown"
+        *   **options:** ["Apenas GPRS", "GPRS+SMS"]
+*   **commands:**
+    *   **set:** `MOVING,<enabled>,<radius>,<alert_type>#` (Note: enabled=ON/OFF, alert_type=0/1)
+    *   **read:** `MOVING#`
+
 ## Section: Power Saving
 
 ### Config: Sleep Mode

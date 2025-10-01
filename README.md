@@ -9,6 +9,7 @@ This is a desktop application for Windows 11 to configure, monitor, and manage L
     ```sh
     python -m venv venv
     .\venv\Scripts\activate
+    .\venv\Scripts\activate.bat
     ```
 3.  Install the required dependencies:
     ```sh

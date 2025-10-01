@@ -137,6 +137,7 @@ class ConfigurationReaderService:
             # Battery Alert Parameters
             'backup_battery_alert': ('BATALM', 'get_backup_battery_alert'),
             'main_power_alert': ('POWERALM', 'get_main_power_alert'),
+            'backup_battery_protection_voltage': ('BATSLPVALUE', 'get_backup_battery_protection_voltage'),
             # Vibration Sensor Parameters
             'vibration_sensitivity': ('VIBL', 'get_vibration_sensitivity'),
             'vibration_window': ('VIBCHK', 'get_vibchk'),
@@ -147,6 +148,10 @@ class ConfigurationReaderService:
             'odometer': ('MILEAGE', 'get_odometer'),
             'hourmeter': ('ACCONT', 'get_hourmeter'),
             'defense_settings': ('DEFENSE', 'get_defense'),
+            'source_off_type': ('SOURCE_OFF_TYPE', 'get_source_off_type'),
+            'relay_control': ('RELAY', 'get_relay_control'),
+            'sends_control': ('SENDS', 'get_sends_control'),
+            'movement_alert': ('SENALM', 'get_movement_alert'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
         }
@@ -188,8 +193,9 @@ class ConfigurationReaderService:
             'get_angle_report': r'READOK:\s*ANGLEVALUE=(\d+)-(\d+)',
             
             # Battery Alert Parameters
-            'get_backup_battery_alert': r'BATALM:(ON|OFF|\d+),(\d+)',
+            'get_backup_battery_alert': r'BATALM:(?:(ON),(\d+)|(OFF))',
             'get_main_power_alert': r'POWERALM:(ON|OFF|\d+),(\d+),(\d+),(\d+)',
+            'get_backup_battery_protection_voltage': r'READOK:\s*BATSLPVALUE=(\d+)',
             
             # Vibration Sensor Parameters (LT32Pro format)
             'get_vibration_sensitivity': r'READOK:\s*VIBL=(\d+)',
@@ -197,6 +203,10 @@ class ConfigurationReaderService:
             # Jammer Detection Parameters
             'get_jammer_detection': r'JAMMER:(ON|OFF|\d+)(?:,(\d+))?',
             'get_jammer_relay_action': r'JAMRELAY:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)',
+            'get_source_off_type': r'READOK:\s*SOURCE_OFF_TYPE=(\d+)',
+            'get_relay_control': r'RELAY:(\d+)',
+            'get_sends_control': r'SENDS:(\d+)',
+            'get_movement_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
@@ -894,6 +904,7 @@ class ConfigurationReaderService:
             # Battery Alert Parameters
             'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
             'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
+            'backup_battery_protection_voltage': {'section': 'battery_alerts', 'parameter': 'backup_battery_protection_voltage'},
             
             # Vibration Sensor Parameters
             'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
@@ -907,7 +918,11 @@ class ConfigurationReaderService:
             'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
             'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
             # Defense / security settings mapping (spec places this under 'security')
-            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'}
+            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'},
+            'source_off_type': {'section': 'output_control', 'parameter': 'source_off_type'},
+            'relay_control': {'section': 'output_control', 'parameter': 'relay_control'},
+            'sends_control': {'section': 'gps_control', 'parameter': 'sends_control'},
+            'movement_alert': {'section': 'alerts', 'parameter': 'movement_alert'}
         }
 
     def _is_time_parameter(self, param_widget) -> bool:
@@ -1639,11 +1654,16 @@ class ConfigurationReaderService:
             'angle_report': 'get_angle_report',
             'backup_battery_alert': 'get_backup_battery_alert',
             'main_power_alert': 'get_main_power_alert',
+            'backup_battery_protection_voltage': 'get_backup_battery_protection_voltage',
             'vibration_sensitivity': 'get_vibration_sensitivity',
             'jammer_detection': 'get_jammer_detection',
             'jammer_relay_action': 'get_jammer_relay_action',
             'odometer': 'get_odometer',
             'hourmeter': 'get_hourmeter',
+            'source_off_type': 'get_source_off_type',
+            'relay_control': 'get_relay_control',
+            'sends_control': 'get_sends_control',
+            'movement_alert': 'get_movement_alert',
             # Legacy mappings
             'apn_config': 'get_apn',
             'server_config': 'get_server',
@@ -1916,15 +1936,12 @@ class ConfigurationReaderService:
                 
                 # Battery Alert Parameters
                 elif command_type == 'get_backup_battery_alert':
-                    # Handle ON/OFF or numeric format
-                    status = match.group(1)
-                    if status == 'ON':
-                        parsed_values['enabled'] = True
-                    elif status == 'OFF':
+                    if match.group(3) == 'OFF':
                         parsed_values['enabled'] = False
+                        parsed_values['mode'] = '0'
                     else:
-                        parsed_values['enabled'] = status == '1'
-                    parsed_values['mode'] = match.group(2)
+                        parsed_values['enabled'] = True
+                        parsed_values['mode'] = match.group(2)
                     
                 elif command_type == 'get_main_power_alert':
                     # Handle ON/OFF or numeric format
@@ -1939,6 +1956,9 @@ class ConfigurationReaderService:
                     parsed_values['alert_type'] = alert_type_map.get(match.group(2), match.group(2))
                     parsed_values['detection_time'] = match.group(3)
                     parsed_values['min_charge_time'] = match.group(4)
+
+                elif command_type == 'get_backup_battery_protection_voltage':
+                    parsed_values['backup_battery_protection_voltage'] = match.group(1)
                 
                 # Vibration Sensor Parameters
                 elif command_type == 'get_vibration_sensitivity':
@@ -1971,6 +1991,37 @@ class ConfigurationReaderService:
                     parsed_values['param_d'] = match.group(5)
                     parsed_values['param_e'] = match.group(6)
                     parsed_values['param_f'] = match.group(7)
+
+                elif command_type == 'get_source_off_type':
+                    source_off_map = {'0': 'Verifica FIX de GPS', '1': 'Não verifica FIX de GPS'}
+                    source_off_value = match.group(1)
+                    parsed_values['source_off_type'] = source_off_map.get(source_off_value, source_off_value)
+
+                elif command_type == 'get_relay_control':
+                    relay_map = {'0': 'Desabilitada', '1': 'Habilitada'}
+                    relay_value = match.group(1)
+                    parsed_values['relay_control'] = relay_map.get(relay_value, relay_value)
+
+                elif command_type == 'get_sends_control':
+                    parsed_values['sends_control'] = match.group(1)
+
+                elif command_type == 'get_movement_alert':
+                    if match.group(3) == 'OFF':
+                        parsed_values['enabled'] = False
+                        parsed_values['alert_type'] = 'Apenas GPRS'
+                    else:
+                        parsed_values['enabled'] = True
+                        alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
+                        parsed_values['alert_type'] = alert_type_map.get(match.group(2), match.group(2))
+
+                elif command_type == 'get_movement_alert':
+                    if match.group(3) == 'OFF':
+                        parsed_values['enabled'] = False
+                        parsed_values['alert_type'] = 'Apenas GPRS'
+                    else:
+                        parsed_values['enabled'] = True
+                        alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
+                        parsed_values['alert_type'] = alert_type_map.get(match.group(2), match.group(2))
                 
                 # Miscellaneous Parameters
                 elif command_type == 'get_odometer':

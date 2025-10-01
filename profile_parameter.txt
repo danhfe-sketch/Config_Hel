@@ -1,190 +1,25 @@
-Requisitar o tipo de protocolo
-CXCS#GT06SEL
-Requisita o tipo de protocolo de comunicação.
+Habilitar alerta de movimento (por distância)
+MOVING,ON,R,X#
+R=100 ~1000 Raio de movimentação
+X=0:Alerta Enviado Apenas GPRS
+X=1:Alerta Enviado por SMS+GPRS
 
-Respostas:
-GT06SEL=0 (GT06-0x60)
-GT06SEL=1 (CRX3-0x22)
-GT06SEL=2 (CRX3-0x12)
+Exemplos de Envio:
+MOVING,ON,1000,0#
+MOVING,ON,500,1#
+Exemplos de Resposta:
+MOVING:ON,1000,0
+MOVING:ON,500,1
+Desabilitar alerta de movimento
+Exemplos de Envio:
+MOVING,OFF#
+Exemplos de Resposta:
+MOVING:OFF
 
-
-Solicitar APN
-APN#
-Resposta: APN:cmnet,,
-
-Solicitar servidor principal
-SERVER#
-Resposta:SERVER:0,58.61.154.247,7018,0
-
-Requisitar configuração ação do relé 
-CXCS#SOURCE_OFF_TYPE
-Resposta: 
-READOK: SOURCE_OFF_TYPE=0
-
-Requisitar intervalo Keep Alive (Heartbeat)configurado
-HBT#
-Resposta: HBT ACC ON:180s,ACC OFF:180s
-
-Requisitar intervalo de envio configurado
-TIMER#
-Resposta: TIMER ACC ON:30s,ACC OFF:300s
-
-Requisitar configuração de reporte por ângulo
-CXCS#ANGLEVALUE
-Resposta: READOK: ANGLEVALUE=10-015
-
-Requisitar tempo configurado para ativar senso de movimento
-DEFENSE#
-Resposta: DEFENSE:3
-
-
-SENSOR Control of the GPS time 
-SENDS#
-Resposta: SENDS:3
-
-
-Requisitar status do alerta de movimento
-SENALM#
-Resposta: SENALM:OFF
-
-
-Requisita  status do alerta de desconexão de bateria principal
-POWERALM#
-Resposta: POWERALM:ON,0,10,10
-
-
-Requisitar status do alerta de bateria baixa
-BATALM#
-Resposta: BATALM:ON,1
-
-
-Consulta a tensão de proteção da bateria backup
-CXCS#BATSLPVALUE
-Resposta: READOK: BATSLPVALUE=38
-Observação: 38 = 3.8 volts
-
-Requisitar status do alerta de
+Consultar status do alerta de movimento
+Exemplos de Envio:
 MOVING#
-Resposta: MOVING:ON,1000,0
-
-
-Requisita a configuração da ação para movimento por distância
-CXCS#MOVEALMFUN
-Resposta:
-READOK: MOVEALMFUN=0
-
-
-
-Requisitar status do alerta de velocidade
-SPEED#
-Resposta: SPEED:ON,10,120,0
-
-
-Requisitar alerta de Ignição ON
-ACCALM#
-Resposta: ACCALM:0,OK
-
-Requisitar alerta de Ignição OFF
-ACCOFFALM#
-Resposta:  ACCOFFALM:3,OK
-
-Requisitar status do Modo Sleep
-CXCS#SLPDISCONNECT
-Resposta: READOK: SLPDISCONNECT=0
-
-Requisita configuração do tempo para entrar em Sleep
-CXCS#SLEEPT
-Resposta: READOK: SLEEPT=1
-
-
-Requisita status do alerta SOS
-SOSALM#
-Resposta: SOSALM:ON,0
-
-
-Requisitar valor do Hodometro 
-MILEAGE#
-Envio: MILEAGE#
-Resposta: Cur Mileage Value:2KM
-
-
-Requisitar Horimetro
-ACCONT#
-Resposta: Get ACC ON Time:1000S
-
-
-Requisitar configuração da Ignição
-CXCS#ACCLINE#ACC_CFG
-Resposta:
-READOK:ACCLINE=1*ACC_CFG=0,000,000
-
-
-Consulta configuração do estado de espera da ignição
-CXCS#SLOWUPSEL
-Resposta: READOK: SLOWUPSEL=0
-
-
-Requisitar tecnologia de rede configurado 
-CXCS#VOLTESWITCH
-Resposta: READOK: VOLTESWITCH=0
-
-Requisitar tecnologia de rede configurado 
-CXCS#NETSELECT
-Resposta: READOK: NETSELECT=0
-
-Requisitar sensibilidade do sensor de movimento
-CXCS#VIBL
-Resposta: READOK: VIBL=3
-
-Query vibration detection time window
-CXCS#VIBCHK
-Resposta: READOK: VIBCHK=10:3
-
-
-Requisitar velocidade configurada para envio de posição
-CXCS#BLINDSPD
-Resposta: READOK: BLINDSPD=3
-
-Requisitar configuração de bloqueio de posição
-CXCS#LASTPOSLOCK
-Resposta: READOK: LASTPOSLOCK=0
-
-
-Requisitar configuração de resposta TCP+ACK
-CXCS#POSBYACK
-Resposta: READOK: POSBYACK=1
-
-
-
-Requisitar configuração número de tentativas de retransmissão
-CXCS#RECTIMES
-Reposta: READOK: RECTIMES=3
-
-
-Requisitar configuração intervalo de tentativas retransmissão
-CXCS#RECDELAY
-Resposta: READOK: RECDELAY=10
-
-Requisitar configuração Jammer
-JAMMER#
-Resposta: JAMMER:ON,0
-
-Requisita parâmetros para detecção de jammer
-JAMCFG#
-Resposta: JAMCFG:30,17,5
-
-Requisita configuração do bloqueio da saída por jammer.
-JAMRELAY#
-Resposta: JAMRELAY:0,60,80,5,5,20,0
-
-
-Requisita configuração se o rastreador sairá de Sleep pela ignição ou por movimento
-CXCS#WAKEUP_CFG
-Resposta: READOK: WAKEUP_CFG=0
-
-
-Requisista status do bloqueio dos parâmetros
-PRLOCK#
-Respostas:
-PRLOCK Status:1
-PRLOCK Status:0
+Exemplos de Resposta:
+MOVING:OFF
+MOVING:ON,1000,0
+MOVING:ON,1000,1

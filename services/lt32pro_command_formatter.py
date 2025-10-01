@@ -49,6 +49,11 @@ class LT32ProCommandFormatter:
         'MILEAGE': 'MILEAGE#',
         'ACCONT': 'ACCONT#',
         'DEFENSE': 'DEFENSE#',
+        'SOURCE_OFF_TYPE': 'CXCS#SOURCE_OFF_TYPE',
+        'RELAY': 'RELAY#',
+        'SENDS': 'SENDS#',
+        'SENALM': 'SENALM#',
+        'BATSLPVALUE': 'CXCS#BATSLPVALUE',
         'PARAM': 'PARAM#',
     }
     
@@ -98,6 +103,11 @@ class LT32ProCommandFormatter:
         'JAMRELAY': 'JAMRELAY,{value}#',
         'MILEAGE': 'MILEAGE={value}#',
         'ACCONT': 'ACCONT,{value}#',
+        'SOURCE_OFF_TYPE': 'SZCS#SOURCE_OFF_TYPE={value}',
+        'RELAY': 'RELAY,{value}#',
+        'SENDS': 'SENDS,{value}#',
+        'SENALM': 'SENALM,{value}#',
+        'BATSLPVALUE': 'SZCS#BATSLPVALUE={value}',
     }
     
     # Valid protocol values for GT06SEL

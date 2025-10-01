@@ -152,10 +152,10 @@ class ParameterResponseParser:
             
             # Battery Alert Parameters
             'backup_battery_alert': {
-                'pattern': r'BATALM:(\d+),(\d+)',
-                'fields': ['enabled', 'mode'],
+                'pattern': r'BATALM:(OFF|(\d+),(\d+))',
+                'fields': ['full_match', 'enabled', 'mode'],
                 'description': 'Backup battery alert configuration response',
-                'post_process': self._process_boolean_response
+                'post_process': self._process_backup_battery_alert_response
             },
             'main_power_alert': {
                 'pattern': r'POWERALM:(\d+),(\d+),(\d+),(\d+)',
@@ -537,6 +537,27 @@ class ParameterResponseParser:
         if 'full_match' in values:
             del values['full_match']
         
+        return values
+
+    def _process_backup_battery_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process backup battery alert configuration response."""
+        # Handle OFF case
+        if 'full_match' in values and values['full_match'] == 'OFF':
+            values['enabled'] = False
+            values['mode'] = 0
+            del values['full_match']
+            return values
+        
+        # Handle numeric format case
+        if 'enabled' in values and values['enabled'] is not None:
+            values['enabled'] = bool(int(values['enabled']))
+        
+        if 'mode' in values and values['mode'] is not None:
+            values['mode'] = int(values['mode'])
+        
+        if 'full_match' in values:
+            del values['full_match']
+            
         return values
 
     def _process_boolean_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:

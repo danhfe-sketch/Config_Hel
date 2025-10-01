@@ -130,6 +130,41 @@ class App(ctk.CTk):
         # --- Protocol Handlers ---
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def update_ui_with_parsed_data(self, parsed_data):
+        """Update the UI with parsed data from a device response."""
+        if not parsed_data or 'parameter' not in parsed_data or 'value' not in parsed_data:
+            return
+
+        param_name_from_response = parsed_data['parameter']
+        param_value_from_response = parsed_data['value']
+
+        # Find the parameter in the specification
+        for section_name, section_config in self.params_frame.parameter_specification.items():
+            for param_name, param_config in section_config.parameters.items():
+                if param_config.commands and 'read' in param_config.commands:
+                    if param_name_from_response in param_config.commands['read']:
+                        # Found the parameter
+                        section_widget = self.params_frame.section_widgets.get(section_name)
+                        if section_widget:
+                            param_widget = section_widget.parameters.get(param_name)
+                            if param_widget:
+                                if param_widget.widget_type == 'simple':
+                                    ui_element = param_widget.ui_elements.get('main')
+                                    if ui_element:
+                                        # Map the value back to the UI option
+                                        if param_config.options:
+                                            for option in param_config.options:
+                                                if param_value_from_response in option:
+                                                    ui_element.set_value(option)
+                                                    return
+                                        else:
+                                            ui_element.set_value(param_value_from_response)
+                                            return
+                                else: # complex
+                                    # Not handled for now
+                                    pass
+                        return
+
     def on_closing(self):
         """
         Handles the window closing event gracefully.

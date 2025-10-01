@@ -367,6 +367,14 @@ class SerialService:
                     self.device_info['version'] = parsed_data['version']
                     self.app.after(0, self.update_device_info)
 
+                # Update UI with parsed data
+                if parsed_data:
+                    self.app.after(0, self.app.update_ui_with_parsed_data, parsed_data)
+
+                # Update UI with parsed data
+                if parsed_data:
+                    self.app.after(0, self.app.update_ui_with_parsed_data, parsed_data)
+
             except Exception as e:
                 self.app.log_frame.log_message(f"ERROR: Failed to parse response: {str(e)}\n")
         

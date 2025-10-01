@@ -398,6 +398,16 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set': 'POWERALM,<enabled>,<alert_type>,<detection_time>,<min_charge_time>#',
                     'read': 'POWERALM#'
                 }
+            ),
+            'backup_battery_protection_voltage': ParameterConfig(
+                name='backup_battery_protection_voltage',
+                label='Tensão de Proteção da Bateria Backup',
+                ui_element='number_input',
+                unit='mV',
+                commands={
+                    'set': 'SZCS#BATSLPVALUE=X',
+                    'read': 'CXCS#BATSLPVALUE'
+                }
             )
         }
     ),
@@ -535,6 +545,82 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 commands={
                     'set': 'ACCONT,A#',
                     'read': 'ACCONT#'
+                }
+            )
+        }
+    ),
+
+    'output_control': SectionConfig(
+        name='output_control',
+        label='Controle de Saída',
+        order=13,
+        parameters={
+            'source_off_type': ParameterConfig(
+                name='source_off_type',
+                label='Verificar FIX de GPS antes de ativar a saída',
+                ui_element='dropdown',
+                options=['Verifica FIX de GPS', 'Não verifica FIX de GPS'],
+                commands={
+                    'set': 'SZCS#SOURCE_OFF_TYPE=X',
+                    'read': 'CXCS#SOURCE_OFF_TYPE'
+                }
+            ),
+            'relay_control': ParameterConfig(
+                name='relay_control',
+                label='Ativar/Desativar a saída',
+                ui_element='dropdown',
+                options=['Desabilitada', 'Habilitada'],
+                commands={
+                    'set': 'RELAY,X#',
+                    'read': 'RELAY#'
+                }
+            )
+        }
+    ),
+
+    'gps_control': SectionConfig(
+        name='gps_control',
+        label='Controle de GPS',
+        order=14,
+        parameters={
+            'sends_control': ParameterConfig(
+                name='sends_control',
+                label='Tempo para manter o GPS ativo',
+                ui_element='number_input',
+                unit='minutos',
+                commands={
+                    'set': 'SENDS,X#',
+                    'read': 'SENDS#'
+                }
+            )
+        }
+    ),
+
+    'alerts': SectionConfig(
+        name='alerts',
+        label='Alertas',
+        order=15,
+        parameters={
+            'movement_alert': ParameterConfig(
+                name='movement_alert',
+                label='Alerta de Movimento',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar Alerta de Movimento',
+                        ui_element='toggle_switch'
+                    ),
+                    'alert_type': FieldConfig(
+                        name='alert_type',
+                        label='Tipo de Alerta',
+                        ui_element='dropdown',
+                        options=['Apenas GPRS', 'SMS+GPRS'],
+                        visibility_condition='enabled == true'
+                    )
+                },
+                commands={
+                    'set': 'SENALM,<enabled>,<alert_type>#',
+                    'read': 'SENALM#'
                 }
             )
         }
