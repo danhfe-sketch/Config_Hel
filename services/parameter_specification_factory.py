@@ -672,8 +672,25 @@ class ParameterSpecificationFactory:
                 self._send_relay_control_command(param_values)
             elif param_name == 'sends_control':
                 self._send_sends_control_command(param_values)
-            elif param_name == 'movement_alert':
-                self._send_movement_alert_command(param_values)
+            elif param_name in ['movement_alert', 'moving_alert', 'moving']:
+                print(f"DEBUG: Sending moving alert command with values: {param_values}")
+                # Format enabled correctly as boolean
+                enabled = bool(param_values.get('enabled', False))
+                radius = param_values.get('radius', 1000)
+                alert_type = param_values.get('alert_type', 'Apenas GPRS')
+                
+                # Format command
+                if not enabled:
+                    command = "ATSMS:MOVING,OFF#"
+                else:
+                    notification_mode = 1 if alert_type == 'SMS+GPRS' else 0
+                    command = f"ATSMS:MOVING,ON,{radius},{notification_mode}#"
+                
+                print(f"DEBUG: Sending command: {command}")
+                if self.serial_service:
+                    self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
+                else:
+                    print("ERROR: No serial service available to send command")
             elif param_name == 'backup_battery_protection_voltage':
                 self._send_backup_battery_protection_voltage_command(param_values)
             else:
@@ -715,7 +732,11 @@ class ParameterSpecificationFactory:
                         else:
                             # Fallback to typed value
                             value = ui_element.get_value()
-                            values[field_name] = value
+                            if isinstance(ui_element, ToggleSwitchElement):
+                                # For toggle switches, ensure boolean conversion
+                                values[field_name] = bool(value)
+                            else:
+                                values[field_name] = value
                     except Exception as e:
                         print(f"WARNING: Failed to get value for {param_name}.{field_name}: {e}")
                         values[field_name] = None
@@ -724,6 +745,10 @@ class ParameterSpecificationFactory:
                 if len(param_widget.ui_elements) == 1:
                     single_value = list(values.values())[0]
                     values[param_name] = single_value
+                
+                # Convert enabled to boolean if needed
+                if 'enabled' in values and not isinstance(values['enabled'], bool):
+                    values['enabled'] = bool(values['enabled'])
                 
                 # Debug: log the captured values and their types to help diagnose formatting issues
                 try:

@@ -219,35 +219,18 @@ class UniversalProfileManager:
             all_specs = self.spec_parser.parse_specifications()
 
             for param_name, param_value_obj in self._current_profile.parameters.items():
-                if param_name == 'miscellaneous.odometer':
-                    param_name = 'odometer'
-                elif param_name == 'miscellaneous.hourmeter':
-                    param_name = 'hourmeter'
-                spec = all_specs.get(param_name)
-                spec_key = param_name
-
-
-                if not spec:
-                    param_parts = param_name.split('.')
-                    best_match_spec = None
-                    best_match_key = None
-                    for key, s in all_specs.items():
-                        if key in param_parts:
-                            if best_match_key is None or len(key) > len(best_match_key):
-                                best_match_spec = s
-                                best_match_key = key
-                    if best_match_spec:
-                        spec = best_match_spec
-                        spec_key = best_match_key
+                # Normalize parameter name
+                base_param_name = param_name.split('.')[-1]
+                spec = all_specs.get(base_param_name)
                 
                 if spec:
                     if spec.fields:
                         field_name = param_name.split('.')[-1]
-                        if spec_key not in complex_param_values:
-                            complex_param_values[spec_key] = {}
-                        complex_param_values[spec_key][field_name] = param_value_obj.value
+                        if base_param_name not in complex_param_values:
+                            complex_param_values[base_param_name] = {}
+                        complex_param_values[base_param_name][field_name] = param_value_obj.value
                     else:
-                        parameters_to_write[spec_key] = param_value_obj.value
+                        parameters_to_write[base_param_name] = param_value_obj.value
             
             parameters_to_write.update(complex_param_values)
 

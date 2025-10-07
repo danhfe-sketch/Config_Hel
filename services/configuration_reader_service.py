@@ -1,4 +1,3 @@
-
 import re
 import time
 import threading
@@ -151,7 +150,7 @@ class ConfigurationReaderService:
             'source_off_type': ('SOURCE_OFF_TYPE', 'get_source_off_type'),
             'relay_control': ('RELAY', 'get_relay_control'),
             'sends_control': ('SENDS', 'get_sends_control'),
-            'movement_alert': ('SENALM', 'get_movement_alert'),
+            'moving_alert': ('MOVING', 'get_moving_alert'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
         }
@@ -206,7 +205,7 @@ class ConfigurationReaderService:
             'get_source_off_type': r'READOK:\s*SOURCE_OFF_TYPE=(\d+)',
             'get_relay_control': r'RELAY:(\d+)',
             'get_sends_control': r'SENDS:(\d+)',
-            'get_movement_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
+            'get_moving_alert': r'MOVING:(?:(ON),(\d+),(\d+)|(OFF))',
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
@@ -791,7 +790,7 @@ class ConfigurationReaderService:
             update_timestamp = datetime.now()
             
             # Map parameter names to section/parameter structure
-            parameter_mapping = self._get_parameter_section_mapping()
+            parameter_mapping = self.app.parameters_frame._get_ui_parameter_mapping()
             
             for param_name, parsed_values in parsed_parameters.items():
                 try:
@@ -865,65 +864,7 @@ class ConfigurationReaderService:
             self._log_message(f"ERROR: Failed to update specification-based fields: {str(e)}")
             raise
 
-    def _get_parameter_section_mapping(self) -> Dict[str, Dict[str, str]]:
-        """
-        Get mapping of parameter names to their section and parameter keys.
-        
-        Returns:
-            Dictionary mapping parameter names to section info
-        """
-        return {
-            # Network Parameters
-            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
-            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
-            # Legacy/alternate network parameter keys
-            'network_settings': {'section': 'network_parameters', 'parameter': 'network_settings'},
-            
-            # Time Parameters
-            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
-            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
-            
-            # Service Parameters
-            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
-            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
-            
-            # Ignition Parameters
-            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
-            
-            # Speed Parameters
-            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
-            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
-            
-            # Power Saving Parameters
-            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
-            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
-            
-            # Angle Parameters
-            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
-            
-            # Battery Alert Parameters
-            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
-            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
-            'backup_battery_protection_voltage': {'section': 'battery_alerts', 'parameter': 'backup_battery_protection_voltage'},
-            
-            # Vibration Sensor Parameters
-            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
-            'vibration_window': {'section': 'vibration_sensor', 'parameter': 'vibration_window'},
-            
-            # Jammer Detection Parameters
-            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
-            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
-            
-            # Miscellaneous Parameters
-            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
-            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
-            # Defense / security settings mapping (spec places this under 'security')
-            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'},
-            'source_off_type': {'section': 'output_control', 'parameter': 'source_off_type'},
-            'relay_control': {'section': 'output_control', 'parameter': 'relay_control'},
-            'sends_control': {'section': 'gps_control', 'parameter': 'sends_control'},
-            'movement_alert': {'section': 'alerts', 'parameter': 'movement_alert'}
-        }
+
 
     def _is_time_parameter(self, param_widget) -> bool:
         """
@@ -1663,7 +1604,8 @@ class ConfigurationReaderService:
             'source_off_type': 'get_source_off_type',
             'relay_control': 'get_relay_control',
             'sends_control': 'get_sends_control',
-            'movement_alert': 'get_movement_alert',
+            'moving_alert': 'get_moving_alert',
+            'movement_alert': 'get_moving_alert',
             # Legacy mappings
             'apn_config': 'get_apn',
             'server_config': 'get_server',
@@ -2005,23 +1947,16 @@ class ConfigurationReaderService:
                 elif command_type == 'get_sends_control':
                     parsed_values['sends_control'] = match.group(1)
 
-                elif command_type == 'get_movement_alert':
-                    if match.group(3) == 'OFF':
+                elif command_type == 'get_moving_alert':
+                    if match.group(4) == 'OFF':
                         parsed_values['enabled'] = False
+                        parsed_values['radius'] = '0'
                         parsed_values['alert_type'] = 'Apenas GPRS'
                     else:
                         parsed_values['enabled'] = True
+                        parsed_values['radius'] = match.group(2)
                         alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
-                        parsed_values['alert_type'] = alert_type_map.get(match.group(2), match.group(2))
-
-                elif command_type == 'get_movement_alert':
-                    if match.group(3) == 'OFF':
-                        parsed_values['enabled'] = False
-                        parsed_values['alert_type'] = 'Apenas GPRS'
-                    else:
-                        parsed_values['enabled'] = True
-                        alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
-                        parsed_values['alert_type'] = alert_type_map.get(match.group(2), match.group(2))
+                        parsed_values['alert_type'] = alert_type_map.get(match.group(3), match.group(3))
                 
                 # Miscellaneous Parameters
                 elif command_type == 'get_odometer':

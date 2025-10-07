@@ -61,45 +61,45 @@ class DeviceCommandMapper:
         self.command_templates = {
             # Parameter UI List compliant command templates
             # Network Parameters
-            'apn_settings': "APN,{apn},{user},{password}#",
-            'server_settings': "SERVER,{type},{address},{port},0#",
+            'apn_settings': "APN,{apn_settings_apn},{apn_settings_user},{apn_settings_password}#",
+            'server_settings': "SERVER,{server_settings_type},{server_settings_address},{server_settings_port},0#",
             
             # Time Parameters  
-            'report_intervals': "TIMER,{moving_time},{stopped_time}#",
-            'heartbeat_intervals': "HBT,{moving_heartbeat},{stopped_heartbeat}#",
+            'report_intervals': "TIMER,{report_intervals_moving_time},{report_intervals_stopped_time}#",
+            'heartbeat_intervals': "HBT,{heartbeat_intervals_moving_heartbeat},{heartbeat_intervals_stopped_heartbeat}#",
             
             # Service Parameters
-            'protocol': "SZCS#GT06SEL={value}#",
-            'tcp_ack': "SZCS#POSBYACK={value}#",
+            'protocol': "SZCS#GT06SEL={protocol}#",
+            'tcp_ack': "SZCS#POSBYACK={tcp_ack}#",
             
             # Ignition
-            'ignition_type': "SZCS#ACCLINE={accline}#ACC_CFG={acc_cfg}",
+            'ignition_type': "SZCS#ACCLINE={ignition_type_accline}#ACC_CFG={ignition_type_acc_cfg}",
             
             # Speed
-            'speed_alert': "SPEED,{enabled},{detection_time},{speed_limit},{alert_type}#",
-            'speed_buzzer': "SZCS#SPD_LED_SHOW={value}#",
+            'speed_alert': "SPEED,{speed_alert_enabled},{speed_alert_detection_time},{speed_alert_speed_limit},{speed_alert_alert_type}#",
+            'speed_buzzer': "SZCS#SPD_LED_SHOW={speed_buzzer}#",
             
             # Power Saving
-            'sleep_mode': "SZCS#SLPDISCONNECT={value}#",
-            'sleep_time': "SZCS#SLEEPT={value}#",
+            'sleep_mode': "SZCS#SLPDISCONNECT={sleep_mode}#",
+            'sleep_time': "SZCS#SLEEPT={sleep_time}#",
             
             # Angle
-            'angle_report': "SZCS#ANGLEVALUE={min_speed}-{angle_variation}#",
+            'angle_report': "SZCS#ANGLEVALUE={angle_report_min_speed}-{angle_report_angle_variation}#",
             
             # Battery Alerts
-            'backup_battery_alert': "BATALM,{state},{mode}#",
-            'main_power_alert': "POWERALM,{enabled},{alert_type},{detection_time},{min_charge_time}#",
+            'backup_battery_alert': "BATALM,{backup_battery_alert_state},{backup_battery_alert_mode}#",
+            'main_power_alert': "POWERALM,{main_power_alert_enabled},{main_power_alert_alert_type},{main_power_alert_detection_time},{main_power_alert_min_charge_time}#",
             
             # Vibration Sensor
-            'vibration_sensitivity': "SZCS#VIBL={level}",
+            'vibration_sensitivity': "SZCS#VIBL={vibration_sensitivity_level}",
             
             # Jammer Detection
-            'jammer_detection': "JAMMER,{state},{mode}#",
-            'jammer_relay_action': "JAMRELAY,{op},{time},{speed},{d},{e},{f},{g}#",
+            'jammer_detection': "JAMMER,{jammer_detection_state},{jammer_detection_mode}#",
+            'jammer_relay_action': "JAMRELAY,{jammer_relay_action_op},{jammer_relay_action_time},{jammer_relay_action_speed},{jammer_relay_action_d},{jammer_relay_action_e},{jammer_relay_action_f},{jammer_relay_action_g}#",
             
             # Miscellaneous
-            'odometer': "MILEAGE={value}#",
-            'hourmeter': "ACCONT,{value}#",
+            'odometer': "MILEAGE={odometer}#",
+            'hourmeter': "ACCONT,{hourmeter}#",
             
             # Legacy APN Configuration (kept for backward compatibility)
             'apn_server': "APN,{value},,#",
@@ -173,7 +173,7 @@ class DeviceCommandMapper:
             'movement_alert': "SENALM,ON,{value}#",
             'power_alert': "POWERALM,ON,{value},{t1},{t2}#",
             'battery_alert': "BATALM,ON,{value}#",
-            'moving_alert': "MOVING,ON,{value},{type}#",
+            'moving_alert': "MOVING,{enabled},{radius},{alert_type}#",
             'acc_on_alert': "ACCALM,ON,{value}#",
             'acc_off_alert': "ACCOFFALM,ON,{value}#",
 
@@ -250,11 +250,14 @@ class DeviceCommandMapper:
             # Relay/Output Control
             'relay_control': {
                 'OFF': '0',   # Disable output
-                'ON': '1'     # Enable output
+                'ON': '1',     # Enable output
+                'Desabilitada': '0',
+                'Habilitada': '1'
             },
             'relay_gps_check': {
                 'Check GPS': '0',   # Check GPS fix before activating output
-                'Immediate': '1'    # Activate output immediately without checking GPS
+                'Immediate': '1',    # Activate output immediately without checking GPS
+                'Não verifica FIX de GPS': '1'
             },
 
             # Ignition Configuration
@@ -461,10 +464,12 @@ class DeviceCommandMapper:
             # Check if this is a multi-field parameter that needs special handling
             multi_field_params = [
                 'jammer_relay_action', 'main_power_alert', 'backup_battery_alert',
-                'angle_report', 'speed_alert',
+                'angle_report', 'speed_alert', 'moving_alert', 'vibration_window',
                 'apn_settings', 'server_settings', 'report_intervals', 'heartbeat_intervals',
                 'ignition_type', 'vibration_sensitivity', 'jammer_detection'
             ]
+            
+            command = None  # Initialize command variable
             
             if param_name in multi_field_params:
                 self.logger.debug(f"Processing multi-field parameter: {param_name}")
@@ -481,7 +486,20 @@ class DeviceCommandMapper:
                         field_values.update(context)
                 
                 # Use the multi-field parameter handler
-                command_params = self._handle_multi_field_parameter(param_name, field_values)
+                if param_name == 'moving_alert':
+                    command_params = field_values.copy()
+                    if 'enabled' in command_params:
+                        command_params['enabled'] = 'ON' if command_params['enabled'] else 'OFF'
+                    if 'alert_type' in command_params:
+                        alert_type_map = self.value_mappings.get('alert_type', {})
+                        if command_params['alert_type'] in alert_type_map:
+                            command_params['alert_type'] = alert_type_map[command_params['alert_type']]
+                elif param_name == 'vibration_window':
+                    command_params = field_values.copy()
+                    if 'threshold' in command_params:
+                        command_params['value'] = command_params.pop('threshold')
+                else:
+                    command_params = self._handle_multi_field_parameter(param_name, field_values)
                 
                 # Get the command template
                 template = self.command_templates.get(param_name)
@@ -571,7 +589,7 @@ class DeviceCommandMapper:
             self.logger.debug(f"Full command with prefix: {full_command}")
             
             # Validate the command using CommandValidationGateway if requested
-            if validate_command:
+            if validate_command and param_name not in ['vibration_window', 'network_select']:
                 self.logger.debug(f"Validating command for {param_name}")
                 
                 validation_context = ValidationContext(
@@ -970,32 +988,106 @@ class DeviceCommandMapper:
         processed_params = set()  # Track which parameters we've already processed
 
         self.logger.info(f"Starting bulk command generation for {len(parameters)} parameters")
+        self.logger.info(f"Parameters keys: {list(parameters.keys())}")
 
-        # Define parameter groups for compound commands that need multiple parameters
+        # Remove UI-only parameters that do not map to device commands
+        params_to_ignore = ['backup_battery_protection_voltage', 'sends_control']
+        for p in params_to_ignore:
+            if p in parameters:
+                del parameters[p]
+
+        # Pre-process to group flattened compound parameters
+        compound_group_names = [
+            'apn_settings', 'server_settings', 'report_intervals', 'heartbeat_intervals',
+            'ignition_type', 'speed_alert', 'main_power_alert', 'angle_report',
+            'vibration_sensitivity', 'jammer_relay_action', 'moving_alert', 'vibration_window'
+        ]
+        
+        group_to_section = {
+            'apn_settings': 'network_parameters', 'server_settings': 'network_parameters',
+            'report_intervals': 'time_parameters', 'heartbeat_intervals': 'time_parameters',
+            'ignition_type': 'ignition', 'speed_alert': 'speed',
+            'main_power_alert': 'battery_alerts', 'angle_report': 'angle',
+            'vibration_sensitivity': 'vibration_sensor', 'jammer_relay_action': 'jammer_detection',
+            'moving_alert': 'alerts',
+            'vibration_window': 'vibration_sensor'
+        }
+
+        new_params = {}
+        keys_to_remove = []
+
+        for key, value in parameters.items():
+            if '.' in key:
+                try:
+                    group_name, field_name = key.split('.', 1)
+                    if group_name in compound_group_names:
+                        section = group_to_section[group_name]
+                        new_key = f"{section}.{group_name}"
+                        if new_key not in new_params:
+                            new_params[new_key] = {}
+                        new_params[new_key][field_name] = value
+                        keys_to_remove.append(key)
+                except ValueError:
+                    # Handle cases where split doesn't produce 2 values, though '.' is present
+                    pass
+
+        for key in keys_to_remove:
+            if key in parameters:
+                del parameters[key]
+        parameters.update(new_params)
+        
+        # Log all parameters for debugging
+        self.logger.debug(f"All parameters received: {list(parameters.keys())}")
+        for param_name, param_value in parameters.items():
+            self.logger.debug(f"Parameter: {param_name} = {param_value} (type: {type(param_value).__name__})")
+
+        # Group flattened parameters by their section and parameter name
+        grouped_params = {}
+        single_params = {}
+        
+        for param_name, param_value in parameters.items():
+            if '.' in param_name:
+                # This is a flattened parameter with section.parameter_name format
+                section, param = param_name.split('.', 1)
+                if section not in grouped_params:
+                    grouped_params[section] = {}
+                grouped_params[section][param] = param_value
+            else:
+                # This is a single parameter
+                single_params[param_name] = param_value
+        
+        self.logger.debug(f"Grouped parameters: {grouped_params}")
+        self.logger.debug(f"Single parameters: {single_params}")
+
+        # Process compound commands from grouped parameters
         compound_groups = [
             # Network Configuration (Critical - send first)
             {
-                'name': 'apn',
-                'params': ['apn_server', 'apn_user', 'apn_password'],
-                'required': ['apn_server'],  # At minimum we need the server
+                'name': 'apn_settings',
+                'section': 'network_parameters',
+                'params': ['apn', 'user', 'password'],
+                'required': ['apn'],  # At minimum we need the server
                 'method': self._generate_apn_command
             },
             {
-                'name': 'server',
-                'params': ['server_address', 'server_port'],
-                'required': ['server_address', 'server_port'],  # Both required
+                'name': 'server_settings',
+                'section': 'network_parameters',
+                'params': ['address', 'port'],
+                'required': ['address', 'port'],  # Both required
                 'method': self._generate_server_command
             },
             
             # Timing Configuration
             {
-                'name': 'timer',
+                'name': 'report_intervals',
+                'section': 'time_parameters',
                 'params': ['moving_time', 'stopped_time'],
                 'required': ['moving_time', 'stopped_time'],  # Both required
                 'method': self._generate_timer_command
             },
             {
-                'name': 'heartbeat',
+                'name': 'heartbeat_intervals',
+                'section': 'time_parameters',
                 'params': ['moving_heartbeat', 'stopped_heartbeat'],
                 'required': ['moving_heartbeat', 'stopped_heartbeat'],  # Both required
                 'method': self._generate_heartbeat_command
@@ -1003,7 +1095,8 @@ class DeviceCommandMapper:
             
             # Ignition Configuration
             {
-                'name': 'ignition',
+                'name': 'ignition_type',
+                'section': 'ignition',
                 'params': ['ignition_mode', 'on_voltage', 'off_voltage'],
                 'required': ['ignition_mode'],  # Mode is required, voltages are optional
                 'method': self._generate_ignition_command
@@ -1012,57 +1105,88 @@ class DeviceCommandMapper:
             # Speed Alert Configuration
             {
                 'name': 'speed_alert',
-                'params': ['speed_alert_enabled', 'speed_detection_time', 'speed_limit', 'speed_alert_type'],
-                'required': ['speed_alert_enabled'],  # At minimum we need enabled status
+                'section': 'speed',
+                'params': ['enabled', 'detection_time', 'speed_limit', 'alert_type'],
+                'required': ['enabled'],  # At minimum we need enabled status
                 'method': self._generate_speed_alert_command
             },
             
             # Power Alert Configuration
             {
                 'name': 'main_power_alert',
-                'params': ['main_power_alert_enabled', 'main_power_alert_type', 'main_power_detection_time', 'main_power_min_charge_time'],
-                'required': ['main_power_alert_enabled'],
+                'section': 'battery_alerts',
+                'params': ['enabled', 'alert_type', 'detection_time', 'min_charge_time'],
+                'required': ['enabled'],
                 'method': self._generate_main_power_alert_command
             },
             
             # Angle Report Configuration
             {
                 'name': 'angle_report',
-                'params': ['angle_report_enabled', 'angle_report_min_speed', 'angle_report_angle_variation'],
-                'required': ['angle_report_enabled'],
+                'section': 'angle',
+                'params': ['enabled', 'min_speed', 'angle_variation'],
+                'required': ['enabled'],
                 'method': self._generate_angle_report_command
             },
             
             # Vibration Configuration
             {
-                'name': 'vibration',
-                'params': ['vibration_level'],
-                'required': ['vibration_level'],
+                'name': 'vibration_sensitivity',
+                'section': 'vibration_sensor',
+                'params': ['level'],
+                'required': ['level'],
                 'method': self._generate_vibration_command
             },
             
             # Jammer Relay Configuration
             {
-                'name': 'jammer_relay',
-                'params': ['jammer_relay_enabled', 'jammer_output_operation', 'jammer_confirmation_time', 'jammer_speed_limit'],
-                'required': ['jammer_relay_enabled'],
+                'name': 'jammer_relay_action',
+                'section': 'jammer_detection',
+                'params': ['output_operation', 'confirmation_time', 'speed_limit'],
+                'required': ['output_operation'],
                 'method': self._generate_jammer_relay_command
             }
         ]
         
         # Process compound commands first
         for group in compound_groups:
+            self.logger.debug(f"Processing compound group: {group['name']}")
+            
+            # Check if we have the section and required parameters for this group
+            section = group.get('section')
+            if section not in grouped_params:
+                self.logger.debug(f"Section {section} not found in grouped parameters")
+                continue
+                
+            section_params = grouped_params[section]
+            param_name = group['name']
+            
+            if param_name not in section_params:
+                self.logger.debug(f"Parameter {param_name} not found in section {section}")
+                continue
+                
+            # Extract the parameter values
+            param_values = section_params[param_name]
+            if not isinstance(param_values, dict):
+                self.logger.debug(f"Parameter {param_name} is not a dictionary: {type(param_values).__name__}")
+                continue
+            
             # Check if we have the required parameters for this group
-            has_required = all(param in parameters and parameters[param] is not None and parameters[param] != '' 
+            has_required = all(param in param_values and param_values[param] is not None and param_values[param] != '' 
                              for param in group['required'])
+            
+            self.logger.debug(f"Group {group['name']} has required params: {has_required}")
             
             if has_required:
                 try:
                     # Collect all available parameters for this group
                     group_params = {}
                     for param in group['params']:
-                        if param in parameters and parameters[param] is not None and parameters[param] != '':
-                            group_params[param] = parameters[param]
+                        if param in param_values and param_values[param] is not None and param_values[param] != '':
+                            group_params[param] = param_values[param]
+                            self.logger.debug(f"Added param to group: {param} = {param_values[param]}")
+                    
+                    self.logger.debug(f"Group params collected: {group_params}")
                     
                     if group_params:  # Only process if we have some parameters
                         command = group['method'](group_params, validate_commands)
@@ -1074,12 +1198,15 @@ class DeviceCommandMapper:
                             commands.append(command)
                             self.logger.info(f"Added bulk command for {group['name']}: {command}")
                             # Mark these parameters as processed
-                            processed_params.update(group['params'])
+                            processed_params.add(f"{section}.{param_name}")
+                            self.logger.debug(f"Marked param as processed: {section}.{param_name}")
                         else:
                             self.logger.warning(f"No command generated for group: {group['name']}")
+                    else:
+                        self.logger.warning(f"No group params collected for: {group['name']}")
                             
                 except ValueError as e:
-                    if validate_commands and group['name'] in ['apn', 'server']:
+                    if validate_commands and group['name'] in ['apn_settings', 'server_settings']:
                         error_msg = f"{group['name'].upper()} command validation failed: {str(e)}"
                         self.logger.error(error_msg)
                         validation_errors.append(f"{group['name']}: {error_msg}")
@@ -1090,21 +1217,34 @@ class DeviceCommandMapper:
                         
                 except Exception as e:
                     self.logger.error(f"Unexpected error generating command for {group['name']}: {str(e)}")
-                    if validate_commands and group['name'] in ['apn', 'server']:
+                    if validate_commands and group['name'] in ['apn_settings', 'server_settings']:
                         validation_errors.append(f"{group['name']}: {str(e)}")
+            else:
+                # Log which required parameters are missing
+                missing_params = [param for param in group['required'] 
+                                 if param not in param_values or param_values[param] is None or param_values[param] == '']
+                self.logger.debug(f"Group {group['name']} missing required params: {missing_params}")
         
-        # Process individual parameters that weren't part of compound commands
+        # Process single parameters that weren't part of compound commands
         individual_params = [
             'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
-            'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter'
+            'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter',
+            'network_settings', 'defense_settings', 'source_off_type', 'relay_control'
         ]
         
+        self.logger.info(f"Processing {len(individual_params)} individual parameters")
+        self.logger.info(f"Individual parameters list: {individual_params}")
+        self.logger.info(f"Single parameters keys: {list(single_params.keys())}")
+        
         for param_name in individual_params:
-            if param_name not in processed_params and param_name in parameters:
-                param_value = parameters[param_name]
+            if param_name in single_params and param_name not in processed_params:
+                param_value = single_params[param_name]
+                
+                self.logger.debug(f"Processing individual param: {param_name} = {param_value}")
                 
                 # Skip None values and empty strings
                 if param_value is None or param_value == '':
+                    self.logger.debug(f"Skipping individual param {param_name}: empty value")
                     continue
                     
                 try:
@@ -1130,6 +1270,11 @@ class DeviceCommandMapper:
                         
                 except Exception as e:
                     self.logger.error(f"Unexpected error generating command for {param_name}: {str(e)}")
+            else:
+                if param_name in processed_params:
+                    self.logger.debug(f"Skipping individual param {param_name}: already processed")
+                elif param_name not in single_params:
+                    self.logger.debug(f"Skipping individual param {param_name}: not in parameters")
         
         # Process any remaining parameters that weren't explicitly handled
         remaining_params = set(parameters.keys()) - processed_params
@@ -1138,12 +1283,17 @@ class DeviceCommandMapper:
             for param_name in remaining_params:
                 param_value = parameters[param_name]
                 
+                self.logger.debug(f"Processing additional param: {param_name} = {param_value}")
+                
                 # Skip None values, empty strings, and metadata parameters
-                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version']:
+                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version', 'backup_battery_protection_voltage', 'sends_control']:
+                    self.logger.debug(f"Skipping additional param {param_name}: empty or metadata")
                     continue
                     
                 try:
-                    command = self._generate_individual_command(param_name, param_value, validate_commands)
+                    # Try to generate a command using the generic get_command method
+                    short_param_name = param_name.split('.')[-1]
+                    command = self.get_command(short_param_name, param_value, validate_command=validate_commands)
                     if command:
                         # Remove trailing '#' for SZCS commands during profile loading
                         if command.startswith("ATSMS:SZCS#") and command.endswith('#'):
@@ -1151,11 +1301,20 @@ class DeviceCommandMapper:
                             self.logger.debug(f"Removed trailing '#' for SZCS command in bulk operation: {command}")
                         commands.append(command)
                         self.logger.info(f"Added bulk command for additional parameter {param_name}: {command}")
+                        processed_params.add(param_name)
                     else:
-                        self.logger.debug(f"No command generated for additional parameter: {param_name}")
+                        self.logger.debug(f"No command generated for additional parameter {param_name}")
                         
                 except Exception as e:
                     self.logger.debug(f"Could not generate command for additional parameter {param_name}: {str(e)}")
+        
+        # Log which parameters were not processed
+        unprocessed_params = set(parameters.keys()) - processed_params
+        if unprocessed_params:
+            self.logger.warning(f"Unprocessed parameters ({len(unprocessed_params)}): {unprocessed_params}")
+            for param_name in unprocessed_params:
+                param_value = parameters[param_name]
+                self.logger.warning(f"Unprocessed param: {param_name} = {param_value} (type: {type(param_value).__name__})")
         
         # Check if we have critical validation errors that should block the operation
         if validation_errors:
@@ -1680,6 +1839,10 @@ class DeviceCommandMapper:
                 'jammer_detection': lambda v: self.format_jammer_detection_command(v),
                 'odometer': lambda v: self.format_odometer_command(v),
                 'hourmeter': lambda v: self.format_hourmeter_command(v),
+                'network_settings': lambda v: self.get_command('network_select', v),
+                'defense_settings': lambda v: self.get_command('defense_time', v),
+                'source_off_type': lambda v: self.get_command('relay_gps_check', v),
+                'relay_control': lambda v: self.get_command('relay_control', v)
             }
             
             if param_name in individual_mapping:
@@ -1712,7 +1875,6 @@ class DeviceCommandMapper:
         Args:
             parameters: Dictionary of parameter names and values
             
-                               
         Returns:
             Dictionary with validation results and recommendations
         """

@@ -184,6 +184,66 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         
         # Create legacy parameter_widgets mapping for backward compatibility
         self._create_legacy_parameter_mapping()
+
+    def _setup_enhanced_apn_validation_with_mixin(self):
+        """Set up enhanced APN validation using ValidationMixin for APN-related fields.
+
+        This method finds the APN parameter (usually 'apn_settings' under
+        'network_parameters'), extracts the individual field UI elements, stores
+        them in `self.apn_widgets` and registers them with
+        `setup_real_time_validation` from the ValidationMixin so that real-time
+        validation, tooltips and progressive feedback work.
+        """
+        try:
+            # Default storage for APN widgets
+            self.apn_widgets = {}
+
+            # Find network parameters section and apn_settings parameter
+            network_section = self.section_widgets.get('network_parameters') if hasattr(self, 'section_widgets') else None
+            if not network_section:
+                return
+
+            apn_param = network_section.parameters.get('apn_settings') if hasattr(network_section, 'parameters') else None
+            if not apn_param:
+                return
+
+            # apn_param.ui_elements contains BaseUIElement instances for each field
+            for field_name, ui_element in apn_param.ui_elements.items():
+                # Prefer the underlying input widget if available
+                widget = None
+                if hasattr(ui_element, 'widget') and ui_element.widget is not None:
+                    widget = ui_element.widget
+                elif hasattr(ui_element, 'container_frame') and ui_element.container_frame is not None:
+                    widget = ui_element.container_frame
+                else:
+                    # Fallback to the ui_element object itself
+                    widget = ui_element
+
+                # Store reference for other APN-related logic
+                self.apn_widgets[field_name] = widget
+
+                # Register validation callbacks for each APN-related field
+                if field_name == 'apn':
+                    try:
+                        # Use a named field key so the mixin can track state
+                        self.setup_real_time_validation('apn', widget, lambda v, s=self: s._validate_apn_field_comprehensive(v), debounce_ms=500)
+                    except Exception:
+                        # Non-critical: continue if binding fails
+                        pass
+                elif field_name == 'user':
+                    try:
+                        self.setup_real_time_validation('apn_user', widget, lambda v, s=self: s._validate_apn_user_field_comprehensive(v), debounce_ms=400)
+                    except Exception:
+                        pass
+                elif field_name == 'password':
+                    try:
+                        self.setup_real_time_validation('apn_password', widget, lambda v, s=self: s._validate_apn_password_field_comprehensive(v), debounce_ms=400)
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            # Do not crash the application on validation setup failures
+            print(f"WARNING: Failed to setup APN validation mixin: {e}")
     
     def _create_legacy_parameter_mapping(self):
         """Create legacy parameter_widgets mapping for backward compatibility."""
@@ -332,6 +392,54 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             'network_parameters', 'apn_settings', self.section_widgets
         )
     
+    def send_moving_alert_command(self, param_values: dict):
+        """Sends the MOVING alert command to the device.
+        
+        Args:
+            param_values: Dictionary with moving alert parameters
+                - enabled: bool, whether alert is enabled
+                - radius: int, displacement radius (100-1000)
+                - notification_mode: int, 0 for GPRS only, 1 for SMS+GPRS
+        """
+        try:
+            if not self.serial_service.is_connected:
+                show_error(
+                    self,
+                    self.i18n.get("error"),
+                    self.i18n.get("not_connected_error")
+                )
+                return
+
+            # Default values
+            enabled = param_values.get('enabled', False)
+            radius = param_values.get('radius', 1000)  # Default 1000m
+            notification_mode = 0  # Default GPRS only
+            
+            # Convert notification mode text to value
+            if param_values.get('alert_type') == 'SMS+GPRS':
+                notification_mode = 1
+            
+            # Validate radius
+            if radius is None or not isinstance(radius, int):
+                radius = 1000
+            radius = max(100, min(1000, radius))  # Clamp between 100-1000
+            
+            # Format command
+            if not enabled:
+                command = "ATSMS:MOVING,OFF#"
+            else:
+                command = f"ATSMS:MOVING,ON,{radius},{notification_mode}#"
+            
+            print(f"DEBUG: Sending moving alert command: {command}")
+            self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
+            
+        except Exception as e:
+            show_error(
+                self,
+                self.i18n.get("error"),
+                f"{self.i18n.get('send_command_error')}: {str(e)}"
+            )
+
     def send_apn_command(self):
         """Validates and sends the complete APN configuration command with enhanced validation."""
         if not self.serial_service.is_connected:
@@ -562,8 +670,12 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
                 
                 for param_name, parsed_values in parsed_parameters.items():
                     try:
+                        # Special handling for MOVING alerts
+                        if param_name.lower() in ['moving', 'moving_alert']:
+                            print(f"DEBUG: Processing movement alert: {param_name} = {parsed_values}")
+                            
                         # Get section and parameter name from mapping
-                        section_info = parameter_mapping.get(param_name)
+                        section_info = parameter_mapping.get(param_name.lower())  # Case insensitive lookup
                         if not section_info:
                             print(f"WARNING: No UI mapping found for parameter {param_name}")
                             continue
@@ -572,6 +684,9 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
                         param_key = section_info['parameter']
                         
                         print(f"DEBUG: Updating {section_name}.{param_key} with values: {parsed_values}")
+                        
+                        # No need to handle notification mode/text conversion here
+                        # The response parser now returns the correct alert_type field
                         
                         # Update the parameter value using the factory
                         factory.set_parameter_value(section_name, param_key, parsed_values, section_widgets)
@@ -605,6 +720,7 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             # Network Parameters
             'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
             'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
+            'network_settings': {'section': 'network_parameters', 'parameter': 'network_settings'},
             
             # Time Parameters
             'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
@@ -631,9 +747,11 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             # Battery Alert Parameters
             'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
             'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
-            
+            'backup_battery_protection_voltage': {'section': 'battery_alerts', 'parameter': 'backup_battery_protection_voltage'},
+
             # Vibration Sensor Parameters
             'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
+            'vibration_window': {'section': 'vibration_sensor', 'parameter': 'vibration_window'},
             
             # Jammer Detection Parameters
             'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
@@ -641,7 +759,16 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             
             # Miscellaneous Parameters
             'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
-            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
+            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
+            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'},
+            'source_off_type': {'section': 'output_control', 'parameter': 'source_off_type'},
+            'relay_control': {'section': 'output_control', 'parameter': 'relay_control'},
+            'sends_control': {'section': 'gps_control', 'parameter': 'sends_control'},
+
+            # Movement Alerts
+            'moving_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
+            'moving': {'section': 'movement_alerts', 'parameter': 'moving_alert'},  # Map both MOVING and moving_alert to same UI
+            'movement_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'}  # Also map movement_alert to same UI for backward compatibility
         }
 
     def _update_parameters_legacy(self, parsed_parameters: dict):
@@ -695,1183 +822,7 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
                 'changed_updates': 0,
                 'unchanged_updates': 0,
                 'last_update': None,
-                'error': 'Configuration reader service not available'
-            }
-            
-        except Exception as e:
-            return {'error': f'Failed to get update summary: {str(e)}'}
-
-    def export_parameter_updates(self, file_path: str = None) -> str:
-        """
-        Export parameter update log.
-        
-        Args:
-            file_path: Optional file path to save the log
-            
-        Returns:
-            Log content as string or error message
-        """
-        try:
-            if hasattr(self.master, 'configuration_reader_service'):
-                config_reader = self.master.configuration_reader_service
-                if hasattr(config_reader, 'export_parameter_update_log'):
-                    return config_reader.export_parameter_update_log(file_path)
-            
-            return "ERROR: Configuration reader service not available for export"
-            
-        except Exception as e:
-            return f"ERROR: Failed to export parameter updates: {str(e)}"
-    
-    def _setup_enhanced_apn_validation_with_mixin(self):
-        """Set up enhanced APN validation using ValidationMixin with progressive feedback."""
-        try:
-            # Get APN settings parameter widget
-            network_section = self.section_widgets.get('network_parameters')
-            if not network_section:
-                print("Warning: Network parameters section not found for APN validation setup")
-                return
-            
-            apn_parameter = network_section.parameters.get('apn_settings')
-            if not apn_parameter:
-                print("Warning: APN settings parameter not found for validation setup")
-                return
-            
-            # Store APN widgets for validation
-            self.apn_widgets = apn_parameter.ui_elements
-            
-            # Set up enhanced real-time validation for APN fields using ValidationMixin
-            if 'apn' in self.apn_widgets:
-                apn_widget = self.apn_widgets['apn']
-                self.setup_real_time_validation(
-                    field_name='apn',
-                    widget=apn_widget,
-                    validation_callback=self._validate_apn_field_comprehensive,
-                    debounce_ms=500,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-                
-                user_widget = self.apn_widgets['user']
-                self.setup_real_time_validation(
-                    field_name='apn_user',
-                    widget=user_widget,
-                    validation_callback=self._validate_apn_user_field_comprehensive,
-                    debounce_ms=300,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-            
-            if 'password' in self.apn_widgets:
-                password_widget = self.apn_widgets['password']
-                self.setup_real_time_validation(
-                    field_name='apn_password',
-                    widget=password_widget,
-                    validation_callback=self._validate_apn_password_field_comprehensive,
-                    debounce_ms=300,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-            
-            print("Enhanced APN validation with progressive feedback setup completed successfully")
-            
-        except Exception as e:
-            print(f"Error setting up enhanced APN validation with mixin: {e}")
-    
-    def send_apn_command(self):
-        """Validates and sends the complete APN configuration command with enhanced validation."""
-        if not self.serial_service.is_connected:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("not_connected_error")
-            )
-            return
-
-        # Check if form submission should be prevented due to validation errors
-        if self.prevent_form_submission_on_validation_errors():
-            validation_errors = self.get_validation_errors()
-            error_messages = []
-            
-            for field_name, error_message in validation_errors.items():
-                field_display = field_name.replace('_', ' ').title()
-                error_messages.append(f"{field_display}: {error_message}")
-            
-            show_error(
-                self,
-                self.i18n.get("validation_errors", "Validation Errors"),
-                "Please fix the following validation errors before sending:\n\n" + "\n".join(error_messages)
-            )
-            return
-
-        # Get APN values from the network parameters section
-        apn_values = self._get_apn_values_from_section()
-        if not apn_values:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("apn_server_required")
-            )
-            return
-
-        server = apn_values.get('apn', '').strip()
-        user = apn_values.get('user', '').strip()
-        password = apn_values.get('password', '').strip()
-
-        # APN server is mandatory if any APN setting is being sent.
-        if not server:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("apn_server_required")
-            )
-            return
-
-        # Final comprehensive validation using the APN validation component
-        validation_result = self.apn_validation_component.validate_apn_configuration(server, user, password)
-        if not validation_result.is_valid:
-            show_error(
-                self,
-                self.i18n.get("invalid_apn_server_title", "Invalid APN Configuration"),
-                validation_result.error_message + 
-                (f"\n\nSuggestions:\n• " + "\n• ".join(validation_result.suggestions) if validation_result.suggestions else "")
-            )
-            return
-
-        # Construct the command. User and password can be empty.
-        command = f"ATSMS:APN,{server},{user},{password}#"
-        self.serial_service.send_command(command)
-        
-        # Show success feedback
-        show_info(
-            self,
-            self.i18n.get("success", "Success"),
-            f"APN configuration sent successfully:\nAPN: {server}\nUser: {user if user else '(none)'}"
-        )
-
-    def send_trans_mode_command(self):
-        """Sends the Transmission Mode command to the device (always TCP)."""
-        # Always use TCP (0) for transmission mode
-        self._send_command_if_value("ATSMS:SZCS#PROTOCOL={value}#", "0")
-    
-    def update_language_display(self):
-        """Updates all UI elements with the current language."""
-        # Update frame label
-        self.configure(label_text=self.i18n.get("parameters"))
-        
-        # Update all sections and parameters using the specification factory
-        self.parameter_specification_factory.update_language_display(self.section_widgets)
-    
-    def update_apn_fields(self, server=None, user=None, password=None):
-        """
-        Update APN fields with values read from the device.
-        
-        Args:
-            server: APN server value
-            user: APN user value
-            password: APN password value
-        """
-        print(f"DEBUG: update_apn_fields called with server={server}, user={user}, password={password}")
-        
-        # Build APN values dictionary
-        apn_values = {}
-        if server is not None:
-            apn_values['apn'] = server
-            print(f"Updated APN server to {server}")
-        if user is not None:
-            apn_values['user'] = user
-            print(f"Updated APN user to {user}")
-        if password is not None:
-            apn_values['password'] = password
-            print(f"Updated APN password to {password}")
-        
-        if apn_values:
-            # Update APN settings in the network parameters section
-            self.parameter_specification_factory.set_parameter_value(
-                'network_parameters', 'apn_settings', apn_values, self.section_widgets
-            )
-            self.highlight_updated_parameter("network_parameters.apn_settings", True)
-    
-    def update_parameter_value(self, param_name, value):
-        """
-        Update a parameter value.
-        
-        Args:
-            param_name: Name of the parameter to update (format: section_name.param_name)
-            value: Value to set
-        """
-        print(f"DEBUG: update_parameter_value called with param_name={param_name}, value={value}")
-        
-        # Parse section and parameter name
-        if '.' in param_name:
-            section_name, param_name_only = param_name.split('.', 1)
-            self.parameter_specification_factory.set_parameter_value(
-                section_name, param_name_only, value, self.section_widgets
-            )
-            print(f"Updated parameter {param_name} to {value}")
-            
-            # Highlight the parameter to show it was updated
-            self.highlight_updated_parameter(param_name, True)
-        else:
-            print(f"Invalid parameter name format: {param_name}")
-    
-    def get_section_names(self):
-        """Get all section names in order."""
-        return [section['config'].name for section in sorted(
-            self.parameter_sections.values(), 
-            key=lambda x: x['config'].order
-        )]
-    
-    def get_parameter_names_in_section(self, section_name):
-        """Get all parameter names in a specific section."""
-        if section_name in self.parameter_sections:
-            return list(self.parameter_sections[section_name]['parameters'].keys())
-        return []
-    
-    def is_parameter_visible(self, param_name):
-        """Check if a parameter is currently visible (for conditional parameters)."""
-        if param_name in self.parameter_widgets:
-            param_widget = self.parameter_widgets[param_name]
-            return param_widget['frame'].winfo_viewable()
-        return False
-
-    def update_parameter_fields(self, parsed_parameters: dict):
-        """
-        Update parameter fields from parsed device responses.
-        
-        Args:
-            parsed_parameters: Dictionary of parameter names to parsed values
-        """
-        try:
-            print(f"DEBUG: update_parameter_fields called with {len(parsed_parameters)} parameters")
-            
-            # Use the parameter specification factory to update fields
-            if hasattr(self, 'parameter_specification_factory') and hasattr(self, 'section_widgets'):
-                factory = self.parameter_specification_factory
-                section_widgets = self.section_widgets
-                
-                # Map parameter names to section/parameter structure
-                parameter_mapping = self._get_ui_parameter_mapping()
-                
-                for param_name, parsed_values in parsed_parameters.items():
-                    try:
-                        # Get section and parameter name from mapping
-                        section_info = parameter_mapping.get(param_name)
-                        if not section_info:
-                            print(f"WARNING: No UI mapping found for parameter {param_name}")
-                            continue
-                        
-                        section_name = section_info['section']
-                        param_key = section_info['parameter']
-                        
-                        print(f"DEBUG: Updating {section_name}.{param_key} with values: {parsed_values}")
-                        
-                        # Update the parameter value using the factory
-                        factory.set_parameter_value(section_name, param_key, parsed_values, section_widgets)
-                        
-                        # Highlight the updated parameter
-                        full_param_name = f"{section_name}.{param_key}"
-                        self.highlight_updated_parameter(full_param_name, True)
-                        
-                        print(f"DEBUG: Successfully updated {param_name}")
-                        
-                    except Exception as e:
-                        print(f"ERROR: Failed to update parameter {param_name}: {str(e)}")
-                
-                print(f"DEBUG: Completed updating {len(parsed_parameters)} parameters")
-            else:
-                print("WARNING: Parameter specification factory or section widgets not available")
-                # Fallback to legacy update methods
-                self._update_parameters_legacy(parsed_parameters)
-                
-        except Exception as e:
-            print(f"ERROR: Failed to update parameter fields: {str(e)}")
-
-    def _get_ui_parameter_mapping(self) -> dict:
-        """
-        Get mapping of parameter names to their UI section and parameter keys.
-        
-        Returns:
-            Dictionary mapping parameter names to section info
-        """
-        return {
-            # Network Parameters
-            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
-            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
-            
-            # Time Parameters
-            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
-            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
-            
-            # Service Parameters
-            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
-            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
-            
-            # Ignition Parameters
-            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
-            
-            # Speed Parameters
-            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
-            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
-            
-            # Power Saving Parameters
-            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
-            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
-            
-            # Angle Parameters
-            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
-            
-            # Battery Alert Parameters
-            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
-            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
-            
-            # Vibration Sensor Parameters
-            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
-            
-            # Jammer Detection Parameters
-            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
-            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
-            
-            # Miscellaneous Parameters
-            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
-            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
-        }
-
-    def _update_parameters_legacy(self, parsed_parameters: dict):
-        """
-        Update parameters using legacy methods as fallback.
-        
-        Args:
-            parsed_parameters: Dictionary of parameter names to parsed values
-        """
-        try:
-            print("DEBUG: Using legacy parameter update methods")
-            
-            # Handle specific parameter types with legacy methods
-            if 'apn_settings' in parsed_parameters:
-                apn_data = parsed_parameters['apn_settings']
-                self.update_apn_fields(
-                    server=apn_data.get('apn', ''),
-                    user=apn_data.get('user', ''),
-                    password=apn_data.get('password', '')
-                )
-            
-            # Add more legacy parameter updates as needed
-            for param_name, values in parsed_parameters.items():
-                if isinstance(values, dict):
-                    for field_name, field_value in values.items():
-                        full_param_name = f"{param_name}.{field_name}"
-                        self.update_parameter_value(full_param_name, field_value)
-                else:
-                    self.update_parameter_value(param_name, values)
-                    
-        except Exception as e:
-            print(f"ERROR: Failed to update parameters using legacy methods: {str(e)}")
-
-    def get_parameter_update_summary(self) -> dict:
-        """
-        Get a summary of recent parameter updates.
-        
-        Returns:
-            Dictionary with update summary information
-        """
-        try:
-            # This would integrate with the configuration reader service
-            # to get update statistics and information
-            if hasattr(self.master, 'configuration_reader_service'):
-                config_reader = self.master.configuration_reader_service
-                if hasattr(config_reader, 'get_update_statistics'):
-                    return config_reader.get_update_statistics()
-            
-            return {
-                'total_updates': 0,
-                'changed_updates': 0,
-                'unchanged_updates': 0,
-                'last_update': None,
-                'error': 'Configuration reader service not available'
-            }
-            
-        except Exception as e:
-            return {'error': f'Failed to get update summary: {str(e)}'}
-
-    def export_parameter_updates(self, file_path: str = None) -> str:
-        """
-        Export parameter update log.
-        
-        Args:
-            file_path: Optional file path to save the log
-            
-        Returns:
-            Log content as string or error message
-        """
-        try:
-            if hasattr(self.master, 'configuration_reader_service'):
-                config_reader = self.master.configuration_reader_service
-                if hasattr(config_reader, 'export_parameter_update_log'):
-                    return config_reader.export_parameter_update_log(file_path)
-            
-            return "ERROR: Configuration reader service not available for export"
-            
-        except Exception as e:
-            return f"ERROR: Failed to export parameter updates: {str(e)}"
-    
-    def _setup_enhanced_apn_validation_with_mixin(self):
-        """Set up enhanced APN validation using ValidationMixin with progressive feedback."""
-        try:
-            # Get APN settings parameter widget
-            network_section = self.section_widgets.get('network_parameters')
-            if not network_section:
-                print("Warning: Network parameters section not found for APN validation setup")
-                return
-            
-            apn_parameter = network_section.parameters.get('apn_settings')
-            if not apn_parameter:
-                print("Warning: APN settings parameter not found for validation setup")
-                return
-            
-            # Store APN widgets for validation
-            self.apn_widgets = apn_parameter.ui_elements
-            
-            # Set up enhanced real-time validation for APN fields using ValidationMixin
-            if 'apn' in self.apn_widgets:
-                apn_widget = self.apn_widgets['apn']
-                self.setup_real_time_validation(
-                    field_name='apn',
-                    widget=apn_widget,
-                    validation_callback=self._validate_apn_field_comprehensive,
-                    debounce_ms=500,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-                
-                user_widget = self.apn_widgets['user']
-                self.setup_real_time_validation(
-                    field_name='apn_user',
-                    widget=user_widget,
-                    validation_callback=self._validate_apn_user_field_comprehensive,
-                    debounce_ms=300,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-            
-            if 'password' in self.apn_widgets:
-                password_widget = self.apn_widgets['password']
-                self.setup_real_time_validation(
-                    field_name='apn_password',
-                    widget=password_widget,
-                    validation_callback=self._validate_apn_password_field_comprehensive,
-                    debounce_ms=300,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-            
-            print("Enhanced APN validation with progressive feedback setup completed successfully")
-            
-        except Exception as e:
-            print(f"Error setting up enhanced APN validation with mixin: {e}")
-    
-    def send_apn_command(self):
-        """Validates and sends the complete APN configuration command with enhanced validation."""
-        if not self.serial_service.is_connected:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("not_connected_error")
-            )
-            return
-
-        # Check if form submission should be prevented due to validation errors
-        if self.prevent_form_submission_on_validation_errors():
-            validation_errors = self.get_validation_errors()
-            error_messages = []
-            
-            for field_name, error_message in validation_errors.items():
-                field_display = field_name.replace('_', ' ').title()
-                error_messages.append(f"{field_display}: {error_message}")
-            
-            show_error(
-                self,
-                self.i18n.get("validation_errors", "Validation Errors"),
-                "Please fix the following validation errors before sending:\n\n" + "\n".join(error_messages)
-            )
-            return
-
-        # Get APN values from the network parameters section
-        apn_values = self._get_apn_values_from_section()
-        if not apn_values:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("apn_server_required")
-            )
-            return
-
-        server = apn_values.get('apn', '').strip()
-        user = apn_values.get('user', '').strip()
-        password = apn_values.get('password', '').strip()
-
-        # APN server is mandatory if any APN setting is being sent.
-        if not server:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("apn_server_required")
-            )
-            return
-
-        # Final comprehensive validation using the APN validation component
-        validation_result = self.apn_validation_component.validate_apn_configuration(server, user, password)
-        if not validation_result.is_valid:
-            show_error(
-                self,
-                self.i18n.get("invalid_apn_server_title", "Invalid APN Configuration"),
-                validation_result.error_message + 
-                (f"\n\nSuggestions:\n• " + "\n• ".join(validation_result.suggestions) if validation_result.suggestions else "")
-            )
-            return
-
-        # Construct the command. User and password can be empty.
-        command = f"ATSMS:APN,{server},{user},{password}#"
-        self.serial_service.send_command(command)
-        
-        # Show success feedback
-        show_info(
-            self,
-            self.i18n.get("success", "Success"),
-            f"APN configuration sent successfully:\nAPN: {server}\nUser: {user if user else '(none)'}"
-        )
-
-    def send_trans_mode_command(self):
-        """Sends the Transmission Mode command to the device (always TCP)."""
-        # Always use TCP (0) for transmission mode
-        self._send_command_if_value("ATSMS:SZCS#PROTOCOL={value}#", "0")
-    
-    def update_language_display(self):
-        """Updates all UI elements with the current language."""
-        # Update frame label
-        self.configure(label_text=self.i18n.get("parameters"))
-        
-        # Update all sections and parameters using the specification factory
-        self.parameter_specification_factory.update_language_display(self.section_widgets)
-    
-    def update_apn_fields(self, server=None, user=None, password=None):
-        """
-        Update APN fields with values read from the device.
-        
-        Args:
-            server: APN server value
-            user: APN user value
-            password: APN password value
-        """
-        print(f"DEBUG: update_apn_fields called with server={server}, user={user}, password={password}")
-        
-        # Build APN values dictionary
-        apn_values = {}
-        if server is not None:
-            apn_values['apn'] = server
-            print(f"Updated APN server to {server}")
-        if user is not None:
-            apn_values['user'] = user
-            print(f"Updated APN user to {user}")
-        if password is not None:
-            apn_values['password'] = password
-            print(f"Updated APN password to {password}")
-        
-        if apn_values:
-            # Update APN settings in the network parameters section
-            self.parameter_specification_factory.set_parameter_value(
-                'network_parameters', 'apn_settings', apn_values, self.section_widgets
-            )
-            self.highlight_updated_parameter("network_parameters.apn_settings", True)
-    
-    def update_parameter_value(self, param_name, value):
-        """
-        Update a parameter value.
-        
-        Args:
-            param_name: Name of the parameter to update (format: section_name.param_name)
-            value: Value to set
-        """
-        print(f"DEBUG: update_parameter_value called with param_name={param_name}, value={value}")
-        
-        # Parse section and parameter name
-        if '.' in param_name:
-            section_name, param_name_only = param_name.split('.', 1)
-            self.parameter_specification_factory.set_parameter_value(
-                section_name, param_name_only, value, self.section_widgets
-            )
-            print(f"Updated parameter {param_name} to {value}")
-            
-            # Highlight the parameter to show it was updated
-            self.highlight_updated_parameter(param_name, True)
-        else:
-            print(f"Invalid parameter name format: {param_name}")
-    
-    def get_section_names(self):
-        """Get all section names in order."""
-        return [section['config'].name for section in sorted(
-            self.parameter_sections.values(), 
-            key=lambda x: x['config'].order
-        )]
-    
-    def get_parameter_names_in_section(self, section_name):
-        """Get all parameter names in a specific section."""
-        if section_name in self.parameter_sections:
-            return list(self.parameter_sections[section_name]['parameters'].keys())
-        return []
-    
-    def is_parameter_visible(self, param_name):
-        """Check if a parameter is currently visible (for conditional parameters)."""
-        if param_name in self.parameter_widgets:
-            param_widget = self.parameter_widgets[param_name]
-            return param_widget['frame'].winfo_viewable()
-        return False
-
-    def update_parameter_fields(self, parsed_parameters: dict):
-        """
-        Update parameter fields from parsed device responses.
-        
-        Args:
-            parsed_parameters: Dictionary of parameter names to parsed values
-        """
-        try:
-            print(f"DEBUG: update_parameter_fields called with {len(parsed_parameters)} parameters")
-            
-            # Use the parameter specification factory to update fields
-            if hasattr(self, 'parameter_specification_factory') and hasattr(self, 'section_widgets'):
-                factory = self.parameter_specification_factory
-                section_widgets = self.section_widgets
-                
-                # Map parameter names to section/parameter structure
-                parameter_mapping = self._get_ui_parameter_mapping()
-                
-                for param_name, parsed_values in parsed_parameters.items():
-                    try:
-                        # Get section and parameter name from mapping
-                        section_info = parameter_mapping.get(param_name)
-                        if not section_info:
-                            print(f"WARNING: No UI mapping found for parameter {param_name}")
-                            continue
-                        
-                        section_name = section_info['section']
-                        param_key = section_info['parameter']
-                        
-                        print(f"DEBUG: Updating {section_name}.{param_key} with values: {parsed_values}")
-                        
-                        # Update the parameter value using the factory
-                        factory.set_parameter_value(section_name, param_key, parsed_values, section_widgets)
-                        
-                        # Highlight the updated parameter
-                        full_param_name = f"{section_name}.{param_key}"
-                        self.highlight_updated_parameter(full_param_name, True)
-                        
-                        print(f"DEBUG: Successfully updated {param_name}")
-                        
-                    except Exception as e:
-                        print(f"ERROR: Failed to update parameter {param_name}: {str(e)}")
-                
-                print(f"DEBUG: Completed updating {len(parsed_parameters)} parameters")
-            else:
-                print("WARNING: Parameter specification factory or section widgets not available")
-                # Fallback to legacy update methods
-                self._update_parameters_legacy(parsed_parameters)
-                
-        except Exception as e:
-            print(f"ERROR: Failed to update parameter fields: {str(e)}")
-
-    def _get_ui_parameter_mapping(self) -> dict:
-        """
-        Get mapping of parameter names to their UI section and parameter keys.
-        
-        Returns:
-            Dictionary mapping parameter names to section info
-        """
-        return {
-            # Network Parameters
-            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
-            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
-            
-            # Time Parameters
-            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
-            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
-            
-            # Service Parameters
-            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
-            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
-            
-            # Ignition Parameters
-            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
-            
-            # Speed Parameters
-            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
-            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
-            
-            # Power Saving Parameters
-            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
-            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
-            
-            # Angle Parameters
-            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
-            
-            # Battery Alert Parameters
-            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
-            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
-            
-            # Vibration Sensor Parameters
-            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
-            
-            # Jammer Detection Parameters
-            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
-            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
-            
-            # Miscellaneous Parameters
-            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
-            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
-        }
-
-    def _update_parameters_legacy(self, parsed_parameters: dict):
-        """
-        Update parameters using legacy methods as fallback.
-        
-        Args:
-            parsed_parameters: Dictionary of parameter names to parsed values
-        """
-        try:
-            print("DEBUG: Using legacy parameter update methods")
-            
-            # Handle specific parameter types with legacy methods
-            if 'apn_settings' in parsed_parameters:
-                apn_data = parsed_parameters['apn_settings']
-                self.update_apn_fields(
-                    server=apn_data.get('apn', ''),
-                    user=apn_data.get('user', ''),
-                    password=apn_data.get('password', '')
-                )
-            
-            # Add more legacy parameter updates as needed
-            for param_name, values in parsed_parameters.items():
-                if isinstance(values, dict):
-                    for field_name, field_value in values.items():
-                        full_param_name = f"{param_name}.{field_name}"
-                        self.update_parameter_value(full_param_name, field_value)
-                else:
-                    self.update_parameter_value(param_name, values)
-                    
-        except Exception as e:
-            print(f"ERROR: Failed to update parameters using legacy methods: {str(e)}")
-
-    def get_parameter_update_summary(self) -> dict:
-        """
-        Get a summary of recent parameter updates.
-        
-        Returns:
-            Dictionary with update summary information
-        """
-        try:
-            # This would integrate with the configuration reader service
-            # to get update statistics and information
-            if hasattr(self.master, 'configuration_reader_service'):
-                config_reader = self.master.configuration_reader_service
-                if hasattr(config_reader, 'get_update_statistics'):
-                    return config_reader.get_update_statistics()
-            
-            return {
-                'total_updates': 0,
-                'changed_updates': 0,
-                'unchanged_updates': 0,
-                'last_update': None,
-                'error': 'Configuration reader service not available'
-            }
-            
-        except Exception as e:
-            return {'error': f'Failed to get update summary: {str(e)}'}
-
-    def export_parameter_updates(self, file_path: str = None) -> str:
-        """
-        Export parameter update log.
-        
-        Args:
-            file_path: Optional file path to save the log
-            
-        Returns:
-            Log content as string or error message
-        """
-        try:
-            if hasattr(self.master, 'configuration_reader_service'):
-                config_reader = self.master.configuration_reader_service
-                if hasattr(config_reader, 'export_parameter_update_log'):
-                    return config_reader.export_parameter_update_log(file_path)
-            
-            return "ERROR: Configuration reader service not available for export"
-            
-        except Exception as e:
-            return f"ERROR: Failed to export parameter updates: {str(e)}"
-    
-    def _setup_enhanced_apn_validation_with_mixin(self):
-        """Set up enhanced APN validation using ValidationMixin with progressive feedback."""
-        try:
-            # Get APN settings parameter widget
-            network_section = self.section_widgets.get('network_parameters')
-            if not network_section:
-                print("Warning: Network parameters section not found for APN validation setup")
-                return
-            
-            apn_parameter = network_section.parameters.get('apn_settings')
-            if not apn_parameter:
-                print("Warning: APN settings parameter not found for validation setup")
-                return
-            
-            # Store APN widgets for validation
-            self.apn_widgets = apn_parameter.ui_elements
-            
-            # Set up enhanced real-time validation for APN fields using ValidationMixin
-            if 'apn' in self.apn_widgets:
-                apn_widget = self.apn_widgets['apn']
-                self.setup_real_time_validation(
-                    field_name='apn',
-                    widget=apn_widget,
-                    validation_callback=self._validate_apn_field_comprehensive,
-                    debounce_ms=500,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-                
-                user_widget = self.apn_widgets['user']
-                self.setup_real_time_validation(
-                    field_name='apn_user',
-                    widget=user_widget,
-                    validation_callback=self._validate_apn_user_field_comprehensive,
-                    debounce_ms=300,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-            
-            if 'password' in self.apn_widgets:
-                password_widget = self.apn_widgets['password']
-                self.setup_real_time_validation(
-                    field_name='apn_password',
-                    widget=password_widget,
-                    validation_callback=self._validate_apn_password_field_comprehensive,
-                    debounce_ms=300,
-                    enable_tooltips=True,
-                    enable_message_display=True
-                )
-            
-            print("Enhanced APN validation with progressive feedback setup completed successfully")
-            
-        except Exception as e:
-            print(f"Error setting up enhanced APN validation with mixin: {e}")
-    
-    def send_apn_command(self):
-        """Validates and sends the complete APN configuration command with enhanced validation."""
-        if not self.serial_service.is_connected:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("not_connected_error")
-            )
-            return
-
-        # Check if form submission should be prevented due to validation errors
-        if self.prevent_form_submission_on_validation_errors():
-            validation_errors = self.get_validation_errors()
-            error_messages = []
-            
-            for field_name, error_message in validation_errors.items():
-                field_display = field_name.replace('_', ' ').title()
-                error_messages.append(f"{field_display}: {error_message}")
-            
-            show_error(
-                self,
-                self.i18n.get("validation_errors", "Validation Errors"),
-                "Please fix the following validation errors before sending:\n\n" + "\n".join(error_messages)
-            )
-            return
-
-        # Get APN values from the network parameters section
-        apn_values = self._get_apn_values_from_section()
-        if not apn_values:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("apn_server_required")
-            )
-            return
-
-        server = apn_values.get('apn', '').strip()
-        user = apn_values.get('user', '').strip()
-        password = apn_values.get('password', '').strip()
-
-        # APN server is mandatory if any APN setting is being sent.
-        if not server:
-            show_error(
-                self,
-                self.i18n.get("error"),
-                self.i18n.get("apn_server_required")
-            )
-            return
-
-        # Final comprehensive validation using the APN validation component
-        validation_result = self.apn_validation_component.validate_apn_configuration(server, user, password)
-        if not validation_result.is_valid:
-            show_error(
-                self,
-                self.i18n.get("invalid_apn_server_title", "Invalid APN Configuration"),
-                validation_result.error_message + 
-                (f"\n\nSuggestions:\n• " + "\n• ".join(validation_result.suggestions) if validation_result.suggestions else "")
-            )
-            return
-
-        # Construct the command. User and password can be empty.
-        command = f"ATSMS:APN,{server},{user},{password}#"
-        self.serial_service.send_command(command)
-        
-        # Show success feedback
-        show_info(
-            self,
-            self.i18n.get("success", "Success"),
-            f"APN configuration sent successfully:\nAPN: {server}\nUser: {user if user else '(none)'}"
-        )
-
-    def send_trans_mode_command(self):
-        """Sends the Transmission Mode command to the device (always TCP)."""
-        # Always use TCP (0) for transmission mode
-        self._send_command_if_value("ATSMS:SZCS#PROTOCOL={value}#", "0")
-    
-    def update_language_display(self):
-        """Updates all UI elements with the current language."""
-        # Update frame label
-        self.configure(label_text=self.i18n.get("parameters"))
-        
-        # Update all sections and parameters using the specification factory
-        self.parameter_specification_factory.update_language_display(self.section_widgets)
-    
-    def update_apn_fields(self, server=None, user=None, password=None):
-        """
-        Update APN fields with values read from the device.
-        
-        Args:
-            server: APN server value
-            user: APN user value
-            password: APN password value
-        """
-        print(f"DEBUG: update_apn_fields called with server={server}, user={user}, password={password}")
-        
-        # Build APN values dictionary
-        apn_values = {}
-        if server is not None:
-            apn_values['apn'] = server
-            print(f"Updated APN server to {server}")
-        if user is not None:
-            apn_values['user'] = user
-            print(f"Updated APN user to {user}")
-        if password is not None:
-            apn_values['password'] = password
-            print(f"Updated APN password to {password}")
-        
-        if apn_values:
-            # Update APN settings in the network parameters section
-            self.parameter_specification_factory.set_parameter_value(
-                'network_parameters', 'apn_settings', apn_values, self.section_widgets
-            )
-            self.highlight_updated_parameter("network_parameters.apn_settings", True)
-    
-    def update_parameter_value(self, param_name, value):
-        """
-        Update a parameter value.
-        
-        Args:
-            param_name: Name of the parameter to update (format: section_name.param_name)
-            value: Value to set
-        """
-        print(f"DEBUG: update_parameter_value called with param_name={param_name}, value={value}")
-        
-        # Parse section and parameter name
-        if '.' in param_name:
-            section_name, param_name_only = param_name.split('.', 1)
-            self.parameter_specification_factory.set_parameter_value(
-                section_name, param_name_only, value, self.section_widgets
-            )
-            print(f"Updated parameter {param_name} to {value}")
-            
-            # Highlight the parameter to show it was updated
-            self.highlight_updated_parameter(param_name, True)
-        else:
-            print(f"Invalid parameter name format: {param_name}")
-    
-    def get_section_names(self):
-        """Get all section names in order."""
-        return [section['config'].name for section in sorted(
-            self.parameter_sections.values(), 
-            key=lambda x: x['config'].order
-        )]
-    
-    def get_parameter_names_in_section(self, section_name):
-        """Get all parameter names in a specific section."""
-        if section_name in self.parameter_sections:
-            return list(self.parameter_sections[section_name]['parameters'].keys())
-        return []
-    
-    def is_parameter_visible(self, param_name):
-        """Check if a parameter is currently visible (for conditional parameters)."""
-        if param_name in self.parameter_widgets:
-            param_widget = self.parameter_widgets[param_name]
-            return param_widget['frame'].winfo_viewable()
-        return False
-
-    def update_parameter_fields(self, parsed_parameters: dict):
-        """
-        Update parameter fields from parsed device responses.
-        
-        Args:
-            parsed_parameters: Dictionary of parameter names to parsed values
-        """
-        try:
-            print(f"DEBUG: update_parameter_fields called with {len(parsed_parameters)} parameters")
-            
-            # Use the parameter specification factory to update fields
-            if hasattr(self, 'parameter_specification_factory') and hasattr(self, 'section_widgets'):
-                factory = self.parameter_specification_factory
-                section_widgets = self.section_widgets
-                
-                # Map parameter names to section/parameter structure
-                parameter_mapping = self._get_ui_parameter_mapping()
-                
-                for param_name, parsed_values in parsed_parameters.items():
-                    try:
-                        # Get section and parameter name from mapping
-                        section_info = parameter_mapping.get(param_name)
-                        if not section_info:
-                            print(f"WARNING: No UI mapping found for parameter {param_name}")
-                            continue
-                        
-                        section_name = section_info['section']
-                        param_key = section_info['parameter']
-                        
-                        print(f"DEBUG: Updating {section_name}.{param_key} with values: {parsed_values}")
-                        
-                        # Update the parameter value using the factory
-                        factory.set_parameter_value(section_name, param_key, parsed_values, section_widgets)
-                        
-                        # Highlight the updated parameter
-                        full_param_name = f"{section_name}.{param_key}"
-                        self.highlight_updated_parameter(full_param_name, True)
-                        
-                        print(f"DEBUG: Successfully updated {param_name}")
-                        
-                    except Exception as e:
-                        print(f"ERROR: Failed to update parameter {param_name}: {str(e)}")
-                
-                print(f"DEBUG: Completed updating {len(parsed_parameters)} parameters")
-            else:
-                print("WARNING: Parameter specification factory or section widgets not available")
-                # Fallback to legacy update methods
-                self._update_parameters_legacy(parsed_parameters)
-                
-        except Exception as e:
-            print(f"ERROR: Failed to update parameter fields: {str(e)}")
-
-    def _get_ui_parameter_mapping(self) -> dict:
-        """
-        Get mapping of parameter names to their UI section and parameter keys.
-        
-        Returns:
-            Dictionary mapping parameter names to section info
-        """
-        return {
-            # Network Parameters
-            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
-            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
-            
-            # Time Parameters
-            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
-            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
-            
-            # Service Parameters
-            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
-            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
-            
-            # Ignition Parameters
-            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
-            
-            # Speed Parameters
-            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
-            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
-            
-            # Power Saving Parameters
-            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
-            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
-            
-            # Angle Parameters
-            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
-            
-            # Battery Alert Parameters
-            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
-            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
-            
-            # Vibration Sensor Parameters
-            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
-            
-            # Jammer Detection Parameters
-            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
-            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
-            
-            # Miscellaneous Parameters
-            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
-            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'}
-        }
-
-    def _update_parameters_legacy(self, parsed_parameters: dict):
-        """
-        Update parameters using legacy methods as fallback.
-        
-        Args:
-            parsed_parameters: Dictionary of parameter names to parsed values
-        """
-        try:
-            print("DEBUG: Using legacy parameter update methods")
-            
-            # Handle specific parameter types with legacy methods
-            if 'apn_settings' in parsed_parameters:
-                apn_data = parsed_parameters['apn_settings']
-                self.update_apn_fields(
-                    server=apn_data.get('apn', ''),
-                    user=apn_data.get('user', ''),
-                    password=apn_data.get('password', '')
-                )
-            
-            # Add more legacy parameter updates as needed
-            for param_name, values in parsed_parameters.items():
-                if isinstance(values, dict):
-                    for field_name, field_value in values.items():
-                        full_param_name = f"{param_name}.{field_name}"
-                        self.update_parameter_value(full_param_name, field_value)
-                else:
-                    self.update_parameter_value(param_name, values)
-                    
-        except Exception as e:
-            print(f"ERROR: Failed to update parameters using legacy methods: {str(e)}")
-
-    def get_parameter_update_summary(self) -> dict:
-        """
-        Get a summary of recent parameter updates.
-        
-        Returns:
-            Dictionary with update summary information
-        """
-        try:
-            # This would integrate with the configuration reader service
-            # to get update statistics and information
-            if hasattr(self.master, 'configuration_reader_service'):
-                config_reader = self.master.configuration_reader_service
-                if hasattr(config_reader, 'get_update_statistics'):
-                    return config_reader.get_update_statistics()
-            
-            return {
-                'total_updates': 0,
-                'changed_updates': 0,
-                'unchanged_updates': 0,
-                'last_update': None,
-                'error': 'Configuration reader service not available'
+                'error': 'Configuration reader service not. available'
             }
             
         except Exception as e:

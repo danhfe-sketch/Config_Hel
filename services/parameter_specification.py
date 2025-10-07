@@ -600,27 +600,43 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
         name='alerts',
         label='Alertas',
         order=15,
+        parameters={}  # Removed duplicate movement alert from here - it's defined in movement_alerts section
+    ),
+
+    'movement_alerts': SectionConfig(
+        name='movement_alerts',
+        label='Alertas de Movimento',
+        order=16,
         parameters={
-            'movement_alert': ParameterConfig(
-                name='movement_alert',
-                label='Alerta de Movimento',
+            'moving_alert': ParameterConfig(
+                name='moving_alert',
+                label='Habilitar alerta de movimento (por distância)',
+                description='Configures movement alert based on distance.',
                 fields={
                     'enabled': FieldConfig(
                         name='enabled',
-                        label='Habilitar Alerta de Movimento',
+                        label='Habilitar Alerta de movimento',
                         ui_element='toggle_switch'
+                    ),
+                    'radius': FieldConfig(
+                        name='radius',
+                        label='Raio de movimentação',
+                        ui_element='number_input',
+                        validation='100-1000',
+                        unit='meters',
+                        visibility_condition='enabled == true'  # Only show when enabled
                     ),
                     'alert_type': FieldConfig(
                         name='alert_type',
                         label='Tipo de Alerta',
                         ui_element='dropdown',
-                        options=['Apenas GPRS', 'SMS+GPRS'],
-                        visibility_condition='enabled == true'
+                        options=['Apenas GPRS', 'GPRS+SMS'],
+                        visibility_condition='enabled == true'  # Only show when enabled
                     )
                 },
                 commands={
-                    'set': 'SENALM,<enabled>,<alert_type>#',
-                    'read': 'SENALM#'
+                    'set': 'MOVING,<enabled>,<radius>,<alert_type>#',
+                    'read': 'MOVING#'
                 }
             )
         }

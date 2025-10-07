@@ -197,6 +197,20 @@ class ParameterResponseParser:
                 'description': 'Hourmeter configuration response'
             },
             
+            # Movement Alert Parameters
+            'moving': {
+                'pattern': r'MOVING:(OFF|ON,(\d+),(\d+))',
+                'fields': ['full_match', 'radius', 'notification_mode'],
+                'description': 'Movement alert configuration response',
+                'post_process': self._process_moving_alert_response
+            },
+            'moving_alert': {
+                'pattern': r'MOVING:(OFF|ON,(\d+),(\d+))',
+                'fields': ['full_match', 'radius', 'notification_mode'],
+                'description': 'Movement alert configuration response',
+                'post_process': self._process_moving_alert_response
+            },
+            
             # Device Information Patterns
             'device_imei': {
                 'pattern': r'IMEI[=:]\s*(\d+)',
@@ -647,6 +661,54 @@ class ParameterResponseParser:
             values['enabled'] = bool(values['enabled'])
         
         return values
+
+    def _process_moving_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process movement alert configuration response."""
+        # Debug log the incoming values
+        self.logger.debug(f"Processing moving alert response - raw values: {values}")
+        
+        # Handle OFF case
+        if 'full_match' in values and values['full_match'] == 'OFF':
+            result = {
+                'enabled': False,
+                'radius': 1000,  # Default to 1000m when disabled
+                'notification_mode': 0,
+                'alert_type': 'Apenas GPRS'  # Match the UI field name
+            }
+            self.logger.debug(f"Processed OFF case - result: {result}")
+            return result
+        
+        # Handle numeric format case
+        try:
+            # Convert radius to integer
+            radius = None
+            if 'radius' in values and values['radius'] is not None:
+                radius = int(values['radius'])
+            
+            # Convert notification mode to integer
+            notification_mode = 0
+            if 'notification_mode' in values and values['notification_mode'] is not None:
+                notification_mode = int(values['notification_mode'])
+            
+            # Build result with UI-matching field names
+            result = {
+                'enabled': True,
+                'radius': radius if radius is not None else 1000,  # Default to 1000m
+                'notification_mode': notification_mode,
+                'alert_type': 'SMS+GPRS' if notification_mode == 1 else 'Apenas GPRS'  # Match the UI field name
+            }
+            self.logger.debug(f"Processed ON case - result: {result}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process moving alert response: {e}")
+            # Return safe defaults on error
+            return {
+                'enabled': False,
+                'radius': 1000,
+                'notification_mode': 0,
+                'alert_type': 'Apenas GPRS'
+            }
 
     def _process_status_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
         """Process device status response (complex multi-line format)."""

@@ -610,6 +610,7 @@ class SerialService:
         print(f"DEBUG: Flattened parameters: {flattened_parameters}")  # Also print to console
         
         # Get bulk commands in the correct sequence
+        progress_dialog_id = None
         try:
             self.app.log_frame.log_message("DEBUG: Calling device_command_mapper.get_bulk_commands()\n")
             commands = self.app.device_command_mapper.get_bulk_commands(flattened_parameters)
@@ -813,110 +814,14 @@ class SerialService:
             Flattened parameter dictionary
         """
         flattened = {}
-        
-        try:
-            # Handle the hierarchical structure from the specification-based UI
-            for section_name, section_data in parameters.items():
-                if isinstance(section_data, dict):
-                    for param_name, param_data in section_data.items():
-                        if isinstance(param_data, dict):
-                            # Handle nested parameter data (like apn_settings)
-                            for field_name, field_value in param_data.items():
-                                if field_value is not None:
-                                    # Map to the expected flat structure
-                                    if param_name == 'apn_settings':
-                                        if field_name == 'apn':
-                                            flattened['apn_server'] = field_value
-                                        elif field_name == 'user':
-                                            flattened['apn_user'] = field_value
-                                        elif field_name == 'password':
-                                            flattened['apn_password'] = field_value
-                                    elif param_name == 'server_settings':
-                                        if field_name == 'address':
-                                            flattened['server_address'] = field_value
-                                        elif field_name == 'port':
-                                            flattened['server_port'] = field_value
-                                    elif param_name == 'report_intervals':
-                                        if field_name == 'moving_time':
-                                            flattened['moving_time'] = field_value
-                                        elif field_name == 'stopped_time':
-                                            flattened['stopped_time'] = field_value
-                                    elif param_name == 'heartbeat_intervals':
-                                        if field_name == 'moving_heartbeat':
-                                            flattened['moving_heartbeat'] = field_value
-                                        elif field_name == 'stopped_heartbeat':
-                                            flattened['stopped_heartbeat'] = field_value
-                                    elif param_name == 'ignition_type':
-                                        if field_name == 'ignition_mode':
-                                            flattened['ignition_mode'] = field_value
-                                        elif field_name == 'on_voltage':
-                                            flattened['on_voltage'] = field_value
-                                        elif field_name == 'off_voltage':
-                                            flattened['off_voltage'] = field_value
-                                    elif param_name == 'speed_alert':
-                                        if field_name == 'enabled':
-                                            flattened['speed_alert_enabled'] = field_value
-                                        elif field_name == 'detection_time':
-                                            flattened['speed_detection_time'] = field_value
-                                        elif field_name == 'speed_limit':
-                                            flattened['speed_limit'] = field_value
-                                        elif field_name == 'alert_type':
-                                            flattened['speed_alert_type'] = field_value
-                                    elif param_name == 'main_power_alert':
-                                        if field_name == 'enabled':
-                                            flattened['main_power_alert_enabled'] = field_value
-                                        elif field_name == 'alert_type':
-                                            flattened['main_power_alert_type'] = field_value
-                                        elif field_name == 'detection_time':
-                                            flattened['main_power_detection_time'] = field_value
-                                        elif field_name == 'min_charge_time':
-                                            flattened['main_power_min_charge_time'] = field_value
-                                    elif param_name == 'vibration_sensitivity':
-                                        if field_name == 'level':
-                                            flattened['vibration_level'] = field_value
-                                    elif param_name == 'jammer_relay_action':
-                                        if field_name == 'enabled':
-                                            flattened['jammer_relay_enabled'] = field_value
-                                        elif field_name == 'output_operation':
-                                            flattened['jammer_output_operation'] = field_value
-                                        elif field_name == 'confirmation_time':
-                                            flattened['jammer_confirmation_time'] = field_value
-                                        elif field_name == 'speed_limit':
-                                            flattened['jammer_speed_limit'] = field_value
-                                    else:
-                                        # Generic mapping for other nested parameters
-                                        flattened[f"{param_name}_{field_name}"] = field_value
-                        else:
-                            # Handle simple parameter values
-                            if param_data is not None:
-                                if param_name == 'protocol':
-                                    flattened['protocol'] = param_data
-                                elif param_name == 'tcp_ack':
-                                    flattened['tcp_ack'] = param_data
-                                elif param_name == 'sleep_mode':
-                                    flattened['sleep_mode'] = param_data
-                                elif param_name == 'sleep_time':
-                                    flattened['sleep_time'] = param_data
-                                elif param_name == 'speed_buzzer':
-                                    flattened['speed_buzzer'] = param_data
-                                elif param_name == 'backup_battery_alert':
-                                    flattened['backup_battery_alert'] = param_data
-                                elif param_name == 'jammer_detection':
-                                    flattened['jammer_detection'] = param_data
-                                elif param_name == 'odometer':
-                                    flattened['odometer'] = param_data
-                                elif param_name == 'hourmeter':
-                                    flattened['hourmeter'] = param_data
-                                else:
-                                    # Generic mapping for other simple parameters
-                                    flattened[param_name] = param_data
-            
-            self.app.log_frame.log_message(f"DEBUG: Flattened {len(parameters)} sections into {len(flattened)} parameters\n")
-            
-        except Exception as e:
-            self.app.log_frame.log_message(f"ERROR: Failed to flatten parameters: {str(e)}\n")
-            print(f"ERROR: Failed to flatten parameters: {str(e)}")
-            
+        for section_name, section_data in parameters.items():
+            if isinstance(section_data, dict):
+                for param_name, param_data in section_data.items():
+                    if isinstance(param_data, dict):
+                        for field_name, field_value in param_data.items():
+                            flattened[f"{param_name}.{field_name}"] = field_value
+                    else:
+                        flattened[param_name] = param_data
         return flattened
         
     def _process_config_check_results(self, results: Dict[str, Any]) -> None:
