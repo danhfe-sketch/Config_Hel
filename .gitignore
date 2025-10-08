@@ -1,1 +1,8 @@
 .kiro/specs/simplified-profile-loading/tasks.md
+components/__pycache__/
+models/__pycache__/
+services/__pycache__/
+ui/__pycache__/
+tests/__pycache__/
+utils/__pycache__/
+venv/

@@ -221,7 +221,9 @@ class DeviceCommandMapper:
             'backup_battery_alert': "BATALM,{state},{mode}#",
             'vibration_sensitivity': "SZCS#VIBL={level}",
             'angle_report': "SZCS#ANGLEVALUE={min_speed}-{angle_variation}#",
-            'speed_buzzer': "SZCS#SPD_LED_SHOW={value}#"
+            'speed_buzzer': "SZCS#SPD_LED_SHOW={value}#",
+            'sends_control': "SZCS#SENDS={value}#",
+            'backup_battery_protection_voltage': "SZCS#BATSLPVALUE={value}#"
         }
 
     def _init_value_mappings(self) -> None:
@@ -709,6 +711,12 @@ class DeviceCommandMapper:
             ValueError: If value mapping fails
         """
         try:
+            if param_name == 'backup_battery_protection_voltage':
+                try:
+                    return str(int(float(value)))
+                except (ValueError, TypeError):
+                    self.logger.warning(f"Could not convert backup_battery_protection_voltage value '{value}' to int.")
+
             # Special handling for boolean values in specific parameters
             if param_name == 'speed_buzzer' and isinstance(value, bool):
                 # Map boolean to 1/0 for speed buzzer
@@ -991,7 +999,7 @@ class DeviceCommandMapper:
         self.logger.info(f"Parameters keys: {list(parameters.keys())}")
 
         # Remove UI-only parameters that do not map to device commands
-        params_to_ignore = ['backup_battery_protection_voltage', 'sends_control']
+        params_to_ignore = []
         for p in params_to_ignore:
             if p in parameters:
                 del parameters[p]
@@ -1286,7 +1294,7 @@ class DeviceCommandMapper:
                 self.logger.debug(f"Processing additional param: {param_name} = {param_value}")
                 
                 # Skip None values, empty strings, and metadata parameters
-                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version', 'backup_battery_protection_voltage', 'sends_control']:
+                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version', 'sends_control']:
                     self.logger.debug(f"Skipping additional param {param_name}: empty or metadata")
                     continue
                     
