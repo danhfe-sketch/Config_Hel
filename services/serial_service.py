@@ -36,7 +36,7 @@ class SerialService:
         self.queue_callback = None
         self.queue_results = {}  # Store results from command queue execution
         # How long to wait for a device response between queued commands
-        self.queue_response_timeout = 3.0  # seconds
+        self.queue_response_timeout = 10.0  # seconds
 
         # Connection monitoring
         self.last_activity_time = None

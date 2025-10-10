@@ -258,12 +258,14 @@ class ParameterSpecificationFactory:
             
             ui_elements[field_name] = ui_element
             
-            # Handle conditional visibility
+            # Set value change callback for all fields to handle conditional logic
+            full_field_name = f"{param_config.name}.{field_name}"
+            ui_element.set_value_change_callback(lambda value, name=full_field_name: self._on_field_value_change(name, value))
+
+            # Handle conditional visibility registration
             if field_config.visibility_condition:
-                full_field_name = f"{param_config.name}.{field_name}"
                 self.conditional_field_manager.register_field_widget(full_field_name, element_widget)
                 self.field_element_mapping[full_field_name] = ui_element
-                ui_element.set_value_change_callback(lambda value, name=full_field_name: self._on_field_value_change(name, value))
             
             field_row += 1
         
@@ -940,7 +942,6 @@ class ParameterSpecificationFactory:
     
     def _send_ignition_command(self, values: dict):
         """Send ignition configuration command"""
-        # The ignition parameter has multiple fields, get the ignition_mode field
         ignition_mode = str(values.get('ignition_mode', '')).strip()
         
         if not ignition_mode:
@@ -949,9 +950,9 @@ class ParameterSpecificationFactory:
                 self.i18n_service.get("ignition_type_required", "Ignition type is required")
             )
             return
-        
+
+        command = None
         if ignition_mode == 'Virtual por bateria (Virtual by battery)':
-            # Battery-based ignition requires voltage values
             on_voltage = str(values.get('on_voltage', '')).strip()
             off_voltage = str(values.get('off_voltage', '')).strip()
             
@@ -962,20 +963,11 @@ class ParameterSpecificationFactory:
                 )
                 return
             
-            commands = [
-                "ATSMS:SZCS#ACCLINE=1",
-                f"ATSMS:SZCS#ACC_CFG=1-{on_voltage}-{off_voltage}"
-            ]
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage}-{off_voltage}"
         elif ignition_mode == 'Física (Physical)':
-            commands = [
-                "ATSMS:SZCS#ACCLINE=1",
-                "ATSMS:SZCS#ACC_CFG=0-000-000"
-            ]
+            command = "ATSMS:SZCS#ACCLINE=1#ACC_CFG=0-000-000"
         elif ignition_mode == 'Virtual por acelerômetro (Virtual by accelerometer)':
-            commands = [
-                "ATSMS:SZCS#ACCLINE=0",
-                "ATSMS:SZCS#ACC_CFG=0-000-000"
-            ]
+            command = "ATSMS:SZCS#ACCLINE=0#ACC_CFG=0-000-000"
         else:
             messagebox.showerror(
                 self.i18n_service.get("error", "Error"),
@@ -983,8 +975,7 @@ class ParameterSpecificationFactory:
             )
             return
         
-        # Send all commands
-        for command in commands:
+        if command:
             self.serial_service.send_command(command)
         
         messagebox.showinfo(
@@ -1098,7 +1089,7 @@ class ParameterSpecificationFactory:
             # Use the exact strings (preserve leading zeros) that were captured from UI
             min_speed_str = f"{int(min_speed):02d}"
             angle_variation_str = f"{int(angle_variation):03d}"
-            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}#"
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}"
         else:
             command = f"ATSMS:SZCS#ANGLEVALUE=00-000#"
         
@@ -1218,8 +1209,12 @@ class ParameterSpecificationFactory:
     def _send_jammer_relay_action_command(self, values: dict):
         """Send jammer relay action configuration command"""
         output_operation = str(values.get('output_operation', '')).strip()
-        confirmation_time = str(values.get('confirmation_time', '')).strip()
-        speed_limit = str(values.get('speed_limit', '')).strip()
+        confirmation_time = str(values.get('confirmation_time', '0')).strip()
+        speed_limit = str(values.get('speed_limit', '0')).strip()
+        param_d = str(values.get('param_d', '0')).strip()
+        param_e = str(values.get('param_e', '0')).strip()
+        param_f = str(values.get('param_f', '0')).strip()
+        param_g_text = str(values.get('param_g', '')).strip()
         
         # Map output operation to command value
         operation_mapping = {
@@ -1228,18 +1223,14 @@ class ParameterSpecificationFactory:
             'Ativar e Desativar com Jammer': '2'
         }
         op_value = operation_mapping.get(output_operation, '0')
+
+        param_g_mapping = {
+            'Manter ativada': '0',
+            'Manter desativada': '1'
+        }
+        param_g_value = param_g_mapping.get(param_g_text, '0')
         
-        if op_value != '0':
-            if not confirmation_time or not speed_limit:
-                messagebox.showerror(
-                    self.i18n_service.get("error", "Error"),
-                    self.i18n_service.get("jammer_relay_values_required", "Confirmation time and speed limit are required when jammer relay action is enabled")
-                )
-                return
-            # JAMRELAY command format: op,time,speed,d,e,f,g
-            command = f"ATSMS:JAMRELAY,{op_value},{confirmation_time},{speed_limit},0,0,0,0"
-        else:
-            command = "ATSMS:JAMRELAY,0,0,0,0,0,0,0"
+        command = f"ATSMS:JAMRELAY,{op_value},{confirmation_time},{speed_limit},{param_d},{param_e},{param_f},{param_g_value}#"
         
         self.serial_service.send_command(command)
         messagebox.showinfo(

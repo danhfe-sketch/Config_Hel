@@ -355,6 +355,26 @@ This document provides a structured specification of the user interface componen
         *   **label:** "Velocidade limite (km/h)"
         *   **ui_element:** "number_input"
         *   **validation:** "0-255"
+    *   **field_5:**
+        *   **name:** d_parameter
+        *   **label:** "Tempo da saída ativada (GND) (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-30"
+    *   **field_6:**
+        *   **name:** e_parameter
+        *   **label:** "Tempo as saída desativada (aberto) (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-30"
+    *   **field_7:**
+        *   **name:** f_parameter
+        *   **label:** "Quantidade de ciclos D e E"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-255"
+    *   **field_8:**
+        *   **name:** g_parameter
+        *   **label:** "Estado da saída após o fim dos ciclos"
+        *   **ui_element:** "dropdown"
+        *   **options:** ["Mantém saída ativada (GND)", "Mantém saída desativada (aberto)"]
 *   **commands:**
     *   **set:** `JAMRELAY,<op>,<time>,<speed>,<D>,<E>,<F>,<G>#` (Note: This is a complex command with multiple parameters)
     *   **read:** `JAMRELAY#`

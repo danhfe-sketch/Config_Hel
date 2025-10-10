@@ -217,15 +217,13 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         name='on_voltage',
                         label='Tensão para Ligar (ON)',
                         ui_element='number_input',
-                        unit='volts',
-                        visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+                        unit='volts'
                     ),
                     'off_voltage': FieldConfig(
                         name='off_voltage',
                         label='Tensão para Desligar (OFF)',
                         ui_element='number_input',
-                        unit='volts',
-                        visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+                        unit='volts'
                     )
                 },
                 commands={
@@ -494,6 +492,30 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         label='Velocidade limite (km/h)',
                         ui_element='number_input',
                         validation='0-255'
+                    ),
+                    'param_d': FieldConfig(
+                        name='param_d',
+                        label='Tempo da saída ativada (s)',
+                        ui_element='number_input',
+                        validation='1-30'
+                    ),
+                    'param_e': FieldConfig(
+                        name='param_e',
+                        label='Tempo da saída desativada (s)',
+                        ui_element='number_input',
+                        validation='1-30'
+                    ),
+                    'param_f': FieldConfig(
+                        name='param_f',
+                        label='Quantidade de ciclos',
+                        ui_element='number_input',
+                        validation='1-255'
+                    ),
+                    'param_g': FieldConfig(
+                        name='param_g',
+                        label='Estado da saída após ciclos',
+                        ui_element='dropdown',
+                        options=['Manter ativada', 'Manter desativada']
                     )
                 },
                 commands={
@@ -752,6 +774,10 @@ COMMAND_VALUE_MAPPINGS = {
         'Ativar e Manter': 1,
         'Ativar e Desativar com Jammer': 2
     },
+    'param_g': {
+        'Manter ativada': 0,
+        'Manter desativada': 1
+    },
     'boolean_on_off': {
         True: 'ON',
         False: 'OFF'
@@ -765,14 +791,6 @@ COMMAND_VALUE_MAPPINGS = {
 
 # Conditional visibility rules
 CONDITIONAL_VISIBILITY_RULES = {
-    'ignition_type.on_voltage': {
-        'condition': "ignition_mode == 'Virtual por bateria (Virtual by battery)'",
-        'trigger_field': 'ignition_type.ignition_mode'
-    },
-    'ignition_type.off_voltage': {
-        'condition': "ignition_mode == 'Virtual por bateria (Virtual by battery)'",
-        'trigger_field': 'ignition_type.ignition_mode'
-    },
     'angle_report.min_speed': {
         'condition': 'enabled == true',
         'trigger_field': 'angle_report.enabled'

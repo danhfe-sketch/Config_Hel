@@ -161,8 +161,9 @@ class App(ctk.CTk):
                                             ui_element.set_value(param_value_from_response)
                                             return
                                 else: # complex
-                                    # Not handled for now
-                                    pass
+                                    self.params_frame.parameter_specification_factory.set_parameter_value(
+                                        section_name, param_name, param_value_from_response, self.params_frame.section_widgets
+                                    )
                         return
 
     def on_closing(self):

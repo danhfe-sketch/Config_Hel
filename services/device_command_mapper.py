@@ -84,7 +84,7 @@ class DeviceCommandMapper:
             'sleep_time': "SZCS#SLEEPT={sleep_time}#",
             
             # Angle
-            'angle_report': "SZCS#ANGLEVALUE={angle_report_min_speed}-{angle_report_angle_variation}#",
+            'angle_report': "SZCS#ANGLEVALUE={angle_report_min_speed}-{angle_report_angle_variation}",
             
             # Battery Alerts
             'backup_battery_alert': "BATALM,{backup_battery_alert_state},{backup_battery_alert_mode}#",
@@ -163,7 +163,7 @@ class DeviceCommandMapper:
             'defense_time': "DEFENSE,{value}#",
 
             # Speed and Angle Reporting (legacy - replaced with Parameter UI List compliant version above)
-            'angle_reporting': "SZCS#ANGLEVALUE={speed}-{value}#",  # Changed from CXCS to SZCS for writing to device
+            'angle_reporting': "SZCS#ANGLEVALUE={speed}-{value}",  # Changed from CXCS to SZCS for writing to device
             'blind_speed': "SZCS#BLINDSPD={value}#",  # Changed from CXCS to SZCS for writing to device
 
             # Ignition Configuration (ignition_type template is defined above at line 76)
@@ -220,9 +220,9 @@ class DeviceCommandMapper:
             'main_power_alert': "POWERALM,{enabled},{alert_type},{detection_time},{min_charge_time}#",
             'backup_battery_alert': "BATALM,{state},{mode}#",
             'vibration_sensitivity': "SZCS#VIBL={level}",
-            'angle_report': "SZCS#ANGLEVALUE={min_speed}-{angle_variation}#",
+            'angle_report': "SZCS#ANGLEVALUE={min_speed}-{angle_variation}",
             'speed_buzzer': "SZCS#SPD_LED_SHOW={value}#",
-            'sends_control': "SZCS#SENDS={value}#",
+            'sends_control': "SENDS,{value}#",
             'backup_battery_protection_voltage': "SZCS#BATSLPVALUE={value}#"
         }
 
@@ -953,6 +953,21 @@ class DeviceCommandMapper:
                 result['heartbeat_ign_on'] = match.group(1)
                 result['heartbeat_ign_off'] = match.group(2)
 
+        elif response.startswith('JAMRELAY:'):
+            # Example: "JAMRELAY:0,5,20,1,1,1,0"
+            parts = response[len('JAMRELAY:'):].split(',')
+            if len(parts) == 7:
+                result['parameter'] = 'jammer_relay_action'
+                result['value'] = {
+                    'output_operation': parts[0],
+                    'confirmation_time': parts[1],
+                    'speed_limit': parts[2],
+                    'd_parameter': parts[3],
+                    'e_parameter': parts[4],
+                    'f_parameter': parts[5],
+                    'g_parameter': parts[6]
+                }
+
         # Handle DEFENSE responses
         elif response.startswith('DEFENSE:'):
             # Example: "DEFENSE:3"
@@ -1150,7 +1165,7 @@ class DeviceCommandMapper:
             {
                 'name': 'jammer_relay_action',
                 'section': 'jammer_detection',
-                'params': ['output_operation', 'confirmation_time', 'speed_limit'],
+                'params': ['output_operation', 'confirmation_time', 'speed_limit', 'param_d', 'param_e', 'param_f', 'param_g'],
                 'required': ['output_operation'],
                 'method': self._generate_jammer_relay_command
             }
@@ -1237,7 +1252,7 @@ class DeviceCommandMapper:
         individual_params = [
             'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
             'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter',
-            'network_settings', 'defense_settings', 'source_off_type', 'relay_control'
+            'network_settings', 'defense_settings', 'source_off_type', 'relay_control', 'sends_control'
         ]
         
         self.logger.info(f"Processing {len(individual_params)} individual parameters")
@@ -1294,7 +1309,7 @@ class DeviceCommandMapper:
                 self.logger.debug(f"Processing additional param: {param_name} = {param_value}")
                 
                 # Skip None values, empty strings, and metadata parameters
-                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version', 'sends_control']:
+                if param_value is None or param_value == '' or param_name in ['profile_name', 'created_date', 'device_imei', 'version']:
                     self.logger.debug(f"Skipping additional param {param_name}: empty or metadata")
                     continue
                     
@@ -1400,9 +1415,16 @@ class DeviceCommandMapper:
         if ignition_mode == 'Virtual por bateria (Virtual by battery)':
             if on_voltage is None or off_voltage is None:
                 raise ValueError("On and off voltages are required for virtual battery ignition mode")
-            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG={on_voltage}-{off_voltage}"
-        else:
-            command = f"ATSMS:SZCS#ACCLINE=0"
+            
+            # Convert voltages to integers
+            on_voltage_int = int(float(on_voltage))
+            off_voltage_int = int(float(off_voltage))
+            
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage_int}-{off_voltage_int}"
+        elif ignition_mode == 'Física (Physical)':
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=0-000-000"
+        else: # 'Virtual por acelerômetro (Virtual by accelerometer)'
+            command = f"ATSMS:SZCS#ACCLINE=0#ACC_CFG=0-000-000"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1465,9 +1487,9 @@ class DeviceCommandMapper:
         if enabled:
             min_speed_str = f"{int(min_speed):02d}"
             angle_variation_str = f"{int(angle_variation):03d}"
-            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}#"
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}"
         else:
-            command = f"ATSMS:SZCS#ANGLEVALUE=00-000#"
+            command = f"ATSMS:SZCS#ANGLEVALUE=00-000"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1487,13 +1509,11 @@ class DeviceCommandMapper:
                 raise ValueError(f"Vibration sensitivity command validation failed: {str(e)}")
         return command
     
-    def format_jammer_relay_command(self, enabled: bool, output_operation: str, confirmation_time: int, speed_limit: int) -> str:
+    def format_jammer_relay_command(self, output_operation: str, confirmation_time: int, speed_limit: int, param_d: int, param_e: int, param_f: int, param_g: str) -> str:
         """Format jammer relay configuration command."""
-        if enabled:
-            operation_code = self._map_jammer_operation(output_operation)
-            command = f"ATSMS:JAMRELAY,{operation_code},{confirmation_time},{speed_limit},0,0,0,0#"
-        else:
-            command = f"ATSMS:JAMRELAY,0,0,0,0,0,0,0#"
+        operation_code = self._map_jammer_operation(output_operation)
+        param_g_code = self._map_param_g_value(param_g)
+        command = f"ATSMS:JAMRELAY,{operation_code},{confirmation_time},{speed_limit},{param_d},{param_e},{param_f},{param_g_code}#"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
             try:
@@ -1502,6 +1522,31 @@ class DeviceCommandMapper:
                 raise ValueError(f"Jammer relay command validation failed: {str(e)}")
         return command
     
+    def _map_alert_type(self, alert_type: str) -> str:
+        """Map alert type UI value to device command value."""
+        alert_type_mapping = {
+            'Apenas GPRS': '0',
+            'GPRS+SMS': '1'
+        }
+        return alert_type_mapping.get(alert_type, '0')
+
+    def _map_jammer_operation(self, output_operation: str) -> str:
+        """Map jammer output operation UI value to device command value."""
+        operation_mapping = {
+            'Sem Ação': '0',
+            'Ativar e Manter': '1',
+            'Ativar e Desativar com Jammer': '2'
+        }
+        return operation_mapping.get(output_operation, '0')
+
+    def _map_param_g_value(self, param_g: str) -> str:
+        """Map param_g UI value to device command value."""
+        param_g_mapping = {
+            'Manter ativada': '0',
+            'Manter desativada': '1'
+        }
+        return param_g_mapping.get(param_g, '0')
+
     def _map_protocol_value(self, protocol: str) -> str:
         """Map protocol UI value to device command value."""
         protocol_mapping = {
@@ -1767,10 +1812,10 @@ class DeviceCommandMapper:
     def _generate_main_power_alert_command(self, power_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate main power alert command from flattened parameters."""
         try:
-            enabled = power_params.get('main_power_alert_enabled', False)
-            alert_type = power_params.get('main_power_alert_type', 'Apenas GPRS')
-            detection_time = power_params.get('main_power_detection_time', 10)
-            min_charge_time = power_params.get('main_power_min_charge_time', 10)
+            enabled = power_params.get('enabled', False)
+            alert_type = power_params.get('alert_type', 'Apenas GPRS')
+            detection_time = power_params.get('detection_time', 10)
+            min_charge_time = power_params.get('min_charge_time', 10)
             
             return self.format_main_power_alert_command(enabled, alert_type, detection_time, min_charge_time)
             
@@ -1781,11 +1826,11 @@ class DeviceCommandMapper:
     def _generate_angle_report_command(self, angle_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate angle report command from flattened parameters."""
         try:
-            enabled = angle_params.get('angle_report_enabled', False)
+            enabled = angle_params.get('enabled', False)
             
             # Use actual values from profile instead of defaults
-            min_speed_raw = angle_params.get('angle_report_min_speed', '08')
-            angle_variation_raw = angle_params.get('angle_report_angle_variation', '015')
+            min_speed_raw = angle_params.get('min_speed', '08')
+            angle_variation_raw = angle_params.get('angle_variation', '015')
             
             # Convert to int for the format_angle_report_command method but preserve original formatting
             try:
@@ -1822,12 +1867,15 @@ class DeviceCommandMapper:
     def _generate_jammer_relay_command(self, jammer_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate jammer relay command from flattened parameters."""
         try:
-            enabled = jammer_params.get('jammer_relay_enabled', False)
-            output_operation = jammer_params.get('jammer_output_operation', 'Sem Ação')
-            confirmation_time = jammer_params.get('jammer_confirmation_time', 80)
-            speed_limit = jammer_params.get('jammer_speed_limit', 5)
+            output_operation = jammer_params.get('output_operation', 'Sem Ação')
+            confirmation_time = jammer_params.get('confirmation_time', 80)
+            speed_limit = jammer_params.get('speed_limit', 5)
+            param_d = jammer_params.get('param_d', 0)
+            param_e = jammer_params.get('param_e', 0)
+            param_f = jammer_params.get('param_f', 0)
+            param_g = jammer_params.get('param_g', 'Manter ativada')
             
-            return self.format_jammer_relay_command(enabled, output_operation, confirmation_time, speed_limit)
+            return self.format_jammer_relay_command(output_operation, confirmation_time, speed_limit, param_d, param_e, param_f, param_g)
             
         except Exception as e:
             self.logger.error(f"Error generating jammer relay command: {str(e)}")
@@ -1850,7 +1898,8 @@ class DeviceCommandMapper:
                 'network_settings': lambda v: self.get_command('network_select', v),
                 'defense_settings': lambda v: self.get_command('defense_time', v),
                 'source_off_type': lambda v: self.get_command('relay_gps_check', v),
-                'relay_control': lambda v: self.get_command('relay_control', v)
+                'relay_control': lambda v: self.get_command('relay_control', v),
+                'sends_control': lambda v: self.get_command('sends_control', v)
             }
             
             if param_name in individual_mapping:

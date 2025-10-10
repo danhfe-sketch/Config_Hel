@@ -177,7 +177,7 @@ class ConfigurationReaderService:
             'get_tcp_ack': r'READOK:\s*POSBYACK=(\d+)',
             
             # Ignition Parameters (LT32Pro format)
-            'get_accline': r'READOK:\s*ACCLINE=(\d+)',
+            'get_accline': r'READOK:\s*ACCLINE=(\d+)(?:.*ACC_CFG=(\d+)[,-](\d+)[,-](\d+))?',
             'get_acc_cfg': r'READOK:\s*ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
             
             # Speed Parameters (LT32Pro format)
@@ -611,6 +611,68 @@ class ConfigurationReaderService:
             
         except Exception as e:
             self._log_message(f"ERROR: Failed to update UI with parameters: {str(e)}")
+
+    def _get_parameter_section_mapping(self) -> dict:
+        """
+        Get mapping of parameter names to their UI section and parameter keys.
+        
+        Returns:
+            Dictionary mapping parameter names to section info
+        """
+        return {
+            # Network Parameters
+            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
+            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
+            'network_settings': {'section': 'network_parameters', 'parameter': 'network_settings'},
+            
+            # Time Parameters
+            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
+            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
+            
+            # Service Parameters
+            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
+            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
+            
+            # Ignition Parameters
+            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
+            
+            # Speed Parameters
+            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
+            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
+            
+            # Power Saving Parameters
+            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
+            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
+            
+            # Angle Parameters
+            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
+            
+            # Battery Alert Parameters
+            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
+            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
+            'backup_battery_protection_voltage': {'section': 'battery_alerts', 'parameter': 'backup_battery_protection_voltage'},
+
+            # Vibration Sensor Parameters
+            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
+            'vibration_window': {'section': 'vibration_sensor', 'parameter': 'vibration_window'},
+            
+            # Jammer Detection Parameters
+            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
+            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
+            
+            # Miscellaneous Parameters
+            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
+            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
+            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'},
+            'source_off_type': {'section': 'output_control', 'parameter': 'source_off_type'},
+            'relay_control': {'section': 'output_control', 'parameter': 'relay_control'},
+            'sends_control': {'section': 'gps_control', 'parameter': 'sends_control'},
+
+            # Movement Alerts
+            'moving_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
+            'moving': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
+            'movement_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'}
+        }
 
     def _update_profile_manager_with_parameters(self, parameters_read):
         """
@@ -1819,11 +1881,23 @@ class ConfigurationReaderService:
                 
                 # Ignition Parameters
                 elif command_type == 'get_accline':
-                    # Map ignition line type
-                    accline_map = {'0': 'Virtual por acelerômetro (Virtual by accelerometer)', 
-                                  '1': 'Física (Physical)'}
-                    accline_value = match.group(1)
-                    parsed_values['ignition_mode'] = accline_map.get(accline_value, accline_value)
+                    accline = match.group(1)
+                    cfg_type = match.group(2) if match.group(2) else '0'
+                    on_voltage = match.group(3)
+                    off_voltage = match.group(4)
+
+                    ignition_mode_map = {
+                        ('1', '0'): 'Física (Physical)',
+                        ('0', '0'): 'Virtual por acelerômetro (Virtual by accelerometer)',
+                        ('1', '1'): 'Virtual por bateria (Virtual by battery)'
+                    }
+                    mode_key = (accline, cfg_type)
+                    ignition_mode = ignition_mode_map.get(mode_key, 'Unknown')
+
+                    parsed_values['ignition_mode'] = ignition_mode
+                    if cfg_type == '1' and on_voltage is not None and off_voltage is not None:
+                        parsed_values['on_voltage'] = on_voltage
+                        parsed_values['off_voltage'] = off_voltage
                     
                 elif command_type == 'get_acc_cfg':
                     cfg_type = match.group(1)
@@ -1922,17 +1996,17 @@ class ConfigurationReaderService:
                     parsed_values['mode'] = mode
                     
                 elif command_type == 'get_jammer_relay_action':
-                    parsed_values['enabled'] = match.group(1) == '1'
                     operation_map = {'0': 'Sem Ação', 
                                    '1': 'Ativar e Manter', 
                                    '2': 'Ativar e Desativar com Jammer'}
-                    parsed_values['output_operation'] = operation_map.get(match.group(2), match.group(2))
-                    parsed_values['confirmation_time'] = match.group(3)
-                    parsed_values['speed_limit'] = match.group(4)
-                    # Additional parameters D, E, F, G
-                    parsed_values['param_d'] = match.group(5)
-                    parsed_values['param_e'] = match.group(6)
-                    parsed_values['param_f'] = match.group(7)
+                    parsed_values['output_operation'] = operation_map.get(match.group(1), match.group(1))
+                    parsed_values['confirmation_time'] = match.group(2)
+                    parsed_values['speed_limit'] = match.group(3)
+                    parsed_values['param_d'] = match.group(4)
+                    parsed_values['param_e'] = match.group(5)
+                    parsed_values['param_f'] = match.group(6)
+                    g_parameter_map = {'0': 'Manter ativada', '1': 'Manter desativada'}
+                    parsed_values['param_g'] = g_parameter_map.get(match.group(7), match.group(7))
 
                 elif command_type == 'get_source_off_type':
                     source_off_map = {'0': 'Verifica FIX de GPS', '1': 'Não verifica FIX de GPS'}

@@ -94,7 +94,7 @@ class CommandFormatValidator:
             
             # Angle
             'angle_report': {
-                'set': 'SZCS#ANGLEVALUE={min_speed}-{angle_variation}#',
+                'set': 'SZCS#ANGLEVALUE={min_speed}-{angle_variation}',
                 'read': 'CXCS#ANGLEVALUE'
             },
             

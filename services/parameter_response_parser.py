@@ -103,14 +103,8 @@ class ParameterResponseParser:
             
             # Ignition Parameters (complex multi-command response)
             'ignition_type': {
-                'patterns': {
-                    'accline': r'ACCLINE=(\d+)',
-                    'acc_cfg': r'ACC_CFG=(\d+)[,-](\d+)[,-](\d+)'
-                },
-                'fields': {
-                    'accline': ['accline_value'],
-                    'acc_cfg': ['cfg_type', 'on_voltage', 'off_voltage']
-                },
+                'pattern': r'ACCLINE=(\d+).*ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
+                'fields': ['accline', 'cfg_type', 'on_voltage', 'off_voltage'],
                 'description': 'Ignition type configuration response',
                 'post_process': self._process_ignition_response
             },
@@ -503,19 +497,18 @@ class ParameterResponseParser:
 
     def _process_ignition_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
         """Process ignition configuration response."""
-        # Extract ACCLINE and ACC_CFG values
-        accline = values.get('accline_accline_value', '0')
-        cfg_type = values.get('acc_cfg_cfg_type', '0')
+        accline = values.get('accline', '0')
+        cfg_type = values.get('cfg_type', '0')
         
         # Determine ignition mode
         mode_key = (accline, cfg_type)
         values['ignition_mode'] = self.value_mappings['ignition_mode'].get(mode_key, 'Unknown')
         
         # Process voltage values if present
-        if 'acc_cfg_on_voltage' in values:
-            values['on_voltage'] = int(values['acc_cfg_on_voltage'])
-        if 'acc_cfg_off_voltage' in values:
-            values['off_voltage'] = int(values['acc_cfg_off_voltage'])
+        if 'on_voltage' in values:
+            values['on_voltage'] = int(values['on_voltage'])
+        if 'off_voltage' in values:
+            values['off_voltage'] = int(values['off_voltage'])
         
         return values
 
