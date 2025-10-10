@@ -96,6 +96,7 @@ class DeviceCommandMapper:
             # Jammer Detection
             'jammer_detection': "JAMMER,{jammer_detection_state},{jammer_detection_mode}#",
             'jammer_relay_action': "JAMRELAY,{jammer_relay_action_op},{jammer_relay_action_time},{jammer_relay_action_speed},{jammer_relay_action_d},{jammer_relay_action_e},{jammer_relay_action_f},{jammer_relay_action_g}#",
+            'motion_sensor_alert': "SENALM,{state},{mode}#",
             
             # Miscellaneous
             'odometer': "MILEAGE={odometer}#",
@@ -132,6 +133,7 @@ class DeviceCommandMapper:
             'query_main_power': "POWERALM#",
             'query_jammer': "JAMMER#",
             'query_jammer_relay': "JAMRELAY#",
+            'query_motion_sensor_alert': "SENALM#",
             'query_odometer': "MILEAGE#",
             'query_hourmeter': "ACCONT#",
 
@@ -285,6 +287,12 @@ class DeviceCommandMapper:
                 'Sem Ação': '0',
                 'Ativar e Manter': '1',
                 'Ativar e Desativar com Jammer': '2'
+            },
+
+            'motion_sensor_alert': {
+                'Desabilitado': 'DISABLED',
+                'Alerta Enviado Apenas GPRS': 'GPRS_ONLY',
+                'Alerta Enviado por SMS+GPRS': 'GPRS_SMS'
             },
 
             # Boolean ON/OFF mapping for various parameters
@@ -469,7 +477,7 @@ class DeviceCommandMapper:
                 'jammer_relay_action', 'main_power_alert', 'backup_battery_alert',
                 'angle_report', 'speed_alert', 'moving_alert', 'vibration_window',
                 'apn_settings', 'server_settings', 'report_intervals', 'heartbeat_intervals',
-                'ignition_type', 'vibration_sensitivity', 'jammer_detection'
+                'ignition_type', 'vibration_sensitivity', 'jammer_detection', 'motion_sensor_alert'
             ]
             
             command = None  # Initialize command variable
@@ -540,6 +548,8 @@ class DeviceCommandMapper:
                             mode_int = 0
                         command = f"BATALM,ON,{mode_int}#"
                         self.logger.debug(f"Using full command for backup_battery_alert: {command}")
+                    elif param_name == 'motion_sensor_alert':
+                        command = self._generate_motion_sensor_alert_command(field_values, validate_command)
                     else:
                         # Format the command using the mapped parameters
                         command = template.format(**command_params)
@@ -1262,7 +1272,8 @@ class DeviceCommandMapper:
         individual_params = [
             'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
             'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter',
-            'network_settings', 'defense_settings', 'source_off_type', 'relay_control', 'sends_control'
+            'network_settings', 'defense_settings', 'source_off_type', 'relay_control', 'sends_control',
+            'motion_sensor_alert'
         ]
         
         self.logger.info(f"Processing {len(individual_params)} individual parameters")
@@ -1890,6 +1901,28 @@ class DeviceCommandMapper:
         except Exception as e:
             self.logger.error(f"Error generating jammer relay command: {str(e)}")
             return None
+
+    def _generate_motion_sensor_alert_command(self, params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate motion sensor alert command from flattened parameters."""
+        try:
+            value = params.get('value')
+            if value == 'Desabilitado':
+                command = "SENALM,OFF#"
+            elif value == 'Alerta Enviado Apenas GPRS':
+                command = "SENALM,ON,0#"
+            elif value == 'Alerta Enviado por SMS+GPRS':
+                command = "SENALM,ON,1#"
+            else:
+                return None
+            
+            if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+                full_command = f"ATSMS:{command}"
+                self.command_validation_gateway.validate_command(full_command, source="bulk_commands")
+
+            return command
+        except Exception as e:
+            self.logger.error(f"Error generating motion sensor alert command: {str(e)}")
+            return None
     
     def _generate_individual_command(self, param_name: str, param_value: Any, validate_commands: bool) -> Optional[str]:
         """Generate command for individual parameters."""
@@ -1909,7 +1942,8 @@ class DeviceCommandMapper:
                 'defense_settings': lambda v: self.get_command('defense_time', v),
                 'source_off_type': lambda v: self.get_command('relay_gps_check', v),
                 'relay_control': lambda v: self.get_command('relay_control', v),
-                'sends_control': lambda v: self.get_command('sends_control', v)
+                'sends_control': lambda v: self.get_command('sends_control', v),
+                'motion_sensor_alert': lambda v: self._generate_motion_sensor_alert_command({'value': v}, validate_commands)
             }
             
             if param_name in individual_mapping:
@@ -2026,6 +2060,7 @@ class DeviceCommandMapper:
             'main_power_alert': 'query_main_power',
             'jammer_detection': 'query_jammer',
             'jammer_relay_action': 'query_jammer_relay',
+            'motion_sensor_alert': 'query_motion_sensor_alert',
             'odometer': 'query_odometer',
             'hourmeter': 'query_hourmeter'
         }
@@ -2103,6 +2138,7 @@ class DeviceCommandMapper:
             'query_main_power',
             'query_jammer',
             'query_jammer_relay',
+            'query_motion_sensor_alert',
             
             # Miscellaneous
             'query_odometer',

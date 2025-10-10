@@ -693,6 +693,8 @@ class ParameterSpecificationFactory:
                     self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
                 else:
                     print("ERROR: No serial service available to send command")
+            elif param_name == 'motion_sensor_alert':
+                self._send_motion_sensor_alert_command(param_values)
             elif param_name == 'backup_battery_protection_voltage':
                 self._send_backup_battery_protection_voltage_command(param_values)
             else:
@@ -1340,6 +1342,29 @@ class ParameterSpecificationFactory:
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("sends_control_sent", "Sends control configuration sent to device")
+        )
+
+    def _send_motion_sensor_alert_command(self, values: dict):
+        """Send motion sensor alert command"""
+        value = values.get('motion_sensor_alert')
+        
+        if value == 'Desabilitado':
+            command = "ATSMS:SENALM,OFF#"
+        elif value == 'Alerta Enviado Apenas GPRS':
+            command = "ATSMS:SENALM,ON,0#"
+        elif value == 'Alerta Enviado por SMS+GPRS':
+            command = "ATSMS:SENALM,ON,1#"
+        else:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("invalid_motion_sensor_alert_value", "Invalid motion sensor alert value")
+            )
+            return
+
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("motion_sensor_alert_sent", "Motion sensor alert configuration sent to device")
         )
 
     def _send_movement_alert_command(self, values: dict):

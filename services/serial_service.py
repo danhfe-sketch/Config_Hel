@@ -73,6 +73,11 @@ class SerialService:
             self.is_connected = True
             self.stop_thread = False
             
+            # Reset error history and consecutive failures on successful connection
+            if hasattr(self.app, 'error_handler') and hasattr(self.app.error_handler, 'parameter_error_handler'):
+                if self.app.error_handler.parameter_error_handler:
+                    self.app.error_handler.parameter_error_handler.clear_error_history()
+            
             # Reset device info when connecting
             self.device_info = {
                 'imei': None,

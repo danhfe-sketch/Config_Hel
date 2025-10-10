@@ -209,6 +209,16 @@ This document provides a structured specification of the user interface componen
     *   **set:** `MOVING,<enabled>,<radius>,<alert_type>#` (Note: enabled=ON/OFF, alert_type=0/1)
     *   **read:** `MOVING#`
 
+### Config: Motion Sensor Alert
+
+*   **name:** motion_sensor_alert
+*   **label:** "Habilitar alerta de movimento"
+*   **ui_element:** "dropdown"
+*   **options:** ["Desabilitado", "Alerta Enviado Apenas GPRS", "Alerta Enviado por SMS+GPRS"]
+*   **commands:**
+    *   **set:** `SENALM,<state>,<mode>#` (Note: state will be OFF for "Desabilitado", and ON for the other two. mode will be 0 for GPRS and 1 for SMS+GPRS. The command should be constructed accordingly, e.g. SENALM,OFF# when disabled)
+    *   **read:** `SENALM#`
+
 ## Section: Power Saving
 
 ### Config: Sleep Mode

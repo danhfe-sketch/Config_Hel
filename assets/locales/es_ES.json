@@ -566,5 +566,7 @@
     "alert_type": "Tipo de alerta",
     "battery_alert_type": "Tipo de alerta de batería:",
     "speed_alert_type": "Tipo de alerta de velocidad:",
-    "apn": "APN"
+    "apn": "APN",
+    "invalid_motion_sensor_alert_value": "Valor de alerta de movimiento inválido",
+    "motion_sensor_alert_sent": "Configuración de alerta de movimiento enviada al dispositivo"
 }

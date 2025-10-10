@@ -659,6 +659,16 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set': 'MOVING,<enabled>,<radius>,<alert_type>#',
                     'read': 'MOVING#'
                 }
+            ),
+            'motion_sensor_alert': ParameterConfig(
+                name='motion_sensor_alert',
+                label='Habilitar alerta de movimento',
+                ui_element='dropdown',
+                options=['Desabilitado', 'Alerta Enviado Apenas GPRS', 'Alerta Enviado por SMS+GPRS'],
+                commands={
+                    'set': 'SENALM,<state>,<mode>#',
+                    'read': 'SENALM#'
+                }
             )
         }
     )

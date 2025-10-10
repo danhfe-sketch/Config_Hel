@@ -586,5 +586,7 @@
     "jammer_relay_values_required": "Tempo de confirmação e limite de velocidade são obrigatórios quando a ação de relé de jammer está habilitada",
     "sleep_time_required": "Valor de tempo de sleep é obrigatório",
     "odometer_required": "Valor do odômetro é obrigatório",
-    "hourmeter_required": "Valor do horímetro é obrigatório"
+    "hourmeter_required": "Valor do horímetro é obrigatório",
+    "invalid_motion_sensor_alert_value": "Valor inválido para o alerta de movimento",
+    "motion_sensor_alert_sent": "Configuração de alerta de movimento enviada para o dispositivo"
 }

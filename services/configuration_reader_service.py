@@ -2,7 +2,7 @@ import re
 import time
 import threading
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from datetime import datetime
 from services.i18n_service import I18nService
 from services.lt32pro_command_formatter import LT32ProCommandFormatter
@@ -105,9 +105,6 @@ class ConfigurationReaderService:
         self.parameter_query_commands = {
             # Basic device information
             'device_info': [
-                ('IMEI', 'get_imei'),
-                ('ICCID', 'get_iccid'),
-                ('VERSION', 'get_version'),
                 ('STATUS', 'get_status')
             ],
             # Network parameters
@@ -121,10 +118,7 @@ class ConfigurationReaderService:
             'report_intervals': ('TIMER', 'get_timer'),
             'heartbeat_intervals': ('HBT', 'get_hbt'),
             # Ignition Parameters
-            'ignition_type': [
-                ('ACCLINE', 'get_accline'),
-                ('ACC_CFG', 'get_acc_cfg')
-            ],
+            'ignition_type': ('ACCLINE', 'get_ignition_type'),
             # Speed Parameters
             'speed_alert': ('SPEED', 'get_speed_alert'),
             'speed_buzzer': ('SPD_LED_SHOW', 'get_speed_buzzer'),
@@ -151,6 +145,7 @@ class ConfigurationReaderService:
             'relay_control': ('RELAY', 'get_relay_control'),
             'sends_control': ('SENDS', 'get_sends_control'),
             'moving_alert': ('MOVING', 'get_moving_alert'),
+            'motion_sensor_alert': ('SENALM', 'get_motion_sensor_alert'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
         }
@@ -177,8 +172,7 @@ class ConfigurationReaderService:
             'get_tcp_ack': r'READOK:\s*POSBYACK=(\d+)',
             
             # Ignition Parameters (LT32Pro format)
-            'get_accline': r'READOK:\s*ACCLINE=(\d+)(?:.*ACC_CFG=(\d+)[,-](\d+)[,-](\d+))?',
-            'get_acc_cfg': r'READOK:\s*ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
+            'get_ignition_type': r'READOK:\s*ACCLINE=(\d+)[\s\*]ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
             
             # Speed Parameters (LT32Pro format)
             'get_speed_alert': r'SPEED:(OFF|ON,(\d+),(\d+),(\d+))',
@@ -206,6 +200,7 @@ class ConfigurationReaderService:
             'get_relay_control': r'RELAY:(\d+)',
             'get_sends_control': r'SENDS:(\d+)',
             'get_moving_alert': r'MOVING:(?:(ON),(\d+),(\d+)|(OFF))',
+            'get_motion_sensor_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
@@ -1880,9 +1875,9 @@ class ConfigurationReaderService:
                     parsed_values['tcp_ack'] = ack_map.get(ack_value, ack_value)
                 
                 # Ignition Parameters
-                elif command_type == 'get_accline':
+                elif command_type == 'get_ignition_type':
                     accline = match.group(1)
-                    cfg_type = match.group(2) if match.group(2) else '0'
+                    cfg_type = match.group(2)
                     on_voltage = match.group(3)
                     off_voltage = match.group(4)
 
@@ -1896,20 +1891,6 @@ class ConfigurationReaderService:
 
                     parsed_values['ignition_mode'] = ignition_mode
                     if cfg_type == '1' and on_voltage is not None and off_voltage is not None:
-                        parsed_values['on_voltage'] = on_voltage
-                        parsed_values['off_voltage'] = off_voltage
-                    
-                elif command_type == 'get_acc_cfg':
-                    cfg_type = match.group(1)
-                    on_voltage = match.group(2)
-                    off_voltage = match.group(3)
-                    
-                    if cfg_type == '1':  # Battery mode
-                        parsed_values['ignition_mode'] = 'Virtual por bateria (Virtual by battery)'
-                        parsed_values['on_voltage'] = on_voltage
-                        parsed_values['off_voltage'] = off_voltage
-                    else:
-                        parsed_values['cfg_type'] = cfg_type
                         parsed_values['on_voltage'] = on_voltage
                         parsed_values['off_voltage'] = off_voltage
                 
@@ -2007,6 +1988,19 @@ class ConfigurationReaderService:
                     parsed_values['param_f'] = match.group(6)
                     g_parameter_map = {'0': 'Manter ativada', '1': 'Manter desativada'}
                     parsed_values['param_g'] = g_parameter_map.get(match.group(7), match.group(7))
+
+                elif command_type == 'get_motion_sensor_alert':
+                    if match.group(3) == 'OFF':
+                        parsed_values['value'] = 'Desabilitado'
+                    else:
+                        mode = match.group(2)
+                        if mode == '0':
+                            parsed_values['value'] = 'Alerta Enviado Apenas GPRS'
+                        elif mode == '1':
+                            parsed_values['value'] = 'Alerta Enviado por SMS+GPRS'
+                        else:
+                            # Fallback for unknown mode
+                            parsed_values['value'] = 'Desabilitado'
 
                 elif command_type == 'get_source_off_type':
                     source_off_map = {'0': 'Verifica FIX de GPS', '1': 'Não verifica FIX de GPS'}
@@ -2158,37 +2152,16 @@ class ConfigurationReaderService:
                 elif key == 'Defense':
                     parsed_values['defense_time'] = value
 
-    def _get_all_parameter_commands(self) -> List[tuple]:
-        """Get all parameter commands to execute during configuration reading based on specification."""
+    def _get_all_parameter_commands(self) -> List[Tuple[str, str, str]]:
+        """Get all parameter commands to be executed for a full configuration read."""
         commands = []
-        
-        # Exclude device information commands - only include actual parameter reading commands
-        # This matches the behavior of the working "load profile from device" feature
-        excluded_params = {'device_info', 'all_parameters'}  # Exclude IMEI, ICCID, VERSION, STATUS commands and all_parameters
-        
-        self._log_message("DEBUG: Building parameter command list for configuration reading")
-        
-        # Dynamically build commands based on what's actually configured
-        for param_name, param_info in self.parameter_query_commands.items():
-            # Skip device information commands that are not actual configuration parameters
-            if param_name in excluded_params:
-                self._log_message(f"DEBUG: Excluding device info parameter: {param_name}")
-                continue
-                
-            if isinstance(param_info, list):
-                # Multiple commands for this parameter - use only the first command to avoid duplicates
-                # This prevents parameters like 'ignition_type' from being counted multiple times
-                if param_info:  # Make sure the list is not empty
-                    command, command_type = param_info[0]  # Use only the first command
-                    commands.append((param_name, command, command_type))
-                    self._log_message(f"DEBUG: Added parameter command (first of {len(param_info)}): {param_name} -> {command}")
-            elif isinstance(param_info, tuple):
-                # Single command for this parameter
-                command, command_type = param_info
-                commands.append((param_name, command, command_type))
-                self._log_message(f"DEBUG: Added parameter command: {param_name} -> {command}")
-        
-        self._log_message(f"INFO: Configuration reading will use {len(commands)} parameter commands (device info commands excluded)")
+        for param_name, query_info in self.parameter_query_commands.items():
+            if isinstance(query_info, list):
+                for cmd, cmd_type in query_info:
+                    commands.append((param_name, cmd, cmd_type))
+            else:
+                cmd, cmd_type = query_info
+                commands.append((param_name, cmd, cmd_type))
         return commands
 
     def _extract_parameter_value(self, param_name: str, parsed_values: Dict[str, Any]) -> str:
@@ -2314,7 +2287,7 @@ class ConfigurationReaderService:
                 self._log_message(f"DEBUG: Formatted command '{command}' as '{formatted_command}'")
             else:
                 # Fallback for unsupported commands - add ATSMS prefix manually
-                formatted_command = f"ATSMS:{command}#"
+                formatted_command = f"ATSMS:{command}"
                 self._log_message(f"DEBUG: Using fallback formatting for '{command}' as '{formatted_command}'")
             
             # Validate command syntax
