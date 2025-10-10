@@ -12,6 +12,7 @@
     "connected": "Connected",
     "device_info": "Device Information",
     "imei": "IMEI:",
+    "teriid": "TERIID:",
     "iccid": "ICCID:",
     "version": "Version:",
     "not_available": "N/A",

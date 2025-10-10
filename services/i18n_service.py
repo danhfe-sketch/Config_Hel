@@ -1,6 +1,8 @@
 import json
+import logging
 import os
 from utils.helpers import resource_path
+logger = logging.getLogger(__name__)
 from services.app_config_service import AppConfigService
 
 class I18nService:
@@ -47,7 +49,17 @@ class I18nService:
 
     def get(self, key, default_value=''):
         """Returns the translated string for a given key."""
-        value = self.language_map.get(key, default_value or f"_{key}_")
+        if key in self.language_map:
+            value = self.language_map[key]
+        else:
+            fallback = default_value or f"_{key}_"
+            logger.warning(
+                "Missing translation key '%s' for language '%s'. Falling back to '%s'.",
+                key,
+                self.current_language,
+                fallback
+            )
+            value = fallback
         # If the locale file contains escaped newline sequences (e.g. "\\n")
         # convert them to real newlines so dialogs and labels render correctly.
         try:

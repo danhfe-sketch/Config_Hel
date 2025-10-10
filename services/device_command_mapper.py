@@ -151,6 +151,7 @@ class DeviceCommandMapper:
 
             # Device Information Retrieval
             'get_imei': "CXCS#IMEI",
+            'get_teriid': "CXCS#TERIID",
             'get_iccid': "CXCS#ICCID",
             'get_imsi': "CXCS#IMSI",
             'get_status': "STATUS#",
@@ -868,6 +869,15 @@ class DeviceCommandMapper:
             match = re.search(r'IMEI[=:]\s*(\d+)', response)
             if match:
                 result['imei'] = match.group(1)
+
+        elif command_type == 'get_teriid' or 'TERIID' in response:
+            # Example responses:
+            # "READOK: TERIID=864943044534994"
+            # "TERIID: 864943044534994"
+            # "TERIID:864943044534994"
+            match = re.search(r'TERIID[=:]\s*(\d+)', response)
+            if match:
+                result['teriid'] = match.group(1)
 
         elif command_type == 'get_iccid' or 'ICCID' in response:
             # Example responses:

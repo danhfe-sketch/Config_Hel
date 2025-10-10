@@ -644,7 +644,6 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         name='radius',
                         label='Raio de movimentação',
                         ui_element='number_input',
-                        validation='100-1000',
                         unit='meters',
                         visibility_condition='enabled == true'  # Only show when enabled
                     ),

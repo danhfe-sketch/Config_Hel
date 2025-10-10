@@ -21,6 +21,7 @@ class SerialService:
         # Device info
         self.device_info = {
             'imei': None,
+            'teriid': None,
             'iccid': None,
             'version': None
         }
@@ -35,8 +36,10 @@ class SerialService:
         self.queue_delay = 0.5  # Delay between commands in seconds
         self.queue_callback = None
         self.queue_results = {}  # Store results from command queue execution
+        self._waiting_for_teriid_response = False
+        self._teriid_diagnostic_logged = False
         # How long to wait for a device response between queued commands
-        self.queue_response_timeout = 10.0  # seconds
+        self.queue_response_timeout = 20.0  # seconds
 
         # Connection monitoring
         self.last_activity_time = None
@@ -73,6 +76,7 @@ class SerialService:
             # Reset device info when connecting
             self.device_info = {
                 'imei': None,
+                'teriid': None,
                 'iccid': None,
                 'version': None
             }
@@ -360,6 +364,9 @@ class SerialService:
                 if 'imei' in parsed_data:
                     self.device_info['imei'] = parsed_data['imei']
                     self.app.after(0, self.update_device_info)
+                if 'teriid' in parsed_data:
+                    self.device_info['teriid'] = parsed_data['teriid']
+                    self.app.after(0, self.update_device_info)
                 if 'iccid' in parsed_data:
                     self.device_info['iccid'] = parsed_data['iccid']
                     self.app.after(0, self.update_device_info)
@@ -384,13 +391,27 @@ class SerialService:
     
     def update_device_info(self):
         """Update the UI with device information."""
-        if hasattr(self.app, 'connection_frame'):
-            if self.device_info['imei']:
-                self.app.connection_frame.imei_value_var.set(self.device_info['imei'])
-            if self.device_info['iccid']:
-                self.app.connection_frame.iccid_value_var.set(self.device_info['iccid'])
-            if self.device_info['version']:
-                self.app.connection_frame.version_value_var.set(self.device_info['version'])
+        if not hasattr(self.app, 'connection_frame'):
+            return
+
+        imei = self.device_info.get('imei')
+        teriid = self.device_info.get('teriid')
+        iccid = self.device_info.get('iccid')
+        version = self.device_info.get('version')
+
+        if imei:
+            self.app.connection_frame.imei_value_var.set(imei)
+
+        if teriid:
+            self.app.connection_frame.teriid_value_var.set(teriid)
+        else:
+            self.app.connection_frame.teriid_value_var.set("N/A")
+
+        if iccid:
+            self.app.connection_frame.iccid_value_var.set(iccid)
+
+        if version:
+            self.app.connection_frame.version_value_var.set(version)
     
     def retrieve_device_info(self):
         """
@@ -406,10 +427,25 @@ class SerialService:
             imei_cmd = self.app.device_command_mapper.get_command('get_imei', None)
             self.send_command(imei_cmd, 'get_imei')
             
-            # Schedule the ICCID command to run after a delay
-            self.app.after(500, self._send_iccid_command)
+            # Schedule the TERIID command to run after a delay
+            self.app.after(500, self._send_teriid_command)
         else:
             self.app.log_frame.log_message("ERROR: Device command mapper not available\n")
+            
+    def _send_teriid_command(self):
+        """Helper method to send TERIID command after a delay."""
+        if self.is_connected and hasattr(self.app, 'device_command_mapper'):
+            teriid_cmd = self.app.device_command_mapper.get_command('get_teriid', None)
+            self._waiting_for_teriid_response = True
+            self._teriid_diagnostic_logged = False
+            try:
+                self.app.log_frame.log_message("DEBUG: Sending TERIID request to device\n")
+            except Exception:
+                print("DEBUG: Sending TERIID request to device")
+            self.send_command(teriid_cmd, 'get_teriid')
+            
+            # Schedule the ICCID command to run after TERIID
+            self.app.after(500, self._send_iccid_command)
             
     def _send_iccid_command(self):
         """Helper method to send ICCID command after a delay."""
@@ -994,10 +1030,14 @@ class SerialService:
         
         # Log the disconnection with timestamp
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        self.app.log_frame.log_message(f"ERROR: Connection lost unexpectedly at {timestamp}\n")
+        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+            self.app.log_frame.log_message(f"ERROR: Connection lost unexpectedly at {timestamp}\n")
+        else:
+            print(f"ERROR: Connection lost unexpectedly at {timestamp}\n")
         
         # Update connection status
         self.is_connected = False
+        self.waiting_for_response = False
         
         # Close the port
         if self.serial_port:

@@ -120,8 +120,26 @@ class ConnectionFrame(ctk.CTkFrame):
         )
         self.imei_value_entry.grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky="w")
 
+        self.teriid_label = ctk.CTkLabel(self, text=self.i18n.get("teriid"))
+        self.teriid_label.grid(row=6, column=0, padx=(10, 5), pady=5, sticky="w")
+        
+        self.teriid_value_var = tk.StringVar(value=self.i18n.get("not_available"))
+        self.teriid_value_entry = tk.Entry(
+            self,
+            textvariable=self.teriid_value_var,
+            state="readonly",
+            readonlybackground=self._get_entry_bg_color(),
+            highlightthickness=0,
+            relief="flat",
+            bd=0,
+            font=("Arial", 12, "bold"),
+            fg="#1F6AA5" if ctk.get_appearance_mode() == "Light" else "#78BDFF",
+            width=25
+        )
+        self.teriid_value_entry.grid(row=6, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+
         self.iccid_label = ctk.CTkLabel(self, text=self.i18n.get("iccid"))
-        self.iccid_label.grid(row=6, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.iccid_label.grid(row=7, column=0, padx=(10, 5), pady=5, sticky="w")
         
         # Use Entry widget for ICCID to allow text selection and copying
         self.iccid_value_var = tk.StringVar(value=self.i18n.get("not_available"))
@@ -137,10 +155,10 @@ class ConnectionFrame(ctk.CTkFrame):
             fg="#1F6AA5" if ctk.get_appearance_mode() == "Light" else "#78BDFF",
             width=25
         )
-        self.iccid_value_entry.grid(row=6, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        self.iccid_value_entry.grid(row=7, column=1, columnspan=2, padx=5, pady=5, sticky="w")
 
         self.version_label = ctk.CTkLabel(self, text=self.i18n.get("version"))
-        self.version_label.grid(row=7, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.version_label.grid(row=8, column=0, padx=(10, 5), pady=5, sticky="w")
         
         # Use Entry widget for Version to allow text selection and copying
         self.version_value_var = tk.StringVar(value=self.i18n.get("not_available"))
@@ -156,7 +174,7 @@ class ConnectionFrame(ctk.CTkFrame):
             fg="#1F6AA5" if ctk.get_appearance_mode() == "Light" else "#78BDFF",
             width=25
         )
-        self.version_value_entry.grid(row=7, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        self.version_value_entry.grid(row=8, column=1, columnspan=2, padx=5, pady=5, sticky="w")
         
         # Connection quality indicator
         # self.quality_label = ctk.CTkLabel(self, text=self.i18n.get("connection_quality", "Connection Quality"))
@@ -246,6 +264,7 @@ class ConnectionFrame(ctk.CTkFrame):
             self.connect_button.configure(text=self.i18n.get("connect"))
             self.com_port_combo.configure(state="normal")
             self.imei_value_var.set(self.i18n.get("not_available"))
+            self.teriid_value_var.set(self.i18n.get("not_available"))
             self.iccid_value_var.set(self.i18n.get("not_available"))
             self.version_value_var.set(self.i18n.get("not_available"))
             
@@ -270,6 +289,7 @@ class ConnectionFrame(ctk.CTkFrame):
         self.com_label.configure(text=self.i18n.get("com_port"))
         self.status_label.configure(text=self.i18n.get("status"))
         self.imei_label.configure(text=self.i18n.get("imei"))
+        self.teriid_label.configure(text=self.i18n.get("teriid"))
         self.iccid_label.configure(text=self.i18n.get("iccid"))
         self.version_label.configure(text=self.i18n.get("version"))
         # self.quality_label.configure(text=self.i18n.get("connection_quality", "Connection Quality"))
