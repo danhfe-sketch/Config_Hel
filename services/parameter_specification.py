@@ -217,13 +217,15 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         name='on_voltage',
                         label='Tensão para Ligar (ON)',
                         ui_element='number_input',
-                        unit='volts'
+                        unit='volts',
+                        visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
                     ),
                     'off_voltage': FieldConfig(
                         name='off_voltage',
                         label='Tensão para Desligar (OFF)',
                         ui_element='number_input',
-                        unit='volts'
+                        unit='volts',
+                        visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
                     )
                 },
                 commands={
@@ -663,10 +665,22 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
             'motion_sensor_alert': ParameterConfig(
                 name='motion_sensor_alert',
                 label='Habilitar alerta de movimento',
-                ui_element='dropdown',
-                options=['Desabilitado', 'Alerta Enviado Apenas GPRS', 'Alerta Enviado por SMS+GPRS'],
+                description='Configures movement alert based on motion sensor.',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar Alerta de movimento',
+                        ui_element='toggle_switch'
+                    ),
+                    'alert_type': FieldConfig(
+                        name='alert_type',
+                        label='Tipo de Alerta',
+                        ui_element='dropdown',
+                        options=['Apenas GPRS', 'GPRS+SMS']
+                    )
+                },
                 commands={
-                    'set': 'SENALM,<state>,<mode>#',
+                    'set': 'SENALM,<enabled>,<alert_type>#',
                     'read': 'SENALM#'
                 }
             )

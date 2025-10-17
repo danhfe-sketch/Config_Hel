@@ -139,32 +139,32 @@ class App(ctk.CTk):
         param_value_from_response = parsed_data['value']
 
         # Find the parameter in the specification
-        for section_name, section_config in self.params_frame.parameter_specification.items():
+        for section_name, section_data in self.params_frame.parameter_sections.items():
+            section_config = section_data['config']
             for param_name, param_config in section_config.parameters.items():
-                if param_config.commands and 'read' in param_config.commands:
-                    if param_name_from_response in param_config.commands['read']:
-                        # Found the parameter
-                        section_widget = self.params_frame.section_widgets.get(section_name)
-                        if section_widget:
-                            param_widget = section_widget.parameters.get(param_name)
-                            if param_widget:
-                                if param_widget.widget_type == 'simple':
-                                    ui_element = param_widget.ui_elements.get('main')
-                                    if ui_element:
-                                        # Map the value back to the UI option
-                                        if param_config.options:
-                                            for option in param_config.options:
-                                                if param_value_from_response in option:
-                                                    ui_element.set_value(option)
-                                                    return
-                                        else:
-                                            ui_element.set_value(param_value_from_response)
-                                            return
-                                else: # complex
-                                    self.params_frame.parameter_specification_factory.set_parameter_value(
-                                        section_name, param_name, param_value_from_response, self.params_frame.section_widgets
-                                    )
-                        return
+                if param_name == param_name_from_response:
+                    # Found the parameter
+                    section_widget = self.params_frame.section_widgets.get(section_name)
+                    if section_widget:
+                        param_widget = section_widget.parameters.get(param_name)
+                        if param_widget:
+                            if param_widget.widget_type == 'simple':
+                                ui_element = param_widget.ui_elements.get('main')
+                                if ui_element:
+                                    # Map the value back to the UI option
+                                    if param_config.options:
+                                        for option in param_config.options:
+                                            if param_value_from_response in option:
+                                                ui_element.set_value(option)
+                                                return
+                                    else:
+                                        ui_element.set_value(param_value_from_response)
+                                        return
+                            else: # complex
+                                self.params_frame.parameter_specification_factory.set_parameter_value(
+                                    section_name, param_name, param_value_from_response, self.params_frame.section_widgets
+                                )
+                    return
 
     def on_closing(self):
         """

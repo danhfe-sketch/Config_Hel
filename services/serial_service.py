@@ -32,6 +32,7 @@ class SerialService:
         # Command queue for bulk operations
         self.command_queue = queue.Queue()
         self.queue_processing = False
+        self.pause_queue_processing = False # New flag
         self.queue_thread = None
         self.queue_delay = 0.5  # Delay between commands in seconds
         self.queue_callback = None
@@ -40,6 +41,7 @@ class SerialService:
         self._teriid_diagnostic_logged = False
         # How long to wait for a device response between queued commands
         self.queue_response_timeout = 20.0  # seconds
+        self.max_command_retries = 3 # Max retries for a single command in queue
 
         # Connection monitoring
         self.last_activity_time = None
@@ -471,15 +473,16 @@ class SerialService:
             # Introduce a final delay after sending all commands
             time.sleep(1)
             
-    def queue_command(self, command: str, command_type: str = None) -> None:
+    def queue_command(self, command: str, command_type: str = None, retry_count: int = 0) -> None:
         """
         Add a command to the queue for sequential processing.
         
         Args:
             command: The command string to send
             command_type: Optional type of command for response processing
+            retry_count: Current retry count for the command
         """
-        self.command_queue.put((command, command_type))
+        self.command_queue.put((command, command_type, retry_count))
         
     def queue_commands(self, commands: List[str], command_types: List[str] = None, 
                       callback: Callable = None, delay: float = 0.5,
@@ -510,7 +513,7 @@ class SerialService:
         # Add all commands to the queue
         for i, cmd in enumerate(commands):
             cmd_type = command_types[i] if command_types and i < len(command_types) else None
-            self.queue_command(cmd, cmd_type)
+            self.queue_command(cmd, cmd_type, 0)
             
         # Start processing the queue if not already processing
         if not self.queue_processing:
@@ -533,13 +536,13 @@ class SerialService:
         try:
             self.processed_commands = 0
             
-            while self.queue_processing and self.is_connected:
+            while self.queue_processing and self.is_connected and not self.pause_queue_processing:
                 if self.command_queue.empty():
                     # Queue is empty, we're done
                     break
                     
                 # Get the next command from the queue
-                command, command_type = self.command_queue.get()
+                command, command_type, retry_count = self.command_queue.get()
                 
                 # Send the command
                 sent_ok = self.send_command(command, command_type)
@@ -554,15 +557,30 @@ class SerialService:
                         waited = time.time() - start_wait
                     # If still waiting after timeout, log timeout notice
                     if self.waiting_for_response:
-                        self.app.after(0, self.app.log_frame.log_message, f"INFO: Response timeout after {self.queue_response_timeout}s for command: {command}\n")
-                        # reset waiting flag to avoid blocking future commands
+                        # Timeout occurred
+                        if retry_count < self.max_command_retries:
+                            self.app.after(0, self.app.log_frame.log_message, f"WARNING: Command '{command}' timed out. Retrying ({retry_count + 1}/{self.max_command_retries}).\n")
+                            self.command_queue.put((command, command_type, retry_count + 1)) # Re-queue for retry
+                        else:
+                            self.app.after(0, self.app.log_frame.log_message, f"ERROR: Command '{command}' timed out. Max retries reached. Skipping.\n")
+                            # Log this as a failed command for the overall operation
+                            self.failed_reads_count += 1 # Assuming this is a write operation, so it's a failed write
                         self.waiting_for_response = False
                 else:
-                    # If send failed, log and continue to next command
-                    self.app.after(0, self.app.log_frame.log_message, f"WARNING: Failed to send queued command: {command}\n")
+                    # If send failed, check if connection was lost or it's a validation error
+                    if not self.is_connected:
+                        # Connection lost during send. Pause queue and wait for reconnection.
+                        self.app.after(0, self.app.log_frame.log_message, f"ERROR: Connection lost while sending command '{command}'. Pausing queue.\n")
+                        self.queue_processing = False # Stop processing
+                        # The reconnection logic in error_handling_service should handle resuming
+                    else:
+                        # Send failed for other reasons (e.g., validation error). Skip command.
+                        self.app.after(0, self.app.log_frame.log_message, f"WARNING: Failed to send queued command '{command}'. Skipping.\n")
+                        self.failed_reads_count += 1 # Log as failed
                 
-                # Increment processed commands counter
-                self.processed_commands += 1
+                # Increment processed commands counter (only if not retrying)
+                if not self.waiting_for_response or retry_count >= self.max_command_retries:
+                    self.processed_commands += 1
                 
                 # Update progress dialog if available
                 if hasattr(self.app, 'operation_confirmation_service') and hasattr(self, 'progress_dialog_id') and self.progress_dialog_id:
@@ -602,6 +620,13 @@ class SerialService:
         finally:
             self.queue_processing = False
             
+    def resume_queue_processing(self) -> None:
+        """Resume processing the command queue."""
+        self.pause_queue_processing = False
+        self.app.log_frame.log_message("INFO: Command queue processing resumed.\n")
+        # If the queue processing thread is stopped, restart it
+        if not self.queue_thread or not self.queue_thread.is_alive():
+            self.start_queue_processing()
     def stop_queue_processing(self) -> None:
         """Stop processing the command queue."""
         self.queue_processing = False
@@ -1208,9 +1233,20 @@ class SerialService:
             else:
                 self.app.log_frame.log_message("DEBUG: Parameters frame found, proceeding with UI updates\n")
             
+            # Create parsed_parameters dictionary
+            parsed_parameters = {}
+            for result in parameters_read:
+                if result.success and result.raw_response:
+                    parsed_response = self.configuration_reader.parse_device_response(
+                        result.parameter_name, 
+                        result.raw_response, 
+                        self.configuration_reader._get_command_type_for_parameter(result.parameter_name)
+                    )
+                    if parsed_response.success:
+                        parsed_parameters[result.parameter_name] = parsed_response.parsed_values
+
             # Use the configuration reader's UI update method directly
-            self.configuration_reader._update_ui_with_parameters(parameters_read)
-            
+            self.configuration_reader._update_ui_fields_from_parsed_data(parsed_parameters)
             # Log successful UI updates
             updated_count = len([r for r in parameters_read if r.success])
             self.app.log_frame.log_message(f"INFO: Successfully updated UI with {updated_count} parameters\n")

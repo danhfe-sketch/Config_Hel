@@ -1662,6 +1662,7 @@ class ConfigurationReaderService:
             'relay_control': 'get_relay_control',
             'sends_control': 'get_sends_control',
             'moving_alert': 'get_moving_alert',
+            'motion_sensor_alert': 'get_motion_sensor_alert',
             'movement_alert': 'get_moving_alert',
             # Legacy mappings
             'apn_config': 'get_apn',
@@ -1991,16 +1992,12 @@ class ConfigurationReaderService:
 
                 elif command_type == 'get_motion_sensor_alert':
                     if match.group(3) == 'OFF':
-                        parsed_values['value'] = 'Desabilitado'
+                        parsed_values['enabled'] = False
+                        parsed_values['alert_type'] = 'Apenas GPRS'
                     else:
-                        mode = match.group(2)
-                        if mode == '0':
-                            parsed_values['value'] = 'Alerta Enviado Apenas GPRS'
-                        elif mode == '1':
-                            parsed_values['value'] = 'Alerta Enviado por SMS+GPRS'
-                        else:
-                            # Fallback for unknown mode
-                            parsed_values['value'] = 'Desabilitado'
+                        parsed_values['enabled'] = True
+                        alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
+                        parsed_values['alert_type'] = alert_type_map.get(match.group(2), 'Apenas GPRS')
 
                 elif command_type == 'get_source_off_type':
                     source_off_map = {'0': 'Verifica FIX de GPS', '1': 'Não verifica FIX de GPS'}
