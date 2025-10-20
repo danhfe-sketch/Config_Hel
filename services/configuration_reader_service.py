@@ -146,6 +146,7 @@ class ConfigurationReaderService:
             'sends_control': ('SENDS', 'get_sends_control'),
             'moving_alert': ('MOVING', 'get_moving_alert'),
             'motion_sensor_alert': ('SENALM', 'get_motion_sensor_alert'),
+            'distance_movement_action': ('MOVEALMFUN', 'get_distance_movement_action'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
         }
@@ -201,6 +202,7 @@ class ConfigurationReaderService:
             'get_sends_control': r'SENDS:(\d+)',
             'get_moving_alert': r'MOVING:(?:(ON),(\d+),(\d+)|(OFF))',
             'get_motion_sensor_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
+            'get_distance_movement_action': r'READOK:\s*MOVEALMFUN=(\d+)',
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
@@ -1663,6 +1665,7 @@ class ConfigurationReaderService:
             'sends_control': 'get_sends_control',
             'moving_alert': 'get_moving_alert',
             'motion_sensor_alert': 'get_motion_sensor_alert',
+            'distance_movement_action': 'get_distance_movement_action',
             'movement_alert': 'get_moving_alert',
             # Legacy mappings
             'apn_config': 'get_apn',
@@ -1998,6 +2001,13 @@ class ConfigurationReaderService:
                         parsed_values['enabled'] = True
                         alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
                         parsed_values['alert_type'] = alert_type_map.get(match.group(2), 'Apenas GPRS')
+                
+                elif command_type == 'get_distance_movement_action':
+                    action_map = {'0': 'Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)', 
+                               '1': 'Envia um alerta - Apenas uma vez independente da IGN on ou off', 
+                               '2': 'Envia um alerta uma vez e bloqueia o veículo - Apenas uma vez independente da IGN on ou off'}
+                    action_value = match.group(1)
+                    parsed_values['distance_movement_action'] = action_map.get(action_value, action_value)
 
                 elif command_type == 'get_source_off_type':
                     source_off_map = {'0': 'Verifica FIX de GPS', '1': 'Não verifica FIX de GPS'}

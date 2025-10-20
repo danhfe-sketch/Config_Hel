@@ -624,7 +624,18 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
         name='alerts',
         label='Alertas',
         order=15,
-        parameters={}  # Removed duplicate movement alert from here - it's defined in movement_alerts section
+        parameters={  # Removed duplicate movement alert from here - it's defined in movement_alerts section
+            'acc_on_alert': ParameterConfig(
+                name='acc_on_alert',
+                label='Habilitar alerta de Ignição ON',
+                ui_element='dropdown',
+                options=['Disabled', 'Alerta Enviado Apenas GPRS', 'Alerta Enviado por SMS+GPRS'],
+                commands={
+                    'set': 'ACCALM,ON,X#',
+                    'read': 'ACCALM#'
+                }
+            )
+        }
     ),
 
     'movement_alerts': SectionConfig(
@@ -682,6 +693,16 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 commands={
                     'set': 'SENALM,<enabled>,<alert_type>#',
                     'read': 'SENALM#'
+                }
+            ),
+            'distance_movement_action': ParameterConfig(
+                name='distance_movement_action',
+                label='Configurar ação para movimento por distância',
+                ui_element='dropdown',
+                options=['Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)', 'Envia um alerta - Apenas uma vez independente da IGN on ou off', 'Envia um alerta uma vez e bloqueia o veículo - Apenas uma vez independente da IGN on ou off'],
+                commands={
+                    'set': 'SZCS#MOVEALMFUN=X',
+                    'read': 'CXCS#MOVEALMFUN'
                 }
             )
         }
@@ -797,9 +818,19 @@ COMMAND_VALUE_MAPPINGS = {
         'Ativar e Manter': 1,
         'Ativar e Desativar com Jammer': 2
     },
+    'acc_on_alert': {
+        'Disabled': 'OFF',
+        'Alerta Enviado Apenas GPRS': 0,
+        'Alerta Enviado por SMS+GPRS': 1
+    },
     'param_g': {
         'Manter ativada': 0,
         'Manter desativada': 1
+    },
+    'distance_movement_action': {
+        'Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)': 0,
+        'Envia um alerta - Apenas uma vez independente da IGN on ou off': 1,
+        'Envia um alerta uma vez e bloqueia o veículo - Apenas uma vez independente da IGN on ou off': 2
     },
     'boolean_on_off': {
         True: 'ON',

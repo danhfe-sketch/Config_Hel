@@ -53,6 +53,7 @@ class LT32ProCommandFormatter:
         'RELAY': 'RELAY#',
         'SENDS': 'SENDS#',
         'SENALM': 'SENALM#',
+        'MOVEALMFUN': 'CXCS#MOVEALMFUN',
         'BATSLPVALUE': 'CXCS#BATSLPVALUE',
         'PARAM': 'PARAM#',
     }

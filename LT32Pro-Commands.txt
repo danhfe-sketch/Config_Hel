@@ -482,24 +482,31 @@ SPEED#
 Resposta: SPEED:ON,10,120,0
 
 
-Configurar alerta de Ignição ON
-ACCALM,A,M#
-A=ON
-M=0 ~ 1 (Tipo de alerta)
-0: Apenas GPRS
-1: GPRS+SMS
-Envio: ACCALM,ON,0#
-Resposta: ACCALM:0,OK
+Habilitar/Desabilitar alerta de Ignição ON
+ACCALM,ON,X#
+Habilita o alerta de ignição ON.
+X=0: Alerta Enviado Apenas GPRS
+X=1: Alerta Enviado por SMS+GPRS
 
+Exemplos de Envio:
+ACCALM,ON,0#
+ACCALM,ON,1#
 
-Configurar alerta de Ignição ON
+Exemplos de Resposta:
+ACCALM:0,OK
+ACCALM:1,OK
+
 ACCALM,OFF#
+Desabilita o alerta de ignição ON.
 Resposta: ACCALM,OFF OK
 
 
-Requisitar alerta de Ignição ON
+Requisitar status do alerta de Ignição ON
 ACCALM#
-Resposta: ACCALM:0,OK
+Exemplos de Resposta:
+ACCALM,OFF
+ACCALM:0,OK (Alerta Apenas GPRS)
+ACCALM:1,OK (Alerta por SMS+GPRS)
 
 
 Configurar alerta de Ignição OFF

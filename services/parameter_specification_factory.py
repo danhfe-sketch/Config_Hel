@@ -695,6 +695,10 @@ class ParameterSpecificationFactory:
                     print("ERROR: No serial service available to send command")
             elif param_name == 'motion_sensor_alert':
                 self._send_motion_sensor_alert_command(param_values)
+            elif param_name == 'distance_movement_action':
+                self._send_distance_movement_action_command(param_values)
+            elif param_name == 'acc_on_alert':
+                self._send_acc_on_alert_command(param_values)
             elif param_name == 'backup_battery_protection_voltage':
                 self._send_backup_battery_protection_voltage_command(param_values)
             else:
@@ -1361,10 +1365,54 @@ class ParameterSpecificationFactory:
             )
             return
 
-        self.serial_service.send_command(command)
+        self.serial_service.send_command(command, command_type='motion_sensor_alert')
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("motion_sensor_alert_sent", "Motion sensor alert configuration sent to device")
+        )
+
+    def _send_distance_movement_action_command(self, values: dict):
+        """Send distance movement action configuration command"""
+        distance_movement_action = str(values.get('distance_movement_action', '')).strip()
+        
+        # Map distance movement action to command value
+        distance_movement_action_mapping = {
+            'Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)': '0',
+            'Envia um alerta - Apenas uma vez independente da IGN on ou off': '1',
+            'Envia um alerta uma vez e bloqueia o veículo - Apenas uma vez independente da IGN on ou off': '2'
+        }
+        
+        value = distance_movement_action_mapping.get(distance_movement_action, '0')
+        command = f"ATSMS:SZCS#MOVEALMFUN={value}"
+        
+        self.serial_service.send_command(command, command_type='distance_movement_action')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("distance_movement_action_sent", "Distance movement action configuration sent to device")
+        )
+    def _send_acc_on_alert_command(self, values: dict):
+        """Send ACC ON alert configuration command"""
+        acc_on_alert = str(values.get('acc_on_alert', '')).strip()
+        
+        # Map ACC ON alert to command value
+        acc_on_alert_mapping = {
+            'Disabled': 'OFF',
+            'Alerta Enviado Apenas GPRS': '0',
+            'Alerta Enviado por SMS+GPRS': '1'
+        }
+        
+        value_code = acc_on_alert_mapping.get(acc_on_alert, 'OFF')
+        
+        # Handle disabled state
+        if value_code == 'OFF':
+            command = f"ATSMS:ACCALM,OFF#"
+        else:
+            command = f"ATSMS:ACCALM,ON,{value_code}#"
+        
+        self.serial_service.send_command(command, command_type='acc_on_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("acc_on_alert_sent", "ACC ON alert configuration sent to device")
         )
 
     def _send_movement_alert_command(self, values: dict):

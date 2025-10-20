@@ -769,6 +769,9 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             'moving_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
             'moving': {'section': 'movement_alerts', 'parameter': 'moving_alert'},  # Map both MOVING and moving_alert to same UI
             'motion_sensor_alert': {'section': 'movement_alerts', 'parameter': 'motion_sensor_alert'},
+            'distance_movement_action': {'section': 'movement_alerts', 'parameter': 'distance_movement_action'},
+            # Alerts
+            'acc_on_alert': {'section': 'alerts', 'parameter': 'acc_on_alert'},
             'movement_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'}  # Also map movement_alert to same UI for backward compatibility
         }
 

@@ -182,9 +182,21 @@ This document provides a structured specification of the user interface componen
     *   **set:** `SZCS#SPD_LED_SHOW=A` (Note: A=1 to enable, 0 to disable)
     *   **read:** "N/A"
 
-## Section: Movement Alerts
+## Section: Alerts
 
-### Config: Moving Alert
+### Config: Ignition ON Alert
+
+*   **name:** acc_on_alert
+*   **label:** "Habilitar alerta de Ignição ON"
+*   **ui_element:** "dropdown"
+*   **options:** ["Disabled", "Alerta Enviado Apenas GPRS", "Alerta Enviado por SMS+GPRS"]
+*   **commands:**
+    *   **set:** `ACCALM,ON,X#` (Note: X=0 for GPRS, 1 for GPRS+SMS)
+    *   **read:** `ACCALM#`
+
+### Section: Movement Alerts
+
+#### Config: Moving Alert
 
 *   **name:** moving_alert
 *   **label:** "Habilitar alerta de movimento (por distância)"
@@ -209,7 +221,7 @@ This document provides a structured specification of the user interface componen
     *   **set:** `MOVING,<enabled>,<radius>,<alert_type>#` (Note: enabled=ON/OFF, alert_type=0/1)
     *   **read:** `MOVING#`
 
-### Config: Motion Sensor Alert
+#### Config: Motion Sensor Alert
 
 *   **name:** motion_sensor_alert
 *   **label:** "Habilitar alerta de movimento"
@@ -227,6 +239,116 @@ This document provides a structured specification of the user interface componen
 *   **commands:**
     *   **set:** `SENALM,<enabled>,<alert_type>#` (Note: enabled=ON/OFF, alert_type=0/1)
     *   **read:** `SENALM#`
+
+#### Config: Distance Movement Action
+
+*   **name:** distance_movement_action
+*   **label:** "Configurar ação para movimento por distância"
+*   **ui_element:** "dropdown"
+*   **options:** ["Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)", "Envia um alerta - Apenas uma vez independente da IGN on ou off", "Envia um alerta uma vez e bloqueia o veículo - Apenas uma vez independente da IGN on ou off"]
+*   **commands:**
+    *   **set:** `SZCS#MOVEALMFUN=X` (Note: X=0 for the first option, 1 for the second, 2 for the third)
+    *   **read:** `CXCS#MOVEALMFUN`
+
+### Section: Battery Alerts
+
+#### Config: Backup Battery Alert
+
+*   **name:** backup_battery_alert
+*   **label:** "Alerta de bateria backup baixa"
+*   **ui_element:** "toggle_switch"
+*   **commands:**
+    *   **set:** `BATALM,<state>,<mode>#` (Note: state=ON/OFF, mode=0 for GPRS, 1 for SMS+GPRS)
+    *   **read:** `BATALM#`
+
+#### Config: Main Power Alert
+
+*   **name:** main_power_alert
+*   **label:** "Alerta de Remoção de Bateria Principal"
+*   **description:** "Configures the main power removal alert."
+*   **fields:**
+    *   **field_1:**
+        *   **name:** enabled
+        *   **label:** "Habilitar alerta"
+        *   **ui_element:** "toggle_switch"
+    *   **field_2:**
+        *   **name:** alert_type
+        *   **label:** "Tipo de Alerta"
+        *   **ui_element:** "dropdown"
+        *   **options:** ["Apenas GPRS", "GPRS+SMS"]
+    *   **field_3:**
+        *   **name:** detection_time
+        *   **label:** "Tempo de detecção (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "2-60"
+    *   **field_4:**
+        *   **name:** min_charge_time
+        *   **label:** "Tempo mínimo de carga (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-3600"
+*   **commands:**
+    *   **set:** `POWERALM,<enabled>,<alert_type>,<detection_time>,<min_charge_time>#`
+    *   **read:** `POWERALM#`
+
+### Section: Jammer Detection
+
+#### Config: Jammer Detection
+
+*   **name:** jammer_detection
+*   **label:** "Detecção de Jammer"
+*   **ui_element:** "toggle_switch"
+*   **commands:**
+    *   **set:** `JAMMER,<state>,<mode>#` (Note: state=ON/OFF, mode=0 for GPRS, 1 for GPRS+SMS)
+    *   **read:** `JAMMER#`
+
+#### Config: Jammer Relay Action
+
+*   **name:** jammer_relay_action
+*   **label:** "Ação da Saída por Jammer"
+*   **description:** "Configures the relay (output) behavior upon jammer detection."
+*   **fields:**
+    *   **field_1:**
+        *   **name:** enabled
+        *   **label:** "Ativar saída (bloqueio) ao detectar Jammer"
+        *   **ui_element:** "toggle_switch"
+    *   **field_2:**
+        *   **name:** output_operation
+        *   **label:** "Operação da Saída"
+        *   **ui_element:** "dropdown"
+        *   **options:** ["Sem Ação", "Ativar e Manter", "Ativar e Desativar com Jammer"]
+    *   **field_3:**
+        *   **name:** confirmation_time
+        *   **label:** "Tempo para confirmação (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "0-1800"
+    *   **field_4:**
+        *   **name:** speed_limit
+        *   **label:** "Velocidade limite (km/h)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "0-255"
+    *   **field_5:**
+        *   **name:** d_parameter
+        *   **label:** "Tempo da saída ativada (GND) (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-30"
+    *   **field_6:**
+        *   **name:** e_parameter
+        *   **label:** "Tempo as saída desativada (aberto) (s)"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-30"
+    *   **field_7:**
+        *   **name:** f_parameter
+        *   **label:** "Quantidade de ciclos D e E"
+        *   **ui_element:** "number_input"
+        *   **validation:** "1-255"
+    *   **field_8:**
+        *   **name:** g_parameter
+        *   **label:** "Estado da saída após o fim dos ciclos"
+        *   **ui_element:** "dropdown"
+        *   **options:** ["Mantém saída ativada (GND)", "Mantém saída desativada (aberto)"]
+*   **commands:**
+    *   **set:** `JAMRELAY,<op>,<time>,<speed>,<D>,<E>,<F>,<G>#` (Note: This is a complex command with multiple parameters)
+    *   **read:** `JAMRELAY#`
 
 ## Section: Power Saving
 
@@ -278,46 +400,6 @@ This document provides a structured specification of the user interface componen
     *   **set:** `SZCS#ANGLEVALUE=<min_speed>-<angle_variation>` (Note: e.g., ...=10-015)
     *   **read:** `CXCS#ANGLEVALUE`
 
-## Section: Battery Alerts
-
-### Config: Backup Battery Alert
-
-*   **name:** backup_battery_alert
-*   **label:** "Alerta de bateria backup baixa"
-*   **ui_element:** "toggle_switch"
-*   **commands:**
-    *   **set:** `BATALM,<state>,<mode>#` (Note: state=ON/OFF, mode=0 for GPRS, 1 for SMS+GPRS)
-    *   **read:** `BATALM#`
-
-### Config: Main Power Alert
-
-*   **name:** main_power_alert
-*   **label:** "Alerta de Remoção de Bateria Principal"
-*   **description:** "Configures the main power removal alert."
-*   **fields:**
-    *   **field_1:**
-        *   **name:** enabled
-        *   **label:** "Habilitar alerta"
-        *   **ui_element:** "toggle_switch"
-    *   **field_2:**
-        *   **name:** alert_type
-        *   **label:** "Tipo de Alerta"
-        *   **ui_element:** "dropdown"
-        *   **options:** ["Apenas GPRS", "GPRS+SMS"]
-    *   **field_3:**
-        *   **name:** detection_time
-        *   **label:** "Tempo de detecção (s)"
-        *   **ui_element:** "number_input"
-        *   **validation:** "2-60"
-    *   **field_4:**
-        *   **name:** min_charge_time
-        *   **label:** "Tempo mínimo de carga (s)"
-        *   **ui_element:** "number_input"
-        *   **validation:** "1-3600"
-*   **commands:**
-    *   **set:** `POWERALM,<enabled>,<alert_type>,<detection_time>,<min_charge_time>#`
-    *   **read:** `POWERALM#`
-
 ## Section: Vibration Sensor
 
 ### Config: Vibration Sensitivity
@@ -337,66 +419,6 @@ This document provides a structured specification of the user interface componen
 *   **commands:**
     *   **set_level:** `SZCS#VIBL=<level>`
     *   **read_level:** `CXCS#VIBL`
-
-## Section: Jammer Detection
-
-### Config: Jammer Detection
-
-*   **name:** jammer_detection
-*   **label:** "Detecção de Jammer"
-*   **ui_element:** "toggle_switch"
-*   **commands:**
-    *   **set:** `JAMMER,<state>,<mode>#` (Note: state=ON/OFF, mode=0 for GPRS, 1 for GPRS+SMS)
-    *   **read:** `JAMMER#`
-
-### Config: Jammer Relay Action
-
-*   **name:** jammer_relay_action
-*   **label:** "Ação da Saída por Jammer"
-*   **description:** "Configures the relay (output) behavior upon jammer detection."
-*   **fields:**
-    *   **field_1:**
-        *   **name:** enabled
-        *   **label:** "Ativar saída (bloqueio) ao detectar Jammer"
-        *   **ui_element:** "toggle_switch"
-    *   **field_2:**
-        *   **name:** output_operation
-        *   **label:** "Operação da Saída"
-        *   **ui_element:** "dropdown"
-        *   **options:** ["Sem Ação", "Ativar e Manter", "Ativar e Desativar com Jammer"]
-    *   **field_3:**
-        *   **name:** confirmation_time
-        *   **label:** "Tempo para confirmação (s)"
-        *   **ui_element:** "number_input"
-        *   **validation:** "0-1800"
-    *   **field_4:**
-        *   **name:** speed_limit
-        *   **label:** "Velocidade limite (km/h)"
-        *   **ui_element:** "number_input"
-        *   **validation:** "0-255"
-    *   **field_5:**
-        *   **name:** d_parameter
-        *   **label:** "Tempo da saída ativada (GND) (s)"
-        *   **ui_element:** "number_input"
-        *   **validation:** "1-30"
-    *   **field_6:**
-        *   **name:** e_parameter
-        *   **label:** "Tempo as saída desativada (aberto) (s)"
-        *   **ui_element:** "number_input"
-        *   **validation:** "1-30"
-    *   **field_7:**
-        *   **name:** f_parameter
-        *   **label:** "Quantidade de ciclos D e E"
-        *   **ui_element:** "number_input"
-        *   **validation:** "1-255"
-    *   **field_8:**
-        *   **name:** g_parameter
-        *   **label:** "Estado da saída após o fim dos ciclos"
-        *   **ui_element:** "dropdown"
-        *   **options:** ["Mantém saída ativada (GND)", "Mantém saída desativada (aberto)"]
-*   **commands:**
-    *   **set:** `JAMRELAY,<op>,<time>,<speed>,<D>,<E>,<F>,<G>#` (Note: This is a complex command with multiple parameters)
-    *   **read:** `JAMRELAY#`
 
 ## Section: Miscellaneous
 
