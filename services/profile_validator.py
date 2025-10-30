@@ -139,7 +139,7 @@ class ProfileValidator:
             logger: Optional logger instance for detailed logging
         """
         self.logger = logger or logging.getLogger(__name__)
-        self.current_app_version = "1.0"
+        self.current_app_version = "1.2"
         
         # Define required sections for profile files
         self.required_sections = {
@@ -190,7 +190,7 @@ class ProfileValidator:
         self.optional_metadata_fields = {
             'profile_version': {
                 'type': str,
-                'default': '1.0',
+                'default': '1.2',
                 'description': 'Profile format version'
             },
             'device_imei': {
@@ -207,7 +207,7 @@ class ProfileValidator:
             },
             'app_version': {
                 'type': str,
-                'default': '1.0',
+                'default': '1.2',
                 'description': 'Application version that created the profile'
             },
             'checksum': {
@@ -1101,7 +1101,7 @@ class ProfileValidator:
                 'deprecated_features': [],
                 'migration_path': '1.0'
             },
-            '2.0': {
+            '1.2': {
                 'supported_features': ['basic_parameters', 'apn_config', 'timer_settings', 'advanced_alerts', 'security_features'],
                 'deprecated_features': ['legacy_timer_format'],
                 'migration_path': '1.1'

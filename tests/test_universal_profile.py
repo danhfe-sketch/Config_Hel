@@ -58,7 +58,7 @@ class TestProfileMetadata(unittest.TestCase):
         
         self.assertEqual(metadata.parameter_spec_version, "2.0")
         self.assertEqual(metadata.created_by, "Another User")
-        self.assertEqual(metadata.profile_format_version, "1.1")
+        self.assertEqual(metadata.profile_format_version, "1.2")
         self.assertEqual(metadata.tags["test"], "value")
     
     def test_from_dict_defaults(self):

@@ -187,7 +187,7 @@ class ToolbarFrame(ctk.CTkFrame):
         try:
             # Look for PDF manual in the application directory
             manual_files = [
-                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.04-082025.pdf",
+                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.06-092025.pdf",
                 "manual.pdf",
                 "LT32Pro_Manual.pdf"
             ]

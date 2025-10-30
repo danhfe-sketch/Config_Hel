@@ -25,7 +25,8 @@ class ProfileFormatVersion(Enum):
     """Supported profile format versions."""
     LEGACY_V0_9 = "0.9"
     CURRENT_V1_0 = "1.0"
-    FUTURE_V1_1 = "1.1"
+    CURRENT_V1_1 = "1.1"
+    FUTURE_V1_2 = "1.2"
 
 
 class ConversionErrorType(Enum):

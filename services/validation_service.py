@@ -105,31 +105,35 @@ class ValidationService:
         self.logger = logging.getLogger(__name__)
         
         # Set up logging handlers
-        try:
-            self.debug_file_handler = logging.FileHandler('validation_debug.log')
-            self.debug_file_handler.setLevel(logging.DEBUG)
-            self.debug_file_handler.setFormatter(
-                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            )
-            self.logger.addHandler(self.debug_file_handler)
-            
-            self.error_file_handler = logging.FileHandler('validation_errors.log')
-            self.error_file_handler.setLevel(logging.ERROR)
-            self.error_file_handler.setFormatter(
-                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            )
-            self.logger.addHandler(self.error_file_handler)
-            
-            # Add metrics file handler
-            self.metrics_file_handler = logging.FileHandler('validation_metrics.log')
-            self.metrics_file_handler.setLevel(logging.INFO)
-            self.metrics_file_handler.setFormatter(
-                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            )
-            self.logger.addHandler(self.metrics_file_handler)
-            
-        except Exception as e:
-            self.logger.warning(f"Could not set up validation log files: {str(e)}")
+        import sys
+        if not getattr(sys, 'frozen', False): # Only set up file handlers if not running as a PyInstaller executable
+            try:
+                self.debug_file_handler = logging.FileHandler('validation_debug.log')
+                self.debug_file_handler.setLevel(logging.DEBUG)
+                self.debug_file_handler.setFormatter(
+                    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                )
+                self.logger.addHandler(self.debug_file_handler)
+                
+                self.error_file_handler = logging.FileHandler('validation_errors.log')
+                self.error_file_handler.setLevel(logging.ERROR)
+                self.error_file_handler.setFormatter(
+                    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                )
+                self.logger.addHandler(self.error_file_handler)
+                
+                # Add metrics file handler
+                self.metrics_file_handler = logging.FileHandler('validation_metrics.log')
+                self.metrics_file_handler.setLevel(logging.INFO)
+                self.metrics_file_handler.setFormatter(
+                    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                )
+                self.logger.addHandler(self.metrics_file_handler)
+                
+            except Exception as e:
+                self.logger.warning(f"Could not set up validation log files: {str(e)}")
+        else:
+            self.logger.info("Running as PyInstaller executable, file logging for validation disabled.")
         
         # Performance configuration
         self._perf_config = performance_config or PerformanceConfig()
