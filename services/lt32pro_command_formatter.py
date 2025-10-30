@@ -55,6 +55,7 @@ class LT32ProCommandFormatter:
         'SENALM': 'SENALM#',
         'MOVEALMFUN': 'CXCS#MOVEALMFUN',
         'BATSLPVALUE': 'CXCS#BATSLPVALUE',
+        'BLINDSPD': 'CXCS#BLINDSPD',
         'PARAM': 'PARAM#',
     }
     

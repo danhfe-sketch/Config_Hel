@@ -699,6 +699,8 @@ class ParameterSpecificationFactory:
                 self._send_distance_movement_action_command(param_values)
             elif param_name == 'acc_on_alert':
                 self._send_acc_on_alert_command(param_values)
+            elif param_name == 'acc_off_alert':
+                self._send_acc_off_alert_command(param_values)
             elif param_name == 'backup_battery_protection_voltage':
                 self._send_backup_battery_protection_voltage_command(param_values)
             else:
@@ -1415,6 +1417,25 @@ class ParameterSpecificationFactory:
             self.i18n_service.get("acc_on_alert_sent", "ACC ON alert configuration sent to device")
         )
 
+    def _send_acc_off_alert_command(self, values: dict):
+        """Send ACC OFF alert configuration command"""
+        acc_off_alert = str(values.get('acc_off_alert', '')).strip()
+        
+        if acc_off_alert == 'Desabilitado':
+            command = "ACCOFFALM,OFF#"
+        elif acc_off_alert == 'Alerta Enviado Apenas GPRS':
+            command = "ACCOFFALM,ON,0#"
+        elif acc_off_alert == 'Alerta Enviado por SMS+GPRS':
+            command = "ACCOFFALM,ON,1#"
+        else:
+            return
+
+        self.serial_service.send_command(command, command_type='acc_off_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("acc_off_alert_sent", "ACC OFF alert configuration sent to device")
+        )
+
     def _send_movement_alert_command(self, values: dict):
         """Send movement alert command"""
         enabled = values.get('enabled', False)
@@ -1466,4 +1487,31 @@ class ParameterSpecificationFactory:
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("vibration_window_sent", "Vibration window configuration sent to device")
+        )
+    def _send_blind_area_speed_command(self, values: dict):
+        """Send blind area speed configuration command"""
+        blind_area_speed = values.get('blind_area_speed', 0)
+        
+        # Ensure value is within valid range (0-20)
+        try:
+            speed_value = int(blind_area_speed)
+            if speed_value < 0 or speed_value > 20:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("blind_area_speed_range_error", "Blind area speed value must be between 0 and 20")
+                )
+                return
+        except (ValueError, TypeError):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("blind_area_speed_invalid", "Invalid blind area speed value")
+            )
+            return
+        
+        command = f"ATSMS:SZCS#BLINDSPD={speed_value}"
+        
+        self.serial_service.send_command(command, command_type='blind_area_speed')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("blind_area_speed_sent", "Blind area speed configuration sent to device")
         )

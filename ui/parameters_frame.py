@@ -736,6 +736,7 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             # Speed Parameters
             'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
             'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
+            'blind_area_speed': {'section': 'speed', 'parameter': 'blind_area_speed'},
             
             # Power Saving Parameters
             'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
@@ -772,6 +773,7 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             'distance_movement_action': {'section': 'movement_alerts', 'parameter': 'distance_movement_action'},
             # Alerts
             'acc_on_alert': {'section': 'alerts', 'parameter': 'acc_on_alert'},
+            'acc_off_alert': {'section': 'alerts', 'parameter': 'acc_off_alert'},
             'movement_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'}  # Also map movement_alert to same UI for backward compatibility
         }
 

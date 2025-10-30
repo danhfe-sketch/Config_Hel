@@ -283,7 +283,19 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set': 'SZCS#SPD_LED_SHOW=A',
                     'read': 'N/A'
                 }
-            )
+            ),
+            'blind_area_speed': ParameterConfig(
+                name='blind_area_speed',
+                label='Configurar velocidade para envio de posições em área de sombra',
+                description='Configures the minimum speed for sending position data in blind areas.',
+                ui_element='number_input',
+                validation='0-20',
+                unit='km/h',
+                commands={
+                    'set': 'SZCS#BLINDSPD=X',
+                    'read': 'CXCS#BLINDSPD'
+                }
+            ),
         }
     ),
     
@@ -634,6 +646,16 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                     'set': 'ACCALM,ON,X#',
                     'read': 'ACCALM#'
                 }
+            ),
+            'acc_off_alert': ParameterConfig(
+                name='acc_off_alert',
+                label='Habilitar alerta de Ignição OFF',
+                ui_element='dropdown',
+                options=['Desabilitado', 'Alerta Enviado Apenas GPRS', 'Alerta Enviado por SMS+GPRS'],
+                commands={
+                    'set': 'ACCOFFALM,ON,X#',
+                    'read': 'ACCOFFALM#'
+                }
             )
         }
     ),
@@ -789,6 +811,12 @@ VALIDATION_RULES = {
         'min': 0,
         'max': 255,
         'error_message': 'Speed limit must be between 0 and 255 km/h'
+    },
+    'blind_area_speed': {
+        'type': 'numeric_range',
+        'min': 0,
+        'max': 20,
+        'error_message': 'Blind area speed must be between 0 and 20 km/h'
     }
 }
 
@@ -822,6 +850,11 @@ COMMAND_VALUE_MAPPINGS = {
         'Disabled': 'OFF',
         'Alerta Enviado Apenas GPRS': 0,
         'Alerta Enviado por SMS+GPRS': 1
+    },
+    'acc_off_alert': {
+        'Desabilitado': 'OFF',
+        'Alerta Enviado Apenas GPRS': '0',
+        'Alerta Enviado por SMS+GPRS': '1'
     },
     'param_g': {
         'Manter ativada': 0,

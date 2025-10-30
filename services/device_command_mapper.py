@@ -923,6 +923,19 @@ class DeviceCommandMapper:
                     key, value = section.split(':', 1)
                     result[key.strip()] = value.strip()
 
+        # Handle bare device responses like "ACCOFFALM,OFF" (some firmwares reply without SETOK/READOK)
+        elif re.search(r'^\s*ACCOFFALM\b', response, re.IGNORECASE):
+            # Example device responses: "ACCOFFALM,OFF" or "ACCOFFALM OFF" or "ACCOFFALM:OFF"
+            match = re.search(r'ACCOFFALM[,=:\s]*\s*(ON|OFF|\d+)', response, re.IGNORECASE)
+            if match:
+                param_value = match.group(1).upper()
+                result['parameter'] = 'ACCOFFALM'
+                result['value'] = param_value
+                result['status'] = 'success'
+                try:
+                    self.logger.debug(f"Parsed bare ACCOFFALM response: raw={response!r} -> value={param_value}")
+                except Exception:
+                    print(f"DEBUG: Parsed bare ACCOFFALM response: raw={response!r} -> value={param_value}")
         # Handle command responses with SETOK prefix
         elif response.startswith('SETOK:'):
             # Example: "SETOK: VIBL=3"
@@ -1272,7 +1285,7 @@ class DeviceCommandMapper:
             'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
             'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter',
             'network_settings', 'defense_settings', 'source_off_type', 'relay_control', 'sends_control',
-            'motion_sensor_alert', 'distance_movement_action', 'acc_on_alert'
+            'motion_sensor_alert', 'distance_movement_action', 'acc_on_alert', 'acc_off_alert', 'blind_area_speed'
         ]
         
         self.logger.info(f"Processing {len(individual_params)} individual parameters")
@@ -1713,6 +1726,21 @@ class DeviceCommandMapper:
                 raise ValueError(f"Distance movement action command validation failed: {str(e)}")
         return command
 
+    def format_blind_area_speed_command(self, value: int) -> str:
+        """Format blind area speed configuration command."""
+        # Ensure value is within valid range (0-20)
+        if value < 0 or value > 20:
+            raise ValueError(f"Blind area speed value must be between 0 and 20, got {value}")
+        
+        command = f"ATSMS:SZCS#BLINDSPD={value}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Blind area speed command validation failed: {str(e)}")
+        return command
+
     def _generate_apn_command(self, apn_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate APN command from flattened parameters.
         
@@ -1967,6 +1995,28 @@ class DeviceCommandMapper:
         except Exception as e:
             self.logger.error(f"Error generating acc on alert command: {str(e)}")
             return None
+
+    def _generate_acc_off_alert_command(self, params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate ACC OFF alert command from flattened parameters."""
+        try:
+            value = params.get('value')
+            if value == 'Desabilitado':
+                command = "ACCOFFALM,OFF#"
+            elif value == 'Alerta Enviado Apenas GPRS':
+                command = "ACCOFFALM,ON,0#"
+            elif value == 'Alerta Enviado por SMS+GPRS':
+                command = "ACCOFFALM,ON,1#"
+            else:
+                return None
+            
+            if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+                full_command = f"ATSMS:{command}"
+                self.command_validation_gateway.validate_command(full_command, source="bulk_commands")
+
+            return command
+        except Exception as e:
+            self.logger.error(f"Error generating acc off alert command: {str(e)}")
+            return None
     
     def _generate_individual_command(self, param_name: str, param_value: Any, validate_commands: bool) -> Optional[str]:
         """Generate command for individual parameters."""
@@ -1989,7 +2039,9 @@ class DeviceCommandMapper:
                 'sends_control': lambda v: self.get_command('sends_control', v),
                 'motion_sensor_alert': lambda v: self._generate_motion_sensor_alert_command({'value': v}, validate_commands),
                 'acc_on_alert': lambda v: self._generate_acc_on_alert_command({'value': v}, validate_commands),
-                'distance_movement_action': lambda v: self.format_distance_movement_action_command(v)
+                'acc_off_alert': lambda v: self._generate_acc_off_alert_command({'value': v}, validate_commands),
+                'distance_movement_action': lambda v: self.format_distance_movement_action_command(v),
+                'blind_area_speed': lambda v: self.format_blind_area_speed_command(int(float(v)) if v is not None else 0)
             }
             
             if param_name in individual_mapping:

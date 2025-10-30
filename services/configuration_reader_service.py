@@ -121,6 +121,7 @@ class ConfigurationReaderService:
             'ignition_type': ('ACCLINE', 'get_ignition_type'),
             # Speed Parameters
             'speed_alert': ('SPEED', 'get_speed_alert'),
+            'blind_area_speed': ('BLINDSPD', 'get_blind_area_speed'),
             'speed_buzzer': ('SPD_LED_SHOW', 'get_speed_buzzer'),
             # Power Saving Parameters
             'sleep_mode': ('SLPDISCONNECT', 'get_sleep_mode'),
@@ -147,6 +148,7 @@ class ConfigurationReaderService:
             'moving_alert': ('MOVING', 'get_moving_alert'),
             'motion_sensor_alert': ('SENALM', 'get_motion_sensor_alert'),
             'distance_movement_action': ('MOVEALMFUN', 'get_distance_movement_action'),
+            'acc_off_alert': ('ACCOFFALM', 'get_acc_off_alert'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
         }
@@ -176,6 +178,7 @@ class ConfigurationReaderService:
             'get_ignition_type': r'READOK:\s*ACCLINE=(\d+)[\s\*]ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
             
             # Speed Parameters (LT32Pro format)
+            'get_blind_area_speed': r'READOK:\s*BLINDSPD=(\d+)',
             'get_speed_alert': r'SPEED:(OFF|ON,(\d+),(\d+),(\d+))',
             'get_speed_buzzer': r'READOK:\s*SPD_LED_SHOW=(\d+)',
             
@@ -203,6 +206,7 @@ class ConfigurationReaderService:
             'get_moving_alert': r'MOVING:(?:(ON),(\d+),(\d+)|(OFF))',
             'get_motion_sensor_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
             'get_distance_movement_action': r'READOK:\s*MOVEALMFUN=(\d+)',
+            'get_acc_off_alert': r'ACCOFFALM[:, ]*(?:(ON),(\\d+)|(OFF))',
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
@@ -633,6 +637,7 @@ class ConfigurationReaderService:
             # Ignition Parameters
             'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
             
+            'blind_area_speed': {'section': 'speed', 'parameter': 'blind_area_speed'},
             # Speed Parameters
             'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
             'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
@@ -1664,8 +1669,10 @@ class ConfigurationReaderService:
             'relay_control': 'get_relay_control',
             'sends_control': 'get_sends_control',
             'moving_alert': 'get_moving_alert',
+            'blind_area_speed': 'get_blind_area_speed',
             'motion_sensor_alert': 'get_motion_sensor_alert',
             'distance_movement_action': 'get_distance_movement_action',
+            'acc_off_alert': 'get_acc_off_alert',
             'movement_alert': 'get_moving_alert',
             # Legacy mappings
             'apn_config': 'get_apn',
@@ -1682,7 +1689,11 @@ class ConfigurationReaderService:
             'ignition_settings': 'get_accline'
         }
         
-        return command_type_mapping.get(param_name, 'get_default')
+        val = command_type_mapping.get(param_name, 'get_default')
+        # If mapping stores a tuple like ('BLINDSPD', 'get_blind_area_speed'), return the command type string
+        if isinstance(val, tuple):
+            return val[1]
+        return val
 
     def read_specific_parameter(self, param_name: str, command: str = None, 
                               command_type: str = None, max_retries: int = 2) -> ParameterReadResult:
@@ -1914,6 +1925,15 @@ class ConfigurationReaderService:
                         alert_type_map = {'0': 'Apenas GPRS', '1': 'GPRS+SMS'}
                         parsed_values['alert_type'] = alert_type_map.get(match.group(5), match.group(5))
                     
+                elif command_type == 'get_blind_area_speed':
+                    # READOK: BLINDSPD=X
+                    try:
+                        parsed_values['blind_area_speed'] = match.group(1)
+                    except Exception:
+                        m = re.search(r'BLINDSPD[=:\s,]*(\d+)', response)
+                        if m:
+                            parsed_values['blind_area_speed'] = m.group(1)
+                
                 elif command_type == 'get_speed_buzzer':
                     parsed_values['speed_buzzer'] = match.group(1) == '1'
                 
@@ -2001,6 +2021,13 @@ class ConfigurationReaderService:
                         parsed_values['enabled'] = True
                         alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
                         parsed_values['alert_type'] = alert_type_map.get(match.group(2), 'Apenas GPRS')
+
+                elif command_type == 'get_acc_off_alert':
+                    if match.group(3) == 'OFF':
+                        parsed_values['acc_off_alert'] = 'Desabilitado'
+                    else:
+                        alert_type_map = {'0': 'Alerta Enviado Apenas GPRS', '1': 'Alerta Enviado por SMS+GPRS'}
+                        parsed_values['acc_off_alert'] = alert_type_map.get(match.group(2), match.group(2))
                 
                 elif command_type == 'get_distance_movement_action':
                     action_map = {'0': 'Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)', 
@@ -2211,6 +2238,8 @@ class ConfigurationReaderService:
         elif param_name == 'sleep_time':
             return parsed_values.get('sleep_time', '')
         
+        elif param_name == 'blind_area_speed':
+            return parsed_values.get('blind_area_speed', '')
         # Angle Parameters
         elif param_name == 'angle_report':
             return str(parsed_values.get('enabled', False))

@@ -400,6 +400,19 @@ This document provides a structured specification of the user interface componen
     *   **set:** `SZCS#ANGLEVALUE=<min_speed>-<angle_variation>` (Note: e.g., ...=10-015)
     *   **read:** `CXCS#ANGLEVALUE`
 
+### Config: Blind Area Speed
+
+*   **name:** blind_area_speed
+*   **label:** "Configurar velocidade para envio de posições em área de sombra"
+*   **description:** "Configures the minimum speed for sending position data in blind areas."
+*   **ui_element:** "number_input"
+*   **validation:** "0-20"
+*   **unit:** "km/h"
+*   **options:** ["0 não considera a velocidade para registrar dados históricos (salva dados sempre)", "1~20 salva dados apenas quando a velocidade for maior ou igual ao configurado (km/h)"]
+*   **commands:**
+    *   **set:** `SZCS#BLINDSPD=X` (Note: X=0 to always save data, X=1-20 to save data only when speed >= configured value)
+    *   **read:** `CXCS#BLINDSPD`
+
 ## Section: Vibration Sensor
 
 ### Config: Vibration Sensitivity
