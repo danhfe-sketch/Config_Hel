@@ -108,7 +108,7 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 ui_element='dropdown',
                 options=['AUTO', '4G', '2G'],
                 commands={
-                    'set': 'NETSELECT,<value>#',
+                    'set': 'NETSELECT=<value>',
                     'read': 'NETSELECT#'
                 }
             )

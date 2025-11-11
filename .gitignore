@@ -5,6 +5,8 @@ services/__pycache__/
 ui/__pycache__/
 tests/__pycache__/
 utils/__pycache__/
+__pycache__/
+build/
 venv/
 validation_debug.log
 validation_errors.log

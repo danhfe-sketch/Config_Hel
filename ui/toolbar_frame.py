@@ -96,18 +96,7 @@ class ToolbarFrame(ctk.CTkFrame):
             height=28
         )
         self.personalization_button.pack(side="right", padx=5)
-        
-        # Restore Defaults Button
-        self.restore_button = ctk.CTkButton(
-            right_frame,
-            text=self.i18n.get("restore_defaults", "Restore Defaults"),
-            command=self._on_restore_defaults,
-            width=120,
-            height=28,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray40")
-        )
-        self.restore_button.pack(side="right", padx=5)
+
     
     def _on_profile_action(self, choice):
         """Handle configuration profile dropdown actions."""
@@ -154,62 +143,6 @@ class ToolbarFrame(ctk.CTkFrame):
             if hasattr(self.app, 'log_frame') and self.app.log_frame:
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
             show_error(self.app, "Language Error", error_msg)
-    
-
-    
-    def _on_restore_defaults(self):
-        """Handle restore defaults button click."""
-        try:
-            # Show confirmation dialog
-            result = ask_yes_no(
-                self.app,
-                "Restore Defaults",
-                "This will reset all UI fields to their default values.\n\n"
-                "This action will not affect device settings.\n\n"
-                "Are you sure you want to continue?"
-            )
-            
-            if result:
-                # Reset UI fields to defaults
-                self._reset_ui_to_defaults()
-                
-                if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                    self.app.log_frame.log_message("UI fields restored to default values.\n")
-                
-                show_info(self.app, "Restore Complete", "UI fields have been restored to default values.")
-        
-        except Exception as e:
-            error_msg = f"Restore defaults failed: {str(e)}"
-            if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            show_error(self.app, "Restore Error", error_msg)
-    
-    def _reset_ui_to_defaults(self):
-        """Reset all UI fields to their default values."""
-        try:
-            # Reset parameters frame fields
-            if hasattr(self.app, 'params_frame'):
-                params_frame = self.app.params_frame
-                
-                # Reset APN fields
-                if hasattr(params_frame, 'apn_widgets') and 'apn' in params_frame.apn_widgets:
-                    params_frame.apn_widgets['apn'].delete(0, "end")
-                    params_frame.apn_widgets['apn'].insert(0, "internet.provider.com")
-                
-                if hasattr(params_frame, 'apn_user_entry'):
-                    params_frame.apn_user_entry.delete(0, "end")
-                
-                if hasattr(params_frame, 'apn_password_entry'):
-                    params_frame.apn_password_entry.delete(0, "end")
-                
-                if hasattr(params_frame, 'trans_mode_var'):
-                    params_frame.trans_mode_var.set("TCP")
-                
-                # Reset other parameter fields as they are implemented
-                # This will be extended as more parameters are added
-        
-        except Exception as e:
-            print(f"Error resetting UI fields: {e}")
     
     def _on_personalization(self):
         """Handle personalization button click - open theme selection dialog."""

@@ -1176,7 +1176,7 @@ class ParameterSpecificationFactory:
         }
         
         mode_value = network_mode_mapping.get(network_mode, '0')
-        command = f"ATSMS:NETSELECT,{mode_value}#"
+        command = f"ATSMS:SZCS#NETSELECT={mode_value}"
         
         self.serial_service.send_command(command)
         messagebox.showinfo(

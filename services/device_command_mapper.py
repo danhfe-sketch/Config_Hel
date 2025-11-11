@@ -181,7 +181,7 @@ class DeviceCommandMapper:
 
             # Network and Protocol Settings
             'gt06_protocol': "SZCS#GT06SEL={value}#",  # Changed from CXCS to SZCS based on device feedback
-            'network_select': "SZCS#NETSELECT={value}#",  # Changed from CXCS to SZCS for writing to device
+            'network_select': "SZCS#NETSELECT={value}",  # Changed from CXCS to SZCS for writing to device
             # Removed 'transmission_mode' as it doesn't exist in the device
 
             # Sleep Mode Configuration
