@@ -161,7 +161,7 @@ class DeviceCommandMapper:
             'get_all_params': "PARAM#",
 
             # Movement and Vibration Settings
-            'vibration': "SZCS#VIBL={value}#",  # Changed from CXCS to SZCS for writing to device
+            'vibration': "SZCS#VIBL={value}",  # Changed from CXCS to SZCS for writing to device
             'vibration_window': "SZCS#VIBCHK={window}:{value}#",  # Changed from CXCS to SZCS for writing to device
             'defense_time': "DEFENSE,{value}#",
 

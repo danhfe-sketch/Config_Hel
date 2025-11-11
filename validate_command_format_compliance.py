@@ -110,7 +110,7 @@ class CommandFormatValidator:
             
             # Vibration Sensor
             'vibration_sensitivity': {
-                'set': 'SZCS#VIBL={level}#',  # level: 1-6
+                'set': 'SZCS#VIBL={level}',  # level: 1-6
                 'read': 'CXCS#VIBL'
             },
             

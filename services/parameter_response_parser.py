@@ -179,6 +179,19 @@ class ParameterResponseParser:
                 'post_process': self._process_jammer_relay_response
             },
             
+            'acc_on_alert': {
+                'pattern': r'ACCALM,(ON|OFF)(?:,(\d))?',
+                'fields': ['enabled', 'mode'],
+                'description': 'ACC ON alert configuration response',
+                'post_process': self._process_acc_on_alert_response
+            },
+            'acc_off_alert': {
+                'pattern': r'ACCOFFALM,(ON|OFF)(?:,(\d))?',
+                'fields': ['enabled', 'mode'],
+                'description': 'ACC OFF alert configuration response',
+                'post_process': self._process_acc_off_alert_response
+            },
+            
             # Miscellaneous Parameters
             'odometer': {
                 'pattern': r'MILEAGE=(\d+)',
@@ -228,6 +241,9 @@ class ParameterResponseParser:
                 'post_process': self._process_status_response
             }
         }
+        # Alias mapping for legacy/alternate parameter names
+        # Keep this as a direct reference to avoid duplicating pattern definitions.
+        self.response_patterns['get_acc_off_alert'] = self.response_patterns['acc_off_alert']
 
     def _init_value_mappings(self) -> None:
         """Initialize value mappings for converting numeric responses to human-readable values."""
@@ -279,11 +295,18 @@ class ParameterResponseParser:
             ParsedResponse object with parsing results
         """
         try:
+            # Debug entry
+            self.logger.debug(f"parse_response: parameter_name={parameter_name}, command={command}")
+
             # Clean the response
             cleaned_response = self._clean_response(raw_response)
             
             # Get the response pattern for this parameter
             pattern_config = self.response_patterns.get(parameter_name)
+            # Debug cleaned response and pattern config presence
+            self.logger.debug(f"cleaned_response: '{cleaned_response}'")
+            self.logger.debug(f"pattern_config found: {bool(pattern_config)} -> {pattern_config.get('pattern') if pattern_config else None}")
+
             if not pattern_config:
                 return self._create_error_response(
                     parameter_name, raw_response, command,
@@ -366,7 +389,12 @@ class ParameterResponseParser:
         pattern = pattern_config['pattern']
         fields = pattern_config['fields']
         
+        # Debug pattern usage
+        self.logger.debug(f"using pattern: {pattern} (flags=IGNORECASE)")
+
         match = re.search(pattern, response, re.IGNORECASE)
+        # Debug match result
+        self.logger.debug(f"regex match: {bool(match)}, groups={match.groups() if match else None}")
         if not match:
             return None
         
@@ -379,9 +407,14 @@ class ParameterResponseParser:
             if i < len(groups):
                 parsed_values[field] = groups[i]
         
+        # Debug parsed values before post-processing
+        self.logger.debug(f"parsed_values (raw): {parsed_values}")
+
         # Apply post-processing if defined
         if 'post_process' in pattern_config:
             parsed_values = pattern_config['post_process'](parsed_values, response)
+            # Debug parsed values after post-processing
+            self.logger.debug(f"parsed_values (post): {parsed_values}")
         
         return parsed_values
 
@@ -565,6 +598,58 @@ class ParameterResponseParser:
         if 'full_match' in values:
             del values['full_match']
             
+        return values
+
+    def _process_acc_on_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process ACC ON alert configuration response."""
+        status = values.get('enabled') # 'ON' or 'OFF'
+        mode_str = values.get('mode')   # '0', '1', or None
+
+        if status == 'OFF':
+            values['ui_selection'] = 'Disabled'
+            values['enabled'] = False
+            values['mode'] = -1
+        elif status == 'ON':
+            values['enabled'] = True
+            if mode_str == '0':
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+            elif mode_str == '1':
+                values['ui_selection'] = 'Alerta Enviado por SMS+GPRS'
+                values['mode'] = 1
+            else:
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+        else:
+            values['ui_selection'] = 'Disabled'
+            values['enabled'] = False
+            values['mode'] = -1
+        return values
+
+    def _process_acc_off_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process ACC OFF alert configuration response."""
+        status = values.get('enabled') # 'ON' or 'OFF'
+        mode_str = values.get('mode')   # '0', '1', or None
+
+        if status == 'OFF':
+            values['ui_selection'] = 'Desabilitado'
+            values['enabled'] = False
+            values['mode'] = -1
+        elif status == 'ON':
+            values['enabled'] = True
+            if mode_str == '0':
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+            elif mode_str == '1':
+                values['ui_selection'] = 'Alerta Enviado por SMS+GPRS'
+                values['mode'] = 1
+            else:
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+        else:
+            values['ui_selection'] = 'Desabilitado'
+            values['enabled'] = False
+            values['mode'] = -1
         return values
 
     def _process_boolean_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
@@ -846,3 +931,74 @@ class ParameterResponseParser:
             'parameters_parsed': [r.parameter_name for r in parsed_responses if r.success],
             'parameters_failed': [r.parameter_name for r in parsed_responses if not r.success]
         }
+def _process_acc_off_alert_response_v2(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+    """
+    Defensive post-processor for ACC OFF alert responses.
+
+    Ensures:
+    - mode is normalized to int when possible
+    - ui_selection is always present with a localized label
+    - a legacy flattened key 'acc_off_alert' is provided so older UI/reader code
+      that expects a single string value will consume a friendly label.
+    """
+    # Read raw inputs (may be 'ON'/'OFF', True/False, '0'/'1', etc.)
+    status = values.get('enabled')
+    mode_raw = values.get('mode')
+
+    # Normalize status to a comparable string
+    try:
+        if isinstance(status, bool):
+            status_str = 'ON' if status else 'OFF'
+        elif status is None:
+            status_str = ''
+        else:
+            status_str = str(status).upper()
+    except Exception:
+        status_str = str(status)
+
+    # Try to normalize mode to integer
+    mode_num = None
+    try:
+        if mode_raw is not None and mode_raw != '':
+            mode_num = int(mode_raw)
+    except Exception:
+        mode_num = None
+
+    # Default mappings / labels
+    LABEL_DISABLED = 'Desabilitado'
+    LABEL_GPRS = 'Alerta Enviado Apenas GPRS'
+    LABEL_SMS_GPRS = 'Alerta Enviado por SMS+GPRS'
+
+    # Apply normalized values and provide flattened legacy key
+    if status_str in ('OFF', '0', 'FALSE'):
+        values['ui_selection'] = LABEL_DISABLED
+        values['enabled'] = False
+        values['mode'] = -1
+        values['acc_off_alert'] = LABEL_DISABLED
+    elif status_str in ('ON', '1', 'TRUE'):
+        values['enabled'] = True
+        if mode_num == 0:
+            values['ui_selection'] = LABEL_GPRS
+            values['mode'] = 0
+            values['acc_off_alert'] = LABEL_GPRS
+        elif mode_num == 1:
+            values['ui_selection'] = LABEL_SMS_GPRS
+            values['mode'] = 1
+            values['acc_off_alert'] = LABEL_SMS_GPRS
+        else:
+            # Unknown or missing mode -> default to GPRS
+            values['ui_selection'] = LABEL_GPRS
+            values['mode'] = mode_num if mode_num is not None else 0
+            values['acc_off_alert'] = LABEL_GPRS
+    else:
+        # Conservative defaults for unexpected status
+        values['ui_selection'] = LABEL_DISABLED
+        values['enabled'] = False
+        values['mode'] = -1
+        values['acc_off_alert'] = LABEL_DISABLED
+
+    return values
+# Override the original implementation with a defensive delegator to ensure
+# legacy consumers receive a flattened localized label ('acc_off_alert').
+def _process_acc_off_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+    return _process_acc_off_alert_response_v2(self, values, raw_response)

@@ -683,6 +683,13 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
                         section_name = section_info['section']
                         param_key = section_info['parameter']
                         
+                        # Diagnostic logs for UI update flow
+                        print(f"DEBUG: ui.update_parameter_fields - param='{param_name}', parsed_values_keys={list(parsed_values.keys()) if isinstance(parsed_values, dict) else parsed_values}")
+                        try:
+                            print(f"DEBUG: ui.update_parameter_fields - ui_selection present: {'ui_selection' in parsed_values if isinstance(parsed_values, dict) else False}")
+                        except Exception as _e:
+                            print(f"DEBUG: ui.update_parameter_fields - failed to check ui_selection presence: {_e}")
+                        print(f"DEBUG: ui.update_parameter_fields - section_info resolved to: {section_info}")
                         print(f"DEBUG: Updating {section_name}.{param_key} with values: {parsed_values}")
                         
                         # No need to handle notification mode/text conversion here

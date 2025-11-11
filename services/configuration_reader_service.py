@@ -148,6 +148,7 @@ class ConfigurationReaderService:
             'moving_alert': ('MOVING', 'get_moving_alert'),
             'motion_sensor_alert': ('SENALM', 'get_motion_sensor_alert'),
             'distance_movement_action': ('MOVEALMFUN', 'get_distance_movement_action'),
+            'acc_on_alert': ('ACCALM', 'get_acc_on_alert'),
             'acc_off_alert': ('ACCOFFALM', 'get_acc_off_alert'),
             # Comprehensive parameter query
             'all_parameters': ('PARAM', 'get_all_params')
@@ -206,7 +207,8 @@ class ConfigurationReaderService:
             'get_moving_alert': r'MOVING:(?:(ON),(\d+),(\d+)|(OFF))',
             'get_motion_sensor_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
             'get_distance_movement_action': r'READOK:\s*MOVEALMFUN=(\d+)',
-            'get_acc_off_alert': r'ACCOFFALM[:, ]*(?:(ON),(\\d+)|(OFF))',
+            'get_acc_on_alert': r'ACCALM[:, ]*(?:(ON),(\d+)|(OFF))',
+            'get_acc_off_alert': r'ACCOFFALM[:, ]*(?:(ON),(\d+)|(OFF))',
             
             # Miscellaneous Parameters
             'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
@@ -1672,6 +1674,7 @@ class ConfigurationReaderService:
             'blind_area_speed': 'get_blind_area_speed',
             'motion_sensor_alert': 'get_motion_sensor_alert',
             'distance_movement_action': 'get_distance_movement_action',
+            'acc_on_alert': 'get_acc_on_alert',
             'acc_off_alert': 'get_acc_off_alert',
             'movement_alert': 'get_moving_alert',
             # Legacy mappings
@@ -1757,7 +1760,12 @@ class ConfigurationReaderService:
                 
                 # Parse the response
                 parsed_response = self.parse_device_response(command, response, command_type)
-                
+
+                # Diagnostic logs: capture parser output right after parsing
+                try:
+                    self._log_message(f"DEBUG: after_parse - param_name={param_name}, command={command}, command_type={command_type}, parsed_success={parsed_response.success}, parsed_values_keys={list(parsed_response.parsed_values.keys()) if isinstance(parsed_response.parsed_values, dict) else []}")
+                except Exception as _e:
+                    self._log_message(f"DEBUG: after_parse - failed to log parsed response: {_e}")
                 if parsed_response.success and parsed_response.parsed_values:
                     # Extract the main value for this parameter
                     value = self._extract_parameter_value(param_name, parsed_response.parsed_values)
@@ -1963,6 +1971,20 @@ class ConfigurationReaderService:
                     else:
                         parsed_values['enabled'] = True
                         parsed_values['mode'] = match.group(2)
+                
+                elif command_type == 'get_acc_on_alert':
+                    if match.group(3) == 'OFF':
+                        parsed_values['acc_on_alert'] = 'Disabled'
+                    else:
+                        alert_type_map = {'0': 'Alerta Enviado Apenas GPRS', '1': 'Alerta Enviado por SMS+GPRS'}
+                        parsed_values['acc_on_alert'] = alert_type_map.get(match.group(2), match.group(2))
+
+                elif command_type == 'get_acc_off_alert':
+                    if match.group(3) == 'OFF':
+                        parsed_values['acc_off_alert'] = 'Desabilitado'
+                    else:
+                        alert_type_map = {'0': 'Alerta Enviado Apenas GPRS', '1': 'Alerta Enviado por SMS+GPRS'}
+                        parsed_values['acc_off_alert'] = alert_type_map.get(match.group(2), match.group(2))
                     
                 elif command_type == 'get_main_power_alert':
                     # Handle ON/OFF or numeric format
@@ -2021,13 +2043,6 @@ class ConfigurationReaderService:
                         parsed_values['enabled'] = True
                         alert_type_map = {'0': 'Apenas GPRS', '1': 'SMS+GPRS'}
                         parsed_values['alert_type'] = alert_type_map.get(match.group(2), 'Apenas GPRS')
-
-                elif command_type == 'get_acc_off_alert':
-                    if match.group(3) == 'OFF':
-                        parsed_values['acc_off_alert'] = 'Desabilitado'
-                    else:
-                        alert_type_map = {'0': 'Alerta Enviado Apenas GPRS', '1': 'Alerta Enviado por SMS+GPRS'}
-                        parsed_values['acc_off_alert'] = alert_type_map.get(match.group(2), match.group(2))
                 
                 elif command_type == 'get_distance_movement_action':
                     action_map = {'0': 'Automaticamente ativado após entrar no modo DEFENSE (quando a ignição é desligada)', 
@@ -2260,6 +2275,12 @@ class ConfigurationReaderService:
         elif param_name == 'jammer_relay_action':
             return str(parsed_values.get('enabled', False))
         
+        # Alert Parameters
+        elif param_name == 'acc_on_alert':
+            return parsed_values.get('acc_on_alert', '')
+        elif param_name == 'acc_off_alert':
+            return parsed_values.get('acc_off_alert', '')
+
         # Miscellaneous Parameters
         elif param_name == 'odometer':
             return parsed_values.get('odometer', '')
@@ -2537,10 +2558,11 @@ class ConfigurationReaderService:
                 
                 if parsed_response.success:
                     # Successful read
+                    value = self._extract_parameter_value(param_name, parsed_response.parsed_values)
                     return ParameterReadResult(
                         parameter_name=param_name,
                         success=True,
-                        value=str(parsed_response.parsed_values),
+                        value=value,
                         error_message=None,
                         raw_response=response
                     )

@@ -1191,7 +1191,16 @@ class ParameterSpecificationFactory:
         """Send vibration sensitivity configuration command"""
         level = str(values.get('level', '1')).strip()
         
-        command = f"ATSMS:SZCS#VIBL={level}#"
+        try:
+            level_int = int(float(level)) # Convert to float first to handle "3.0" then to int
+        except ValueError:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("vibration_level_invalid", "Vibration sensitivity level must be an integer")
+            )
+            return
+        
+        command = f"ATSMS:SZCS#VIBL={level_int}"
         
         self.serial_service.send_command(command)
         messagebox.showinfo(
