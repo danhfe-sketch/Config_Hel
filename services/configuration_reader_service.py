@@ -1927,11 +1927,14 @@ class ConfigurationReaderService:
                         parsed_values['alert_type'] = 'Apenas GPRS'
                     else:
                         # Handle numeric case - groups are shifted due to alternation
-                        parsed_values['enabled'] = match.group(2) == '1'
-                        parsed_values['detection_time'] = match.group(3)
-                        parsed_values['speed_limit'] = match.group(4)
+                        parsed_values['enabled'] = True
+                        parsed_values['detection_time'] = match.group(2)
+                        parsed_values['speed_limit'] = match.group(3)
                         alert_type_map = {'0': 'Apenas GPRS', '1': 'GPRS+SMS'}
-                        parsed_values['alert_type'] = alert_type_map.get(match.group(5), match.group(5))
+                        parsed_values['alert_type'] = alert_type_map.get(match.group(4), match.group(4))
+                    
+                    print(f"DEBUG: perse device responose - raw values: enabled={parsed_values['enabled']}, {parsed_values['detection_time']}, {parsed_values['speed_limit']}")
+     
                     
                 elif command_type == 'get_blind_area_speed':
                     # READOK: BLINDSPD=X

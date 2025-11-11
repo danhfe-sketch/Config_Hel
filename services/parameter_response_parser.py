@@ -111,8 +111,8 @@ class ParameterResponseParser:
             
             # Speed Parameters
             'speed_alert': {
-                'pattern': r'SPEED:(OFF|(\d+),(\d+),(\d+),(\d+))',
-                'fields': ['full_match', 'enabled', 'detection_time', 'speed_limit', 'alert_type'],
+                'pattern': r'SPEED:(ON|OFF)(?:,(\d+),(\d+),(\d+))?',
+                'fields': ['enabled_status', 'detection_time', 'speed_limit', 'alert_type'],
                 'description': 'Speed alert configuration response',
                 'post_process': self._process_speed_alert_response
             },
@@ -547,35 +547,39 @@ class ParameterResponseParser:
 
     def _process_speed_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
         """Process speed alert configuration response."""
-        # Handle OFF case
-        if 'full_match' in values and values['full_match'] == 'OFF':
-            values['enabled'] = False
+        # Determine enabled status
+        values['enabled'] = (values.get('enabled_status') == 'ON')
+        
+        print(f"DEBUG: _process_speed_alert_response - raw values: enabled={values['enabled']}, {values['detection_time']}, values['speed_limit']")
+      
+
+        # Handle OFF case or if not enabled
+        if not values['enabled']:
             values['detection_time'] = 0
             values['speed_limit'] = 0
             values['alert_type'] = 0
             values['alert_type_text'] = 'Apenas GPRS'
-            # Remove the full_match field as it's not needed
-            del values['full_match']
-            return values
+        else:
+            # Handle numeric format case when enabled
+            # Convert numeric values (skip None values from regex groups)
+            for key in ['detection_time', 'speed_limit', 'alert_type']:
+                if key in values and values[key] is not None:
+                    try:
+                        values[key] = int(values[key])
+                    except ValueError:
+                        self.logger.warning(f"Could not convert {key} to int: {values[key]!r}")
+                        values[key] = 0 # Default to 0 on conversion error
+                elif key not in values:
+                    values[key] = 0 # Ensure key exists with default if not found
+            
+            # Convert alert type to human-readable
+            if 'alert_type' in values and values['alert_type'] is not None:
+                alert_num = values['alert_type']
+                values['alert_type_text'] = self.value_mappings['alert_type'].get(alert_num, f'Unknown ({alert_num})')
         
-        # Handle numeric format case
-        # Convert numeric values (skip None values from regex groups)
-        for key in ['enabled', 'detection_time', 'speed_limit', 'alert_type']:
-            if key in values and values[key] is not None:
-                values[key] = int(values[key])
-        
-        # Convert enabled to boolean
-        if 'enabled' in values:
-            values['enabled'] = bool(values['enabled'])
-        
-        # Convert alert type to human-readable
-        if 'alert_type' in values and values['alert_type'] is not None:
-            alert_num = values['alert_type']
-            values['alert_type_text'] = self.value_mappings['alert_type'].get(alert_num, f'Unknown ({alert_num})')
-        
-        # Remove the full_match field as it's not needed
-        if 'full_match' in values:
-            del values['full_match']
+        # Remove the enabled_status field as it's not needed anymore
+        if 'enabled_status' in values:
+            del values['enabled_status']
         
         return values
 
