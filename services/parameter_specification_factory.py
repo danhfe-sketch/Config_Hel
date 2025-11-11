@@ -25,6 +25,8 @@ from services.parameter_specification import (
 )
 from ui.parameter_ui_element_factory import ParameterUIElementFactory, UIElementConfig, BaseUIElement
 from services.conditional_field_manager import get_conditional_field_manager
+from ui.parameter_ui_element_factory import ToggleSwitchElement
+
 
 
 @dataclass
@@ -742,6 +744,8 @@ class ParameterSpecificationFactory:
                         else:
                             # Fallback to typed value
                             value = ui_element.get_value()
+                            if value is None: # Convert None to empty string
+                                value = ""
                             if isinstance(ui_element, ToggleSwitchElement):
                                 # For toggle switches, ensure boolean conversion
                                 values[field_name] = bool(value)
@@ -817,13 +821,6 @@ class ParameterSpecificationFactory:
         user = str(values.get('user', '')).strip()
         password = str(values.get('password', '')).strip()
         
-        if not server:
-            messagebox.showerror(
-                self.i18n_service.get("error", "Error"),
-                self.i18n_service.get("apn_server_required", "APN server is required")
-            )
-            return
-
         command = f"ATSMS:APN,{server},{user},{password}#"
         # This is a direct UI-initiated send; bypass pre-send validation to avoid
         # blocking well-formed APN commands from the user's Send button.
@@ -1361,20 +1358,19 @@ class ParameterSpecificationFactory:
 
     def _send_motion_sensor_alert_command(self, values: dict):
         """Send motion sensor alert command"""
-        value = values.get('motion_sensor_alert')
+        enabled = values.get('enabled', False)
+        alert_type = str(values.get('alert_type', 'Apenas GPRS')).strip()
         
-        if value == 'Desabilitado':
+        if not enabled:
             command = "ATSMS:SENALM,OFF#"
-        elif value == 'Alerta Enviado Apenas GPRS':
-            command = "ATSMS:SENALM,ON,0#"
-        elif value == 'Alerta Enviado por SMS+GPRS':
-            command = "ATSMS:SENALM,ON,1#"
         else:
-            messagebox.showerror(
-                self.i18n_service.get("error", "Error"),
-                self.i18n_service.get("invalid_motion_sensor_alert_value", "Invalid motion sensor alert value")
-            )
-            return
+            # Map alert type to command value
+            alert_type_mapping = {
+                'Apenas GPRS': '0',
+                'GPRS+SMS': '1'
+            }
+            alert_value = alert_type_mapping.get(alert_type, '0')
+            command = f"ATSMS:SENALM,ON,{alert_value}#"
 
         self.serial_service.send_command(command, command_type='motion_sensor_alert')
         messagebox.showinfo(

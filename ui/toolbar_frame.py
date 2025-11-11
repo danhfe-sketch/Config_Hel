@@ -82,18 +82,6 @@ class ToolbarFrame(ctk.CTkFrame):
         display_language = language_display_map.get(current_language, "Português")
         self.language_dropdown.set(display_language)
         
-        # Help Menu Dropdown
-        self.help_dropdown = ctk.CTkOptionMenu(
-            left_frame,
-            values=[
-                self.i18n.get("open_manuals", "Open Manuals")
-            ],
-            command=self._on_help_action,
-            width=100,
-            height=28
-        )
-        self.help_dropdown.pack(side="left", padx=5)
-        self.help_dropdown.set(self.i18n.get("help", "Help"))
         
         # Right side elements (restore defaults, personalization)
         right_frame = ctk.CTkFrame(toolbar_container, fg_color="transparent")
@@ -167,70 +155,7 @@ class ToolbarFrame(ctk.CTkFrame):
                 self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
             show_error(self.app, "Language Error", error_msg)
     
-    def _on_help_action(self, choice):
-        """Handle help menu actions."""
-        try:
-            if choice == self.i18n.get("open_manuals", "Open Manuals"):
-                self._open_manuals()
-            
-            # Reset dropdown to default text
-            self.help_dropdown.set(self.i18n.get("help", "Help"))
-            
-        except Exception as e:
-            error_msg = f"Help action failed: {str(e)}"
-            if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            show_error(self.app, "Help Error", error_msg)
-    
-    def _open_manuals(self):
-        """Open equipment manuals."""
-        try:
-            # Look for PDF manual in the application directory
-            manual_files = [
-                "Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.06-092025.pdf",
-                "manual.pdf",
-                "LT32Pro_Manual.pdf"
-            ]
-            
-            manual_found = False
-            for manual_file in manual_files:
-                if os.path.exists(manual_file):
-                    # Open PDF with default system application
-                    if platform.system() == "Windows":
-                        os.startfile(manual_file)
-                    elif platform.system() == "Darwin":  # macOS
-                        subprocess.run(["open", manual_file])
-                    else:  # Linux
-                        subprocess.run(["xdg-open", manual_file])
-                    
-                    manual_found = True
-                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                        self.app.log_frame.log_message(f"Manual opened: {manual_file}\n")
-                    break
-            
-            if not manual_found:
-                # Fallback: show message with manual information
-                manual_info = """
-Equipment Manual:
 
-Manual file not found in application directory.
-
-Please check for:
-- Lumini Tracker - LT32 PRO - MANUAL_USUARIO_V.00-032025.pdf
-- Or download from manufacturer website
-
-For technical support, contact Lumini Tracker support team.
-                """
-                show_info(self.app, "Manual", manual_info.strip())
-                
-                if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                    self.app.log_frame.log_message("Manual file not found - info dialog shown.\n")
-        
-        except Exception as e:
-            error_msg = f"Failed to open manual: {str(e)}"
-            if hasattr(self.app, 'log_frame') and self.app.log_frame:
-                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
-            show_error(self.app, "Manual Error", error_msg)
     
     def _on_restore_defaults(self):
         """Handle restore defaults button click."""

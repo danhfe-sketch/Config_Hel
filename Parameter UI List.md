@@ -224,7 +224,7 @@ This document provides a structured specification of the user interface componen
 #### Config: Motion Sensor Alert
 
 *   **name:** motion_sensor_alert
-*   **label:** "Habilitar alerta de movimento"
+*   **label:** "Habilitar alerta de movimento (por sensor)"
 *   **description:** "Configures movement alert based on motion sensor."
 *   **fields:**
     *   **field_1:**

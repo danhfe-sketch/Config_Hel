@@ -313,6 +313,11 @@ class BaseUIElement(ABC):
 class TextInputElement(BaseUIElement):
     """Text input UI element"""
     
+    def __init__(self, config: UIElementConfig, i18n_service, validation_callback: Optional[Callable] = None):
+        super().__init__(config, i18n_service, validation_callback)
+        self.text_var = ctk.StringVar()
+        self.text_var.trace_add("write", self._on_text_var_change)
+    
     def create_widget(self, parent) -> ctk.CTkFrame:
         frame = self._create_base_frame(parent)
         
@@ -320,31 +325,28 @@ class TextInputElement(BaseUIElement):
         self.widget = ctk.CTkEntry(
             frame,
             width=200,
-            placeholder_text=self.config.placeholder or ""
+            placeholder_text=self.config.placeholder or "",
+            textvariable=self.text_var
         )
         self.widget.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
         
         # Set default value
         if self.config.default_value is not None:
-            self.widget.insert(0, str(self.config.default_value))
+            self.text_var.set(str(self.config.default_value))
         
         # Bind validation events
         self.widget.bind("<FocusOut>", self._on_focus_out)
-        self.widget.bind("<KeyRelease>", self._on_key_release)
         
         return frame
     
-    def get_value(self) -> Optional[str]:
-        if not self.widget:
-            return None
-        text = self.widget.get().strip()
-        return text if text else None
+    def get_value(self) -> str:
+        return self.text_var.get().strip()
     
     def set_value(self, value: Any) -> None:
-        if self.widget:
-            self.widget.delete(0, ctk.END)
-            if value is not None:
-                self.widget.insert(0, str(value))
+        if value is not None:
+            self.text_var.set(str(value))
+        else:
+            self.text_var.set("")
     
     def _on_focus_out(self, event) -> None:
         """Validate on focus out"""
@@ -355,8 +357,8 @@ class TextInputElement(BaseUIElement):
         # Notify value change
         self._notify_value_change(self.get_value())
     
-    def _on_key_release(self, event) -> None:
-        """Validate on key release with real-time feedback"""
+    def _on_text_var_change(self, *args) -> None:
+        """Handle text variable change with real-time feedback"""
         # Perform real-time validation
         is_valid = self.validate()
         self._update_visual_feedback(is_valid, getattr(self, '_validation_level', 'error'))
@@ -680,6 +682,8 @@ class PasswordInputElement(BaseUIElement):
         super().__init__(config, i18n_service, validation_callback)
         self.show_password = False
         self.toggle_button = None
+        self.text_var = ctk.StringVar()
+        self.text_var.trace_add("write", self._on_text_var_change)
     
     def create_widget(self, parent) -> ctk.CTkFrame:
         frame = self._create_base_frame(parent)
@@ -693,7 +697,8 @@ class PasswordInputElement(BaseUIElement):
         self.widget = ctk.CTkEntry(
             entry_frame,
             show="*",
-            placeholder_text=self.config.placeholder or "Enter password"
+            placeholder_text=self.config.placeholder or "Enter password",
+            textvariable=self.text_var
         )
         self.widget.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
         
@@ -708,25 +713,21 @@ class PasswordInputElement(BaseUIElement):
         
         # Set default value
         if self.config.default_value is not None:
-            self.widget.insert(0, str(self.config.default_value))
+            self.text_var.set(str(self.config.default_value))
         
         # Bind validation events
         self.widget.bind("<FocusOut>", self._on_focus_out)
-        self.widget.bind("<KeyRelease>", self._on_key_release)
         
         return frame
     
-    def get_value(self) -> Optional[str]:
-        if not self.widget:
-            return None
-        text = self.widget.get().strip()
-        return text if text else None
+    def get_value(self) -> str:
+        return self.text_var.get().strip()
     
     def set_value(self, value: Any) -> None:
-        if self.widget:
-            self.widget.delete(0, ctk.END)
-            if value is not None:
-                self.widget.insert(0, str(value))
+        if value is not None:
+            self.text_var.set(str(value))
+        else:
+            self.text_var.set("")
     
     def _toggle_password_visibility(self) -> None:
         """Toggle password visibility"""
@@ -747,8 +748,9 @@ class PasswordInputElement(BaseUIElement):
         # Notify value change
         self._notify_value_change(self.get_value())
     
-    def _on_key_release(self, event) -> None:
-        """Validate on key release with real-time feedback"""
+    def _on_text_var_change(self, *args) -> None:
+        """Handle text variable change with real-time feedback"""
+        # Perform real-time validation
         is_valid = self.validate()
         self._update_visual_feedback(is_valid, getattr(self, '_validation_level', 'error'))
         # Notify value change

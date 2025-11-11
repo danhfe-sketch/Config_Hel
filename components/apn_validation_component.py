@@ -314,7 +314,18 @@ class APNValidationComponent:
                 errors.append("Password contains invalid characters")
                 suggestions.append("Remove quotes and angle brackets from password")
         
-        # Check credential consistency
+        # If both username and password are empty, consider them valid
+        if not username and not password:
+            return ValidationResult(
+                is_valid=True,
+                error_message="",
+                error_code="",
+                suggestions=[],
+                field_name="credentials",
+                validated_value=f"{username}:{password}"
+            )
+        
+        # Check credential consistency (if one is provided, the other should be too)
         if bool(username) != bool(password):
             errors.append("Both username and password must be provided together, or both left empty")
             if username and not password:
@@ -353,13 +364,18 @@ class APNValidationComponent:
         Returns:
             ValidationResult with overall validation status
         """
-        # First validate the APN itself
+        # If APN is empty, consider it valid and proceed to validate credentials
         if not apn:
+            # Validate credentials even if APN is empty
+            cred_result = self.validate_credentials(username, password)
+            if not cred_result.is_valid:
+                return cred_result
+            
             return ValidationResult(
-                is_valid=False,
-                error_message="APN cannot be empty",
-                error_code="EMPTY_APN",
-                suggestions=self._get_common_apn_suggestions(),
+                is_valid=True,
+                error_message="",
+                error_code="",
+                suggestions=[],
                 field_name="apn",
                 validated_value=apn
             )

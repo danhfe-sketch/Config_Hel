@@ -61,6 +61,16 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         
         # Set up enhanced APN validation using ValidationMixin
         self._setup_enhanced_apn_validation_with_mixin()
+
+        self._validation_colors = {
+            'error': '#ff4444',      # Red for errors
+            'warning': '#ffaa00',    # Orange for warnings  
+            'info': '#2196F3',       # Blue for info
+            'success': '#00aa44',    # Green for success
+            'normal': '#565b5e',     # Default border color
+            'focus': '#1f538d',      # Focus color
+            'critical': '#cc0000'    # Dark red for critical errors
+        }
     
     def populate_ui_from_profile(self, profile):
         """
@@ -155,27 +165,24 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
 
     def _validate_apn_field_comprehensive(self, value: str) -> ValidationResult:
         """Validate the APN field with comprehensive rules."""
-        if not value:
-            return ValidationResult(False, "APN is required", "apn_required")
-        return self.apn_validation_component.validate_apn(value)
+        apn_values = self._get_apn_values_from_section()
+        user = apn_values.get('user', '').strip()
+        password = apn_values.get('password', '').strip()
+        return self.apn_validation_component.validate_apn_configuration(value, user, password)
 
     def _validate_apn_user_field_comprehensive(self, value: str) -> ValidationResult:
         """Validate the APN username field."""
-        # Username is optional if no password is provided
-        if not value and (not hasattr(self, 'apn_widgets') or 
-                         'password' not in self.apn_widgets or 
-                         not self.apn_widgets['password'].get().strip()):
-            return ValidationResult(True, "", "")
-        return self.apn_validation_component.validate_apn_user(value)
+        apn_values = self._get_apn_values_from_section()
+        apn = apn_values.get('apn', '').strip()
+        password = apn_values.get('password', '').strip()
+        return self.apn_validation_component.validate_apn_configuration(apn, value, password)
 
     def _validate_apn_password_field_comprehensive(self, value: str) -> ValidationResult:
         """Validate the APN password field."""
-        # Password is optional if no username is provided
-        if not value and (not hasattr(self, 'apn_widgets') or 
-                         'user' not in self.apn_widgets or 
-                         not self.apn_widgets['user'].get().strip()):
-            return ValidationResult(True, "", "")
-        return self.apn_validation_component.validate_apn_password(value)
+        apn_values = self._get_apn_values_from_section()
+        apn = apn_values.get('apn', '').strip()
+        user = apn_values.get('user', '').strip()
+        return self.apn_validation_component.validate_apn_configuration(apn, user, value)
 
     def _create_parameter_sections_from_specification(self):
         """Create all parameter sections using the specification factory."""

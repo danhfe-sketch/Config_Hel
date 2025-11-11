@@ -58,6 +58,25 @@ class ValidationMixin:
         self._validation_history = ValidationHistoryTracker()
         self._carrier_helper = None  # Will be initialized when needed
         
+        # Progressive validation colors with severity levels
+        self._validation_colors = {
+            'error': '#ff4444',      # Red for errors
+            'warning': '#ffaa00',    # Orange for warnings  
+            'info': '#2196F3',       # Blue for info
+            'success': '#00aa44',    # Green for success
+            'normal': '#565b5e',     # Default border color
+            'focus': '#1f538d',      # Focus color
+            'critical': '#cc0000'    # Dark red for critical errors
+        }
+        
+        # Validation message templates
+        self._message_templates = {
+            'progressive_help': "💡 {message}",
+            'error_recovery': "🔧 Try: {suggestion}",
+            'success_feedback': "✅ {message}",
+            'learning_tip': "📚 Tip: {tip}"
+        }
+    
     def _get_widget_value(self, widget: Any) -> str:
         """Get value from widget, handling different widget types."""
         try:
@@ -103,25 +122,6 @@ class ValidationMixin:
         except Exception as e:
             print(f"Error getting widget value: {str(e)}")
             return ""
-        
-        # Progressive validation colors with severity levels
-        self._validation_colors = {
-            'error': '#ff4444',      # Red for errors
-            'warning': '#ffaa00',    # Orange for warnings  
-            'info': '#2196F3',       # Blue for info
-            'success': '#00aa44',    # Green for success
-            'normal': '#565b5e',     # Default border color
-            'focus': '#1f538d',      # Focus color
-            'critical': '#cc0000'    # Dark red for critical errors
-        }
-        
-        # Validation message templates
-        self._message_templates = {
-            'progressive_help': "💡 {message}",
-            'error_recovery': "🔧 Try: {suggestion}",
-            'success_feedback': "✅ {message}",
-            'learning_tip': "📚 Tip: {tip}"
-        }
     
     @ensure_application_continues("setup_real_time_validation", critical=False)
     def setup_real_time_validation(self, field_name: str, widget: Any, validation_callback: Callable, 
@@ -536,14 +536,15 @@ class ValidationMixin:
     def _get_widget_value(self, widget: Any) -> str:
         """Get value from a widget, handling different widget types"""
         try:
+            value = None
             if hasattr(widget, 'get_value'):
-                return str(widget.get_value() or "")
+                value = widget.get_value()
             elif hasattr(widget, 'get'):
-                return str(widget.get() or "")
+                value = widget.get()
             elif hasattr(widget, '_entry') and hasattr(widget._entry, 'get'):
-                return str(widget._entry.get() or "")
-            else:
-                return ""
+                value = widget._entry.get()
+            
+            return str(value or "") # Convert None to empty string
         except Exception:
             return ""
     
