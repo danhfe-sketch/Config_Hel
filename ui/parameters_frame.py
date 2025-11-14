@@ -8,7 +8,6 @@ from typing import Any, Dict
 from ui.parameter_factory import ParameterFactory
 from ui.custom_dialogs import show_error, show_info
 from ui.validation_mixin import ValidationMixin, ValidationResult
-from ui.apn_help_tooltip import APNCarrierHelper
 from services.validation_service import ValidationService
 from services.parameter_specification import get_all_sections_ordered, get_parameter_specification
 from services.parameter_specification_factory import ParameterSpecificationFactory

@@ -392,7 +392,7 @@ class CommandFormatValidator:
             {
                 'param': 'protocol',
                 'value': 'CRX (0x12)',
-                'expected': 'ATSMS:SZCS#GT06SEL=2#'
+                'expected': 'ATSMS:SZCS#GT06SEL=2'
             },
             
             # Speed Alert
@@ -421,7 +421,7 @@ class CommandFormatValidator:
             {
                 'param': 'sleep_mode',
                 'value': 'Sleep (Habilitado)',
-                'expected': 'ATSMS:SZCS#SLPDISCONNECT=1#'
+                'expected': 'ATSMS:SZCS#SLPDISCONNECT=1'
             }
         ]
         

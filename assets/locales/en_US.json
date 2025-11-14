@@ -574,5 +574,7 @@
     "speed_alert_type": "Speed Alert Type:",
     "apn": "APN",
     "invalid_motion_sensor_alert_value": "Invalid motion sensor alert value",
-    "motion_sensor_alert_sent": "Motion sensor alert configuration sent to device"
+    "motion_sensor_alert_sent": "Motion sensor alert configuration sent to device",
+    "defense_time_required": "Defense time value is required",
+    "defense_time_sent": "Defense time configuration sent to device"
 }

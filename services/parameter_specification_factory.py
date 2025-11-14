@@ -646,6 +646,8 @@ class ParameterSpecificationFactory:
                 self._send_speed_alert_command(param_values)
             elif param_name == 'speed_buzzer':
                 self._send_speed_buzzer_command(param_values)
+            elif param_name == 'blind_area_speed':
+                self._send_blind_area_speed_command(param_values)
             elif param_name == 'sleep_mode':
                 self._send_sleep_mode_command(param_values)
             elif param_name == 'sleep_time':
@@ -705,6 +707,8 @@ class ParameterSpecificationFactory:
                 self._send_acc_off_alert_command(param_values)
             elif param_name == 'backup_battery_protection_voltage':
                 self._send_backup_battery_protection_voltage_command(param_values)
+            elif param_name == 'defense_settings':
+                self._send_defense_command(param_values)
             else:
                 # Generic parameter sending
                 self._send_generic_parameter_command(param_name, param_values)
@@ -754,11 +758,6 @@ class ParameterSpecificationFactory:
                     except Exception as e:
                         print(f"WARNING: Failed to get value for {param_name}.{field_name}: {e}")
                         values[field_name] = None
-                
-                # If this is a simple parameter with only one field, also add it with the parameter name as key
-                if len(param_widget.ui_elements) == 1:
-                    single_value = list(values.values())[0]
-                    values[param_name] = single_value
                 
                 # Convert enabled to boolean if needed
                 if 'enabled' in values and not isinstance(values['enabled'], bool):
@@ -899,7 +898,7 @@ class ParameterSpecificationFactory:
     
     def _send_protocol_command(self, values: dict):
         """Send protocol configuration command"""
-        protocol = str(values.get('protocol', '')).strip()
+        protocol = str(values.get('main', '')).strip()
         
         if not protocol:
             messagebox.showerror(
@@ -926,7 +925,7 @@ class ParameterSpecificationFactory:
     
     def _send_tcp_ack_command(self, values: dict):
         """Send TCP ACK configuration command"""
-        tcp_ack = str(values.get('tcp_ack', '')).strip()
+        tcp_ack = str(values.get('main', '')).strip()
         
         if not tcp_ack:
             messagebox.showerror(
@@ -1022,7 +1021,7 @@ class ParameterSpecificationFactory:
     
     def _send_speed_buzzer_command(self, values: dict):
         """Send speed buzzer configuration command"""
-        enabled = values.get('speed_buzzer', False)
+        enabled = values.get('main', False)
         value = '1' if enabled else '0'
         
         command = f"ATSMS:SZCS#SPD_LED_SHOW={value}"
@@ -1034,7 +1033,7 @@ class ParameterSpecificationFactory:
     
     def _send_sleep_mode_command(self, values: dict):
         """Send sleep mode configuration command"""
-        sleep_mode = str(values.get('sleep_mode', '')).strip()
+        sleep_mode = str(values.get('main', '')).strip()
         
         # Map sleep mode to command value
         sleep_mode_mapping = {
@@ -1054,7 +1053,7 @@ class ParameterSpecificationFactory:
     
     def _send_sleep_time_command(self, values: dict):
         """Send sleep time configuration command"""
-        sleep_time = str(values.get('sleep_time', '')).strip()
+        sleep_time = str(values.get('main', '')).strip()
         
         if not sleep_time:
             messagebox.showerror(
@@ -1112,7 +1111,7 @@ class ParameterSpecificationFactory:
     
     def _send_backup_battery_alert_command(self, values: dict):
         """Send backup battery alert configuration command"""
-        enabled = values.get('backup_battery_alert', False)
+        enabled = values.get('main', False)
         
         if enabled:
             command = "ATSMS:BATALM,ON,0#"
@@ -1254,7 +1253,7 @@ class ParameterSpecificationFactory:
     
     def _send_odometer_command(self, values: dict):
         """Send odometer configuration command"""
-        odometer_value = str(values.get('odometer', '')).strip()
+        odometer_value = str(values.get('main', '')).strip()
         
         if not odometer_value:
             messagebox.showerror(
@@ -1281,7 +1280,7 @@ class ParameterSpecificationFactory:
     
     def _send_hourmeter_command(self, values: dict):
         """Send hourmeter configuration command"""
-        hourmeter_value = str(values.get('hourmeter', '')).strip()
+        hourmeter_value = str(values.get('main', '')).strip()
         
         if not hourmeter_value:
             messagebox.showerror(
@@ -1308,7 +1307,7 @@ class ParameterSpecificationFactory:
 
     def _send_source_off_type_command(self, values: dict):
         """Send source off type configuration command"""
-        source_off_type = str(values.get('source_off_type', '')).strip()
+        source_off_type = str(values.get('main', '')).strip()
         
         # Map source off type to command value
         source_off_type_mapping = {
@@ -1327,7 +1326,7 @@ class ParameterSpecificationFactory:
 
     def _send_relay_control_command(self, values: dict):
         """Send relay control command"""
-        relay_control = str(values.get('relay_control', '')).strip()
+        relay_control = str(values.get('main', '')).strip()
         
         # Map relay control to command value
         relay_control_mapping = {
@@ -1346,7 +1345,7 @@ class ParameterSpecificationFactory:
 
     def _send_sends_control_command(self, values: dict):
         """Send sends control command"""
-        sends_control = str(values.get('sends_control', '')).strip()
+        sends_control = str(values.get('main', '')).strip()
         
         command = f"ATSMS:SENDS,{sends_control}#"
         
@@ -1399,7 +1398,7 @@ class ParameterSpecificationFactory:
         )
     def _send_acc_on_alert_command(self, values: dict):
         """Send ACC ON alert configuration command"""
-        acc_on_alert = str(values.get('acc_on_alert', '')).strip()
+        acc_on_alert = str(values.get('main', '')).strip()
         
         # Map ACC ON alert to command value
         acc_on_alert_mapping = {
@@ -1424,7 +1423,7 @@ class ParameterSpecificationFactory:
 
     def _send_acc_off_alert_command(self, values: dict):
         """Send ACC OFF alert configuration command"""
-        acc_off_alert = str(values.get('acc_off_alert', '')).strip()
+        acc_off_alert = str(values.get('main', '')).strip()
         
         if acc_off_alert == 'Desabilitado':
             command = "ACCOFFALM,OFF#"
@@ -1464,7 +1463,7 @@ class ParameterSpecificationFactory:
 
     def _send_backup_battery_protection_voltage_command(self, values: dict):
         """Send backup battery protection voltage command"""
-        voltage = str(values.get('backup_battery_protection_voltage', '')).strip()
+        voltage = str(values.get('main', '')).strip()
         
         command = f"ATSMS:SZCS#BATSLPVALUE={voltage}"
         
@@ -1472,6 +1471,24 @@ class ParameterSpecificationFactory:
         messagebox.showinfo(
             self.i18n_service.get("success", "Success"),
             self.i18n_service.get("backup_battery_protection_voltage_sent", "Backup battery protection voltage configuration sent to device")
+        )
+
+    def _send_defense_command(self, values: dict):
+        """Send defense time configuration command"""
+        value = str(values.get('main', '')).strip()
+        
+        if not value:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("defense_time_required", "Defense time value is required")
+            )
+            return
+        
+        command = f"ATSMS:DEFENSE,{value}#"
+        self.serial_service.send_command(command, command_type='defense_settings')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("defense_time_sent", "Defense time configuration sent to device")
         )
 
     def _send_generic_parameter_command(self, param_name: str, values: dict):
@@ -1495,7 +1512,7 @@ class ParameterSpecificationFactory:
         )
     def _send_blind_area_speed_command(self, values: dict):
         """Send blind area speed configuration command"""
-        blind_area_speed = values.get('blind_area_speed', 0)
+        blind_area_speed = values.get('main', 0)
         
         # Ensure value is within valid range (0-20)
         try:

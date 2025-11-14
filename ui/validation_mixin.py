@@ -13,7 +13,6 @@ import customtkinter as ctk
 from typing import Callable, Dict, Any, Optional, List
 from dataclasses import dataclass
 from components.apn_validation_component import APNValidationComponent, ValidationResult
-from ui.apn_help_tooltip import APNHelpTooltip, APNCarrierHelper
 from services.validation_history_tracker import ValidationHistoryTracker
 from utils.widget_parent_resolver import (
     get_widget_parent, get_widget_parent_with_details, log_widget_access_debug,
@@ -50,7 +49,6 @@ class ValidationMixin:
         self._validation_callbacks: Dict[str, Callable] = {}
         self._validation_timers: Dict[str, str] = {}  # Store timer IDs for debouncing
         self._validation_widgets: Dict[str, Dict[str, Any]] = {}  # Store widget references
-        self._validation_tooltips: Dict[str, APNHelpTooltip] = {}  # Store tooltip references
         self._validation_message_widgets: Dict[str, ctk.CTkLabel] = {}  # Store message label references
         
         # Initialize validation components
@@ -155,19 +153,6 @@ class ValidationMixin:
             
             # Initialize validation state
             self._validation_states[field_name] = ValidationState(is_valid=True)
-            
-            # Set up contextual help tooltip if enabled
-            if enable_tooltips and field_name.startswith('apn'):
-                try:
-                    tooltip = APNHelpTooltip(widget, field_name, getattr(self, 'i18n', None))
-                    self._validation_tooltips[field_name] = tooltip
-                except Exception as tooltip_error:
-                    log_widget_access_warning(
-                        widget, 
-                        f"tooltip_setup_{field_name}",
-                        f"Failed to create tooltip: {str(tooltip_error)}",
-                        "Continuing without tooltip"
-                    )
             
             # Set up validation message display if enabled
             if enable_message_display:

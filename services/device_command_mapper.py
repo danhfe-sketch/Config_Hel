@@ -69,19 +69,19 @@ class DeviceCommandMapper:
             'heartbeat_intervals': "HBT,{heartbeat_intervals_moving_heartbeat},{heartbeat_intervals_stopped_heartbeat}#",
             
             # Service Parameters
-            'protocol': "SZCS#GT06SEL={protocol}#",
-            'tcp_ack': "SZCS#POSBYACK={tcp_ack}#",
+            'protocol': "SZCS#GT06SEL={value}#",
+            'tcp_ack': "SZCS#POSBYACK={value}#",
             
             # Ignition
             'ignition_type': "SZCS#ACCLINE={ignition_type_accline}#ACC_CFG={ignition_type_acc_cfg}",
             
             # Speed
             'speed_alert': "SPEED,{speed_alert_enabled},{speed_alert_detection_time},{speed_alert_speed_limit},{speed_alert_alert_type}#",
-            'speed_buzzer': "SZCS#SPD_LED_SHOW={speed_buzzer}#",
+            'speed_buzzer': "SZCS#SPD_LED_SHOW={value}#",
             
             # Power Saving
-            'sleep_mode': "SZCS#SLPDISCONNECT={sleep_mode}#",
-            'sleep_time': "SZCS#SLEEPT={sleep_time}#",
+            'sleep_mode': "SZCS#SLPDISCONNECT={value}#",
+            'sleep_time': "SZCS#SLEEPT={value}#",
             
             # Angle
             'angle_report': "SZCS#ANGLEVALUE={angle_report_min_speed}-{angle_report_angle_variation}",
@@ -99,8 +99,8 @@ class DeviceCommandMapper:
             'motion_sensor_alert': "SENALM,{state},{mode}#",
             
             # Miscellaneous
-            'odometer': "MILEAGE={odometer}#",
-            'hourmeter': "ACCONT,{hourmeter}#",
+            'odometer': "MILEAGE={value}#",
+            'hourmeter': "ACCONT,{value}#",
             
             # Legacy APN Configuration (kept for backward compatibility)
             'apn_server': "APN,{value},,#",
@@ -218,8 +218,8 @@ class DeviceCommandMapper:
             'sensitivity': "SZCS#SENSITIVITY={value}#",  # Changed from CXCS to SZCS for writing to device
 
             # Missing command templates from Parameter UI List
-            'jammer_relay_action': "JAMRELAY,{op},{time},{speed},{d},{e},{f},{g}#",
-            'main_power_alert': "POWERALM,{enabled},{alert_type},{detection_time},{min_charge_time}#",
+            'jammer_relay_action': "JAMRELAY,{jammer_relay_action_output_operation},{jammer_relay_action_confirmation_time},{jammer_relay_action_speed_limit},{jammer_relay_action_param_d},{jammer_relay_action_param_e},{jammer_relay_action_param_f},{jammer_relay_action_param_g}#",
+            'main_power_alert': "POWERALM,{main_power_alert_enabled},{main_power_alert_alert_type},{main_power_alert_detection_time},{main_power_alert_min_charge_time}#",
             'backup_battery_alert': "BATALM,{state},{mode}#",
             'vibration_sensitivity': "SZCS#VIBL={level}",
             'angle_report': "SZCS#ANGLEVALUE={min_speed}-{angle_variation}",
@@ -286,6 +286,11 @@ class DeviceCommandMapper:
                 'Sem Ação': '0',
                 'Ativar e Manter': '1',
                 'Ativar e Desativar com Jammer': '2'
+            },
+
+            'param_g': {
+                'Manter ativada': '0',
+                'Manter desativada': '1'
             },
 
             'motion_sensor_alert': {
@@ -410,6 +415,43 @@ class DeviceCommandMapper:
                 'Virtual por bateria (Virtual by battery)': '1'
             }
         }
+
+    def _handle_multi_field_parameter(self, param_name: str, field_values: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        A simple handler for multi-field parameters that prepares a dictionary
+        for template formatting.
+        """
+        command_params = {}
+        
+        # Provide default values for jammer_relay_action
+        if param_name == 'jammer_relay_action':
+            field_values.setdefault('param_d', '0')
+            field_values.setdefault('param_e', '0')
+            field_values.setdefault('param_f', '0')
+            field_values.setdefault('param_g', 'Manter ativada')
+
+        for field_name, field_value in field_values.items():
+            template_key = f"{param_name}_{field_name}"
+            
+            if field_name == 'enabled':
+                mapped_value = 'ON' if field_value else 'OFF'
+            elif field_name == 'alert_type':
+                mapped_value = self._map_value('alert_type', field_value)
+            elif field_name == 'output_operation':
+                mapped_value = self._map_value('jammer_output_operation', field_value)
+            elif field_name == 'param_g':
+                mapped_value = self._map_value('param_g', field_value)
+            else:
+                mapped_value = field_value
+            
+            command_params[template_key] = mapped_value
+
+        # Special handling for server_settings type
+        if param_name == 'server_settings':
+            address = field_values.get('address', '')
+            command_params['server_settings_type'] = self._determine_server_type(address)
+            
+        return command_params
 
     def get_command(self, param_name: str, value: Any, context: Dict[str, Any] = None,
                    confirm_destructive: bool = True, validate_command: bool = True) -> str:
@@ -1055,7 +1097,8 @@ class DeviceCommandMapper:
         compound_group_names = [
             'apn_settings', 'server_settings', 'report_intervals', 'heartbeat_intervals',
             'ignition_type', 'speed_alert', 'main_power_alert', 'angle_report',
-            'vibration_sensitivity', 'jammer_relay_action', 'moving_alert', 'vibration_window'
+            'vibration_sensitivity', 'jammer_relay_action', 'moving_alert', 'vibration_window',
+            'motion_sensor_alert'
         ]
         
         group_to_section = {
@@ -1065,7 +1108,8 @@ class DeviceCommandMapper:
             'main_power_alert': 'battery_alerts', 'angle_report': 'angle',
             'vibration_sensitivity': 'vibration_sensor', 'jammer_relay_action': 'jammer_detection',
             'moving_alert': 'alerts',
-            'vibration_window': 'vibration_sensor'
+            'vibration_window': 'vibration_sensor',
+            'motion_sensor_alert': 'movement_alerts'
         }
 
         new_params = {}
@@ -1200,6 +1244,13 @@ class DeviceCommandMapper:
                 'params': ['output_operation', 'confirmation_time', 'speed_limit', 'param_d', 'param_e', 'param_f', 'param_g'],
                 'required': ['output_operation'],
                 'method': self._generate_jammer_relay_command
+            },
+            {
+                'name': 'motion_sensor_alert',
+                'section': 'movement_alerts',
+                'params': ['enabled', 'alert_type'],
+                'required': [],
+                'method': self._generate_motion_sensor_alert_command
             }
         ]
         
@@ -1285,7 +1336,7 @@ class DeviceCommandMapper:
             'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
             'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter',
             'network_settings', 'defense_settings', 'source_off_type', 'relay_control', 'sends_control',
-            'motion_sensor_alert', 'distance_movement_action', 'acc_on_alert', 'acc_off_alert', 'blind_area_speed'
+            'distance_movement_action', 'acc_on_alert', 'acc_off_alert', 'blind_area_speed'
         ]
         
         self.logger.info(f"Processing {len(individual_params)} individual parameters")
@@ -1865,10 +1916,10 @@ class DeviceCommandMapper:
     def _generate_speed_alert_command(self, speed_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate speed alert command from flattened parameters."""
         try:
-            enabled = speed_params.get('speed_alert_enabled', False)
-            detection_time = speed_params.get('speed_detection_time', 0)
+            enabled = speed_params.get('enabled', False)
+            detection_time = speed_params.get('detection_time', 0)
             speed_limit = speed_params.get('speed_limit', 0)
-            alert_type = speed_params.get('speed_alert_type', 'Apenas GPRS')
+            alert_type = speed_params.get('alert_type', 'Apenas GPRS')
             
             return self.format_speed_alert_command(enabled, detection_time, speed_limit, alert_type)
             
@@ -1951,16 +2002,18 @@ class DeviceCommandMapper:
     def _generate_motion_sensor_alert_command(self, params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate motion sensor alert command from flattened parameters."""
         try:
-            value = params.get('value')
-            if value == 'Desabilitado':
+            enabled = params.get('enabled', False)
+            if not enabled:
                 command = "SENALM,OFF#"
-            elif value == 'Alerta Enviado Apenas GPRS':
-                command = "SENALM,ON,0#"
-            elif value == 'Alerta Enviado por SMS+GPRS':
-                command = "SENALM,ON,1#"
             else:
-                return None
-            
+                alert_type = params.get('alert_type', 'Apenas GPRS')
+                alert_type_mapping = {
+                    'Apenas GPRS': '0',
+                    'GPRS+SMS': '1'
+                }
+                alert_value = alert_type_mapping.get(alert_type, '0')
+                command = f"SENALM,ON,{alert_value}#"
+
             if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
                 full_command = f"ATSMS:{command}"
                 self.command_validation_gateway.validate_command(full_command, source="bulk_commands")
@@ -1976,16 +2029,12 @@ class DeviceCommandMapper:
             value = params.get('value')
             if value == 'Disabled':
                 command = "ACCALM,OFF#"
-            elif value == 'Enabled (GPRS)':
+            elif value == 'Alerta Enviado Apenas GPRS':
                 command = "ACCALM,ON,0#"
-            elif value == 'Enabled (SMS+GPRS)':
+            elif value == 'Alerta Enviado por SMS+GPRS':
                 command = "ACCALM,ON,1#"
             else:
-                # For backward compatibility, check for simple 'Enabled'
-                if value == 'Enabled':
-                    command = "ACCALM,ON,0#" # Default to GPRS only
-                else:
-                    return None
+                return None
             
             if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
                 full_command = f"ATSMS:{command}"
@@ -2037,7 +2086,6 @@ class DeviceCommandMapper:
                 'source_off_type': lambda v: self.get_command('relay_gps_check', v),
                 'relay_control': lambda v: self.get_command('relay_control', v),
                 'sends_control': lambda v: self.get_command('sends_control', v),
-                'motion_sensor_alert': lambda v: self._generate_motion_sensor_alert_command({'value': v}, validate_commands),
                 'acc_on_alert': lambda v: self._generate_acc_on_alert_command({'value': v}, validate_commands),
                 'acc_off_alert': lambda v: self._generate_acc_off_alert_command({'value': v}, validate_commands),
                 'distance_movement_action': lambda v: self.format_distance_movement_action_command(v),
