@@ -178,7 +178,7 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 name='protocol',
                 label='Tipo de protocolo',
                 ui_element='dropdown',
-                options=['GT06 (0x60)', 'CRX3 (0x22)', 'CRX (0x12)'],
+                options=['GT06 (0x60)', 'CRX3 (0x22)', 'GT06 (0x12)'],
                 commands={
                     'set': 'SZCS#GT06SEL=X',
                     'read': 'CXCS#GT06SEL'
@@ -217,14 +217,14 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         name='on_voltage',
                         label='Tensão para Ligar (ON)',
                         ui_element='number_input',
-                        unit='volts',
+                        unit='0.1 volts',
                         visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
                     ),
                     'off_voltage': FieldConfig(
                         name='off_voltage',
                         label='Tensão para Desligar (OFF)',
                         ui_element='number_input',
-                        unit='volts',
+                        unit='0.1volts',
                         visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
                     )
                 },
@@ -346,15 +346,13 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         name='min_speed',
                         label='Velocidade mínima (km/h)',
                         ui_element='number_input',
-                        validation='1-20',
-                        visibility_condition='enabled == true'
+                        validation='1-20'
                     ),
                     'angle_variation': FieldConfig(
                         name='angle_variation',
                         label='Variação do Ângulo (°)',
                         ui_element='number_input',
-                        validation='5-90',
-                        visibility_condition='enabled == true'
+                        validation='5-90'
                     )
                 },
                 commands={
@@ -826,7 +824,7 @@ COMMAND_VALUE_MAPPINGS = {
     'protocol': {
         'GT06 (0x60)': 0,
         'CRX3 (0x22)': 1,
-        'CRX (0x12)': 2
+        'GT06 (0x12)': 2
     },
     'tcp_ack': {
         'Enabled': 1,

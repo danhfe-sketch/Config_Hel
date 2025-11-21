@@ -96,7 +96,7 @@ This document provides a structured specification of the user interface componen
 *   **name:** protocol
 *   **label:** "Tipo de protocolo"
 *   **ui_element:** "dropdown"
-*   **options:** ["GT06 (0x60)", "CRX3 (0x22)", "CRX (0x12)"]
+*   **options:** ["GT06 (0x60)", "CRX3 (0x22)", "GT06 (0x12)"]
 *   **commands:**
     *   **set:** `SZCS#GT06SEL=X` (Note: X=0 for GT06, 1 for CRX3, 2 for CRX)
     *   **read:** `CXCS#GT06SEL`

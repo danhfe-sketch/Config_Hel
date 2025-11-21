@@ -13,7 +13,7 @@ SZCS#GT06SEL=X
 Seleciona o tipo de protocolo de comunicação.
 X=0: GT06 (0x60)
 X=1: CRX3 (0x22)
-X=2: CRX (0x12)
+X=2: GT06 (0x12)
 
 Respostas:
 SETOK: GT06SEL=0

@@ -1887,7 +1887,7 @@ class ConfigurationReaderService:
                 # Service Parameters
                 elif command_type == 'get_protocol':
                     # Map numeric values back to protocol names
-                    protocol_map = {'0': 'GT06 (0x60)', '1': 'CRX3 (0x22)', '2': 'CRX (0x12)'}
+                    protocol_map = {'0': 'GT06 (0x60)', '1': 'CRX3 (0x22)', '2': 'GT06 (0x12)'}
                     protocol_value = match.group(1)
                     parsed_values['protocol'] = protocol_map.get(protocol_value, protocol_value)
                     

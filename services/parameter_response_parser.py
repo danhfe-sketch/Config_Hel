@@ -251,7 +251,7 @@ class ParameterResponseParser:
             'protocol': {
                 0: 'GT06 (0x60)',
                 1: 'CRX3 (0x22)',
-                2: 'CRX (0x12)'
+                2: 'GT06 (0x12)'
             },
             'tcp_ack': {
                 0: 'Disabled',

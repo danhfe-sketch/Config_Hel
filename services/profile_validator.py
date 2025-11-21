@@ -962,7 +962,7 @@ class ProfileValidator:
             # Service Parameters
             'protocol': {
                 'type': 'dropdown',
-                'allowed_values': ['GT06 (0x60)', 'CRX3 (0x22)', 'CRX (0x12)']
+                'allowed_values': ['GT06 (0x60)', 'CRX3 (0x22)', 'GT06 (0x12)']
             },
             'tcp_ack': {
                 'type': 'dropdown',

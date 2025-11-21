@@ -911,7 +911,7 @@ class ParameterSpecificationFactory:
         protocol_mapping = {
             'GT06 (0x60)': '0',
             'CRX3 (0x22)': '1', 
-            'CRX (0x12)': '2'
+            'GT06 (0x12)': '2'
         }
         
         protocol_value = protocol_mapping.get(protocol, '0')
@@ -1095,7 +1095,7 @@ class ParameterSpecificationFactory:
             angle_variation_str = f"{int(angle_variation):03d}"
             command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}"
         else:
-            command = f"ATSMS:SZCS#ANGLEVALUE=00-000#"
+            command = f"ATSMS:SZCS#ANGLEVALUE=00-000"
         
         # Log the final command for debugging
         try:
@@ -1206,7 +1206,7 @@ class ParameterSpecificationFactory:
     
     def _send_jammer_detection_command(self, values: dict):
         """Send jammer detection configuration command"""
-        enabled = values.get('jammer_detection', False)
+        enabled = values.get('main', False)
         
         if enabled:
             command = "ATSMS:JAMMER,ON,0#"

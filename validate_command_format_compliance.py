@@ -140,7 +140,7 @@ class CommandFormatValidator:
             'protocol': {
                 'GT06 (0x60)': '0',
                 'CRX3 (0x22)': '1',
-                'CRX (0x12)': '2'
+                'GT06 (0x12)': '2'
             },
             'tcp_ack': {
                 'Enabled': '1',
@@ -391,7 +391,7 @@ class CommandFormatValidator:
             # Protocol
             {
                 'param': 'protocol',
-                'value': 'CRX (0x12)',
+                'value': 'GT06 (0x12)',
                 'expected': 'ATSMS:SZCS#GT06SEL=2'
             },
             

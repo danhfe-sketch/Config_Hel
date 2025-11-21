@@ -398,14 +398,14 @@ class DeviceCommandMapper:
             'protocol': {
                 'GT06 (0x60)': '0',
                 'CRX3 (0x22)': '1',
-                'CRX (0x12)': '2'
+                'GT06 (0x12)': '2'
             },
             
             # GT06 protocol mapping for validation
             'gt06_protocol': {
                 'GT06 (0x60)': 'GT06-0x60',
                 'CRX3 (0x22)': 'CRX3',
-                'CRX (0x12)': 'GT06-0x12'
+                'GT06 (0x12)': 'GT06-0x12'
             },
 
             # Ignition mode mapping
@@ -1538,11 +1538,19 @@ class DeviceCommandMapper:
         """
         Generate JAMMER command from specification-based parameter values.
 
-        Accepts both {'value': bool} and {'enabled': bool} formats and returns
-        the fully formatted ATSMS: command string.
+        Accepts {'value': bool}, {'enabled': bool}, or {'main': bool/int} formats
+        and returns the fully formatted ATSMS: command string.
         """
         try:
-            enabled = values.get('value') if 'value' in values else values.get('enabled', False)
+            if 'value' in values:
+                enabled = values['value']
+            elif 'enabled' in values:
+                enabled = values['enabled']
+            elif 'main' in values:
+                enabled = values['main']
+            else:
+                enabled = False
+
             if not isinstance(enabled, bool):
                 enabled = bool(enabled)
 
@@ -1636,7 +1644,7 @@ class DeviceCommandMapper:
         protocol_mapping = {
             'GT06 (0x60)': '0',
             'CRX3 (0x22)': '1', 
-            'CRX (0x12)': '2'
+            'GT06 (0x12)': '2'
         }
         return protocol_mapping.get(protocol, '0')  # Default to GT06
     
