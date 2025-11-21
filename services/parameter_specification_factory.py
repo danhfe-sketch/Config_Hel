@@ -1379,7 +1379,7 @@ class ParameterSpecificationFactory:
 
     def _send_distance_movement_action_command(self, values: dict):
         """Send distance movement action configuration command"""
-        distance_movement_action = str(values.get('distance_movement_action', '')).strip()
+        distance_movement_action = str(values.get('main', '')).strip()
         
         # Map distance movement action to command value
         distance_movement_action_mapping = {
