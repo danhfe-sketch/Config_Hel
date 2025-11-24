@@ -260,6 +260,7 @@ class DeviceCommandMapper:
             },
             'relay_gps_check': {
                 'Check GPS': '0',   # Check GPS fix before activating output
+                'Verifica FIX de GPS': '0',
                 'Immediate': '1',    # Activate output immediately without checking GPS
                 'Não verifica FIX de GPS': '1'
             },

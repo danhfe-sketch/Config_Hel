@@ -433,7 +433,7 @@ class ValidationService:
             },
             'defense_time': {
                 'type': 'numeric',
-                'min': 1,
+                'min': 0,
                 'max': 60,
                 'integer': True
             },

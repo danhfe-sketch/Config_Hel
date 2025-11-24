@@ -117,6 +117,11 @@ class LT32ProCommandFormatter:
     
     # Valid TCP ACK values for POSBYACK
     VALID_TCP_ACK = {'0', '1'}
+
+    # Commands that require quoting for values with spaces
+    COMMANDS_REQUIRING_QUOTES = {
+        'SOURCE_OFF_TYPE',
+    }
     
     def __init__(self):
         """Initialize the command formatter."""
@@ -189,6 +194,10 @@ class LT32ProCommandFormatter:
             return f"ATSMS:{base}"
 
         self._validate_write_command_value(command, value)
+
+        # For specific commands, if the value contains spaces, enclose it in quotes.
+        if command in self.COMMANDS_REQUIRING_QUOTES and ' ' in value:
+            value = f'"{value}"'
 
         base_command = self.WRITE_COMMAND_MAPPINGS[command].format(value=value)
         return f"ATSMS:{base_command}"

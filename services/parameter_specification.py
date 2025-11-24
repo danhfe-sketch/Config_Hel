@@ -547,7 +547,7 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                 name='defense_settings',
                 label='Defense Time (min):',
                 ui_element='number_input',
-                validation='1-60',
+                validation='0-60',
                 commands={
                     'set': 'DEFENSE,<value>#',
                     'read': 'DEFENSE#'
