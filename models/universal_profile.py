@@ -79,8 +79,19 @@ class ParameterValue:
     
     def to_dict_for_save(self) -> Dict[str, Any]:
         """Convert parameter value to dictionary for saving to file (without runtime metadata)."""
+        def force_int_recursive(data):
+            if isinstance(data, float):
+                return int(data)
+            if isinstance(data, dict):
+                return {k: force_int_recursive(v) for k, v in data.items()}
+            if isinstance(data, list):
+                return [force_int_recursive(item) for item in data]
+            return data
+
+        processed_value = force_int_recursive(self.value)
+        
         result = {
-            "value": self.value
+            "value": processed_value
         }
         
         # Only include validation_status if it exists
