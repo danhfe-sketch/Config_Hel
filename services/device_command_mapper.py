@@ -1983,9 +1983,9 @@ class DeviceCommandMapper:
     def _generate_vibration_command(self, vibration_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
         """Generate vibration command from flattened parameters."""
         try:
-            level = vibration_params.get('vibration_level', 1)
+            level = vibration_params.get('level', 1)
             
-            return self.format_vibration_sensitivity_command( level)
+            return self.format_vibration_sensitivity_command(level)
             
         except Exception as e:
             self.logger.error(f"Error generating vibration command: {str(e)}")
