@@ -42,6 +42,11 @@ class SerialService:
         # How long to wait for a device response between queued commands
         self.queue_response_timeout = 20.0  # seconds
         self.max_command_retries = 3 # Max retries for a single command in queue
+        
+        # Device reset tracking (for APN configuration)
+        self.waiting_for_device_reset = False
+        self.device_reset_port = None
+        self.device_reconnected = False
 
         # Connection monitoring
         self.last_activity_time = None
@@ -108,6 +113,11 @@ class SerialService:
             if hasattr(self.app, 'connection_frame'):
                 self.app.connection_frame.update_connection_indicator(True)
             
+            # If we were waiting for a device reset, mark that reconnection succeeded
+            if self.waiting_for_device_reset and port_device == self.device_reset_port:
+                self.device_reconnected = True
+                self.app.log_frame.log_message("INFO: Device reconnected successfully after reset\n")
+            
             return True  # Return True on success
                 
         except serial.SerialException as e:
@@ -143,6 +153,10 @@ class SerialService:
         if self.is_connected and self.serial_port:
             self.stop_thread = True
             self.stop_monitor = True
+            
+            # If we're waiting for a device reset, mark that disconnect occurred
+            if self.waiting_for_device_reset:
+                self.app.log_frame.log_message("INFO: Device disconnected as expected for reset\n")
             
             # Stop any reconnection attempts if error handler exists
             if hasattr(self.app, 'error_handler'):
@@ -473,6 +487,112 @@ class SerialService:
             # Introduce a final delay after sending all commands
             time.sleep(1)
             
+    def _is_device_reset_command(self, command: str) -> bool:
+        """
+        Check if a command will trigger device reset.
+        
+        Args:
+            command: The command string to check
+            
+        Returns:
+            True if this command triggers a device reset
+        """
+        # Commands that trigger device reset:
+        # 1. APN configuration: ATSMS:APN,<server>,<user>,<password>#
+        # 2. Network selection: ATSMS:SZCS#NETSELECT=0
+        
+        command_upper = command.upper()
+        
+        # Remove common prefixes to get the core command
+        core_command = command_upper.replace('ATSMS:', '').strip()
+        
+        # Check if the command starts with 'APN,' or contains 'SZCS#NETSELECT'
+        return core_command.startswith('APN,') or 'SZCS#NETSELECT' in core_command
+    
+    def _wait_for_device_reset(self, timeout: float = 30.0) -> bool:
+        """
+        Wait for device to reset (disconnect and reconnect).
+        
+        Args:
+            timeout: Maximum time to wait for reset cycle in seconds
+            
+        Returns:
+            True if device successfully reset and reconnected, False otherwise
+        """
+        # self.app.log_frame.log_message("INFO: Waiting for device to reset...\n")
+        
+        # Store the current port for reconnection
+        if self.serial_port:
+            self.device_reset_port = self.serial_port.port
+        
+        # Set flags
+        self.waiting_for_device_reset = True
+        self.device_reconnected = False
+        
+        start_time = time.time()
+        disconnect_detected = False
+        
+        # First, wait a moment for the device to process and respond to the APN command
+        # The device sends a response first, then disconnects to reset
+        # self.app.log_frame.log_message("INFO: Waiting for device response and potential reset...\n")
+        # time.sleep(2.0)  # Give device time to respond
+        
+        # Wait for disconnect (up to 8 seconds after the initial wait)
+        disconnect_wait_start = time.time()
+        while (time.time() - disconnect_wait_start) < 20.0:
+            # Check both is_connected flag and actual serial port state
+            port_closed = False
+            if self.serial_port:
+                try:
+                    # Check if port is still open
+                    port_closed = not self.serial_port.is_open
+                except:
+                    port_closed = True
+            
+            if not self.is_connected or port_closed:
+                disconnect_detected = True
+                # self.app.log_frame.log_message("INFO: Device disconnect detected\n")
+                break
+            time.sleep(0.1)
+        
+        # if not disconnect_detected:
+        #     # Device didn't disconnect - this might be normal if APN didn't change
+        #     self.app.log_frame.log_message("INFO: Device did not reset (APN may already be configured)\n")
+        #     self.waiting_for_device_reset = False
+        #     # Return True to continue processing - this is not an error
+        #     return True
+        
+        # Wait a bit for device to fully reset
+        # self.app.log_frame.log_message("INFO: Waiting for device to complete reset...\n")
+        # time.sleep(10.0)
+        
+        # Try to reconnect (up to remaining timeout)
+        reconnect_start = time.time()
+        reconnect_timeout = timeout - (reconnect_start - start_time)
+        
+        while (time.time() - reconnect_start) < reconnect_timeout:
+            if self.device_reconnected:
+                self.app.log_frame.log_message("INFO: Device reset completed successfully\n")
+                self.waiting_for_device_reset = False
+                return True
+            
+            # Try to reconnect if not connected
+            if not self.is_connected and self.device_reset_port:
+                try:
+                    self.app.log_frame.log_message(f"INFO: Attempting to reconnect to {self.device_reset_port}...\n")
+                    # Use after to call connect on main thread
+                    self.app.after(0, self.connect, self.device_reset_port)
+                    time.sleep(2.0)  # Wait for connection attempt
+                except Exception as e:
+                    self.app.log_frame.log_message(f"WARNING: Reconnection attempt failed: {str(e)}\n")
+            
+            time.sleep(0.5)
+        
+        # Timeout occurred
+        # self.app.log_frame.log_message("ERROR: Device reset timeout - device did not reconnect\n")
+        self.waiting_for_device_reset = False
+        return False
+    
     def queue_command(self, command: str, command_type: str = None, retry_count: int = 0) -> None:
         """
         Add a command to the queue for sequential processing.
@@ -544,17 +664,33 @@ class SerialService:
                 # Get the next command from the queue
                 command, command_type, retry_count = self.command_queue.get()
                 
+                # Check if this command will trigger a device reset
+                is_reset_command = self._is_device_reset_command(command)
+                
+                # if is_reset_command:
+                #     self.app.after(0, self.app.log_frame.log_message, 
+                #                   "INFO: Detected device reset command - device will reset\n")
+                
                 # Send the command
                 sent_ok = self.send_command(command, command_type)
 
                 # If send succeeded, wait for the device response or timeout
                 if sent_ok:
+                    # First, wait for the device response (applies to all commands)
                     start_wait = time.time()
                     waited = 0.0
                     # Only wait while waiting_for_response is True and we haven't exceeded the timeout
                     while self.waiting_for_response and (time.time() - start_wait) < self.queue_response_timeout:
                         time.sleep(0.05)
                         waited = time.time() - start_wait
+                    
+                    # After receiving response, check if this was a reset command
+                    if is_reset_command and not self.waiting_for_response:
+                        # Device responded - now wait for potential reset
+                        reset_success = self._wait_for_device_reset(timeout=30.0)
+                        # Reset succeeded or wasn't needed, continue with next command
+                        # Note: waiting_for_response is already False from the response wait above
+                    
                     # If still waiting after timeout, log timeout notice
                     if self.waiting_for_response:
                         # Timeout occurred

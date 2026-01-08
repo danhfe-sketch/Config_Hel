@@ -8,6 +8,7 @@ utils/__pycache__/
 __pycache__/
 build/
 venv/
+tests/
 validation_debug.log
 validation_errors.log
 validation_metrics.log
