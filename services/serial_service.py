@@ -943,24 +943,32 @@ class SerialService:
         Returns:
             Dictionary of parameter names and values
         """
+        print("DEBUG: _collect_parameters_from_ui - START")
         parameters = {}
         
         # Check if parameters frame exists
         if not hasattr(self.app, 'parameters_frame') and not hasattr(self.app, 'params_frame'):
             self.app.log_frame.log_message("DEBUG: No parameters frame found\n")
+            print("DEBUG: _collect_parameters_from_ui - No parameters frame found")
             return parameters
         
         # Get the parameters frame (try both possible names)
+        print("DEBUG: _collect_parameters_from_ui - Getting parameters frame")
         params_frame = getattr(self.app, 'parameters_frame', None) or getattr(self.app, 'params_frame', None)
         
         if params_frame is None:
             self.app.log_frame.log_message("DEBUG: Parameters frame is None\n")
+            print("DEBUG: _collect_parameters_from_ui - Parameters frame is None")
             return parameters
+        print(f"DEBUG: _collect_parameters_from_ui - Parameters frame found: {type(params_frame)}")
         
         # Use the modern specification-based parameter collection method
+        print("DEBUG: _collect_parameters_from_ui - Checking for get_all_parameter_values method")
         if hasattr(params_frame, 'get_all_parameter_values'):
             try:
+                print("DEBUG: _collect_parameters_from_ui - Calling get_all_parameter_values()")
                 parameters = params_frame.get_all_parameter_values()
+                print(f"DEBUG: _collect_parameters_from_ui - get_all_parameter_values() returned {len(parameters)} parameters")
                 self.app.log_frame.log_message(f"DEBUG: Collected {len(parameters)} parameters using specification method\n")
                 
                 # Log the collected parameters for debugging
@@ -969,6 +977,7 @@ class SerialService:
                     
                 return parameters
             except Exception as e:
+                print(f"DEBUG: _collect_parameters_from_ui - Exception in get_all_parameter_values: {str(e)}")
                 self.app.log_frame.log_message(f"ERROR: Failed to collect parameters using specification method: {str(e)}\n")
         
         # Fallback to legacy parameter collection methods
@@ -1003,6 +1012,7 @@ class SerialService:
                 pass
         
         self.app.log_frame.log_message(f"DEBUG: Collected {len(parameters)} parameters using fallback methods\n")
+        print(f"DEBUG: _collect_parameters_from_ui - END, returning {len(parameters)} parameters")
         return parameters
     
     def _flatten_parameters_for_device_mapper(self, parameters: Dict[str, Any]) -> Dict[str, Any]:

@@ -397,23 +397,34 @@ class ParameterSpecificationFactory:
     
     def get_parameter_value(self, section_name: str, param_name: str, section_widgets: Dict[str, SectionWidget]) -> Any:
         """Get value from a parameter widget"""
+        print(f"DEBUG: get_parameter_value - START: {section_name}.{param_name}")
         if section_name not in section_widgets:
+            print(f"DEBUG: get_parameter_value - Section {section_name} not found")
             return None
         
         section_widget = section_widgets[section_name]
         if param_name not in section_widget.parameters:
+            print(f"DEBUG: get_parameter_value - Parameter {param_name} not found in section {section_name}")
             return None
         
         param_widget = section_widget.parameters[param_name]
+        print(f"DEBUG: get_parameter_value - Widget type: {param_widget.widget_type}")
         
         if param_widget.widget_type == 'simple':
-            return param_widget.ui_elements['main'].get_value()
+            print(f"DEBUG: get_parameter_value - Getting simple value for {param_name}")
+            value = param_widget.ui_elements['main'].get_value()
+            print(f"DEBUG: get_parameter_value - Got value: {value}")
+            return value
         elif param_widget.widget_type == 'complex':
+            print(f"DEBUG: get_parameter_value - Getting complex values for {param_name}")
             values = {}
             for field_name, ui_element in param_widget.ui_elements.items():
+                print(f"DEBUG: get_parameter_value - Getting field {field_name}")
                 values[field_name] = ui_element.get_value()
+            print(f"DEBUG: get_parameter_value - Got complex values: {values}")
             return values
         
+        print(f"DEBUG: get_parameter_value - END: {section_name}.{param_name}")
         return None
     
     def _clean_time_parameter_value(self, param_name: str, field_name: str, field_value: Any) -> Any:
@@ -495,11 +506,14 @@ class ParameterSpecificationFactory:
     
     def get_all_parameter_values(self, section_widgets: Dict[str, SectionWidget]) -> Dict[str, Any]:
         """Get all parameter values from all sections"""
+        print(f"DEBUG: get_all_parameter_values - START, {len(section_widgets)} sections")
         all_values = {}
         
         for section_name, section_widget in section_widgets.items():
+            print(f"DEBUG: get_all_parameter_values - Processing section: {section_name}")
             section_values = {}
             for param_name in section_widget.parameters:
+                print(f"DEBUG: get_all_parameter_values - Getting value for {section_name}.{param_name}")
                 param_value = self.get_parameter_value(section_name, param_name, section_widgets)
                 if param_value is not None:
                     section_values[param_name] = param_value
@@ -507,6 +521,7 @@ class ParameterSpecificationFactory:
             if section_values:
                 all_values[section_name] = section_values
         
+        print(f"DEBUG: get_all_parameter_values - END, returning {len(all_values)} sections")
         return all_values
     
     def set_all_parameter_values(self, values: Dict[str, Any], section_widgets: Dict[str, SectionWidget]):

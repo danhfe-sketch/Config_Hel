@@ -36,7 +36,13 @@ class ProfileErrorDialog:
         
         # Ensure dialog uses the same theme as the application
         # The main app uses dark theme with blue color theme
-        ctk.set_appearance_mode("dark")
+        # Get current theme from parent's theme service if available
+        if hasattr(parent, 'theme_service'):
+            current_theme = parent.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            # Fallback to dark theme if theme service not available
+            ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
         # Center the dialog

@@ -340,7 +340,10 @@ class TextInputElement(BaseUIElement):
         return frame
     
     def get_value(self) -> str:
-        return self.text_var.get().strip()
+        print(f"DEBUG: TextInputElement.get_value - START")
+        value = self.text_var.get().strip()
+        print(f"DEBUG: TextInputElement.get_value - END, value: {value}")
+        return value
     
     def set_value(self, value: Any) -> None:
         if value is not None:
@@ -506,9 +509,13 @@ class DropdownElement(BaseUIElement):
         return frame
     
     def get_value(self) -> Optional[str]:
+        print(f"DEBUG: DropdownElement.get_value - START")
         if not self.widget:
+            print(f"DEBUG: DropdownElement.get_value - widget is None")
             return None
-        return self.widget.get()
+        value = self.widget.get()
+        print(f"DEBUG: DropdownElement.get_value - END, value: {value}")
+        return value
     
     def set_value(self, value: Any) -> None:
         if self.widget and value is not None:
@@ -564,9 +571,13 @@ class ToggleSwitchElement(BaseUIElement):
         return frame
     
     def get_value(self) -> Optional[bool]:
+        print(f"DEBUG: ToggleSwitchElement.get_value - START")
         if not self.switch_var:
+            print(f"DEBUG: ToggleSwitchElement.get_value - switch_var is None")
             return None
-        return self.switch_var.get()
+        value = self.switch_var.get()
+        print(f"DEBUG: ToggleSwitchElement.get_value - END, value: {value}")
+        return value
     
     def set_value(self, value: Any) -> None:
         if self.switch_var:
