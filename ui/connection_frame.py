@@ -31,6 +31,9 @@ class ConnectionFrame(ctk.CTkFrame):
         self.com_port_combo = ctk.CTkComboBox(self, values=[""], command=self.refresh_ports)
         self.com_port_combo.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self.refresh_ports() # Initial population
+        
+        # INÍCIO DA ATUALIZAÇÃO AUTOMÁTICA
+        self.after(1000, self._auto_refresh_ports)
 
         # Use a slightly smaller button with more compact text to ensure it fits on small screens
         self.connect_button = ctk.CTkButton(
@@ -208,6 +211,37 @@ class ConnectionFrame(ctk.CTkFrame):
             return "#2B2B2B"  # Dark gray for dark theme
         else:
             return "#F0F0F0"  # Light gray for light theme
+
+    def _auto_refresh_ports(self):
+        """Silently monitors and updates the COM ports dropdown without user interaction."""
+        try:
+            # Pega as portas conectadas no momento no computador
+            current_ports = self.serial_service.list_com_ports()
+            # Pega as portas que estão sendo mostradas no Dropdown
+            combo_ports = self.com_port_combo.cget("values")
+            
+            # Garante que a comparação seja feita em listas puras
+            if isinstance(combo_ports, tuple):
+                combo_ports = list(combo_ports)
+                
+            # Se ouve mudança nas portas (cabo plugado ou desplugado)
+            if current_ports != combo_ports:
+                # Atualiza a lista internamente sem recarregar a tela
+                self.com_port_combo.configure(values=current_ports)
+                
+                # Se a porta que estava selecionada não existe mais e não estamos conectados, muda para a próxima
+                selected_port = self.com_port_combo.get()
+                if selected_port not in current_ports and not self.serial_service.is_connected:
+                    if current_ports and current_ports[0] != "N/A":
+                        self.com_port_combo.set(current_ports[0])
+                    else:
+                        self.com_port_combo.set("")
+        except Exception:
+            # Ignora falhas silenciosamente pois roda em background
+            pass
+            
+        # Re-agendamento do monitor para rodar daqui a 1 segundo
+        self.after(1000, self._auto_refresh_ports)
 
     def refresh_ports(self, _=None):
         """Refreshes the list of available COM ports."""

@@ -60,16 +60,76 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         
         # Set up enhanced APN validation using ValidationMixin
         self._setup_enhanced_apn_validation_with_mixin()
+        
+        # NOVO: Configura a visibilidade condicional dos campos de ignição
+        self._setup_ignition_conditional_visibility()
 
         self._validation_colors = {
             'error': '#ff4444',      # Red for errors
             'warning': '#ffaa00',    # Orange for warnings  
-            'info': '#2196F3',       # Blue for info
+            'info': '#2196F3',        # Blue for info
             'success': '#00aa44',    # Green for success
-            'normal': '#565b5e',     # Default border color
+            'normal': '#565b5e',      # Default border color
             'focus': '#1f538d',      # Focus color
             'critical': '#cc0000'    # Dark red for critical errors
         }
+
+    def _setup_ignition_conditional_visibility(self):
+        """Configura a visibilidade condicional dos campos de tensão da ignição."""
+        try:
+            # Pega o widget completo da ignição
+            ignition_param = self.parameter_widgets.get('ignition.ignition_type')
+            if not ignition_param or ignition_param['type'] != 'complex':
+                return
+
+            fields = ignition_param['fields']
+            dropdown_field = None
+            voltage_frames = []
+            
+            for field_name, field_data in fields.items():
+                element = field_data['element']
+                widget = getattr(element, 'widget', None)
+                
+                # Identifica o Dropdown de Modo
+                if isinstance(widget, ctk.CTkComboBox):
+                    dropdown_field = widget
+                    
+                    # Intercepta o comando original para não quebrar o envio da configuração pro rastreador
+                    original_command = dropdown_field.cget("command")
+                    def combined_command(choice, cmd=original_command, frames=voltage_frames, dd=dropdown_field):
+                        self._toggle_ignition_voltage_fields(dd, frames)
+                        if cmd:
+                            cmd(choice)
+                    dropdown_field.configure(command=combined_command)
+                    
+                    # Adiciona um "olheiro" invisível para reagir quando o rastreador for lido automaticamente
+                    if hasattr(dropdown_field, '_variable') and dropdown_field._variable:
+                        dropdown_field._variable.trace_add('write', lambda *args: self._toggle_ignition_voltage_fields(dropdown_field, voltage_frames))
+                    
+                # Identifica os campos numéricos (Tensão Ligar/Desligar)
+                elif isinstance(widget, ctk.CTkEntry):
+                    voltage_frames.append(getattr(element, 'container_frame', element))
+
+            # Aciona uma primeira vez ao abrir o aplicativo
+            if dropdown_field and voltage_frames:
+                self.after(200, lambda: self._toggle_ignition_voltage_fields(dropdown_field, voltage_frames))
+                
+        except Exception as e:
+            print(f"WARNING: Falha ao configurar visibilidade condicional da ignição: {e}")
+
+    def _toggle_ignition_voltage_fields(self, dropdown_field, voltage_frames):
+        """Auxiliar que esconde ou mostra os campos de tensão baseando-se no texto selecionado."""
+        try:
+            current_val = dropdown_field.get().lower()
+            # Só exibe os campos extras se a opção selecionada falar sobre "bateria" ou "battery"
+            if "bateria" in current_val or "battery" in current_val or "tens" in current_val:
+                for frame in voltage_frames:
+                    frame.grid()
+            else:
+                for frame in voltage_frames:
+                    frame.grid_remove()
+        except Exception:
+            pass
     
     def populate_ui_from_profile(self, profile):
         """
@@ -167,21 +227,65 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         apn_values = self._get_apn_values_from_section()
         user = apn_values.get('user', '').strip()
         password = apn_values.get('password', '').strip()
-        return self.apn_validation_component.validate_apn_configuration(value, user, password)
+        
+        # Se o campo APN estiver vazio, não engatilha erro na digitação inicial
+        if not value.strip():
+            return ValidationResult(is_valid=True)
+            
+        result = self.apn_validation_component.validate_apn_configuration(value, user, password)
+        
+        # Intercepta o erro e força a tradução, limpando as sugestões em inglês
+        if not result.is_valid:
+            if result.error_message:
+                result.error_message = self.i18n.get("invalid_apn_config_error", "Configuração de APN inválida. Verifique os campos.")
+            result.suggestions = [self.i18n.get("apn_suggestion_server", "Verifique o formato do servidor APN.")]
+            if hasattr(result, 'fixes'):
+                result.fixes = []
+        return result
 
     def _validate_apn_user_field_comprehensive(self, value: str) -> ValidationResult:
         """Validate the APN username field."""
         apn_values = self._get_apn_values_from_section()
         apn = apn_values.get('apn', '').strip()
         password = apn_values.get('password', '').strip()
-        return self.apn_validation_component.validate_apn_configuration(apn, value, password)
+        
+        # PERDÃO DE DIGITAÇÃO: Se preencheu usuário, mas a senha ainda está vazia,
+        # assumimos que ele ainda vai digitar a senha no próximo campo. Retorna válido por enquanto.
+        if value.strip() and not password:
+            return ValidationResult(is_valid=True)
+            
+        result = self.apn_validation_component.validate_apn_configuration(apn, value, password)
+        
+        # Intercepta o erro e força a tradução, limpando as sugestões em inglês
+        if not result.is_valid:
+            if result.error_message:
+                result.error_message = self.i18n.get("invalid_apn_config_error", "Configuração de APN inválida. Verifique os campos.")
+            result.suggestions = [self.i18n.get("apn_suggestion_user", "Se usar usuário, a senha também é necessária.")]
+            if hasattr(result, 'fixes'):
+                result.fixes = []
+        return result
 
     def _validate_apn_password_field_comprehensive(self, value: str) -> ValidationResult:
         """Validate the APN password field."""
         apn_values = self._get_apn_values_from_section()
         apn = apn_values.get('apn', '').strip()
         user = apn_values.get('user', '').strip()
-        return self.apn_validation_component.validate_apn_configuration(apn, user, value)
+        
+        # PERDÃO DE DIGITAÇÃO: Se preencheu senha, mas o usuário ainda está vazio,
+        # assumimos que ele ainda vai preencher no campo acima. Retorna válido por enquanto.
+        if value.strip() and not user:
+            return ValidationResult(is_valid=True)
+            
+        result = self.apn_validation_component.validate_apn_configuration(apn, user, value)
+        
+        # Intercepta o erro e força a tradução, limpando as sugestões em inglês
+        if not result.is_valid:
+            if result.error_message:
+                result.error_message = self.i18n.get("invalid_apn_config_error", "Configuração de APN inválida. Verifique os campos.")
+            result.suggestions = [self.i18n.get("apn_suggestion_pass", "Se usar senha, o usuário também é necessário.")]
+            if hasattr(result, 'fixes'):
+                result.fixes = []
+        return result
 
     def _create_parameter_sections_from_specification(self):
         """Create all parameter sections using the specification factory."""
@@ -399,14 +503,7 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
         )
     
     def send_moving_alert_command(self, param_values: dict):
-        """Sends the MOVING alert command to the device.
-        
-        Args:
-            param_values: Dictionary with moving alert parameters
-                - enabled: bool, whether alert is enabled
-                - radius: int, displacement radius (100-1000)
-                - notification_mode: int, 0 for GPRS only, 1 for SMS+GPRS
-        """
+        """Sends the MOVING alert command to the device."""
         try:
             if not self.serial_service.is_connected:
                 show_error(
@@ -419,11 +516,10 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             # Default values
             enabled = param_values.get('enabled', False)
             radius = param_values.get('radius', 1000)  # Default 1000m
-            notification_mode = 0  # Default GPRS only
             
-            # Convert notification mode text to value
-            if param_values.get('alert_type') == 'SMS+GPRS':
-                notification_mode = 1
+            # CORREÇÃO DO BUG DO ZERO: Detecta inteligentemente a opção correta
+            alert_type_text = str(param_values.get('alert_type', '')).upper()
+            notification_mode = 1 if 'SMS' in alert_type_text else 0
             
             # Validate radius
             if radius is None or not isinstance(radius, int):
@@ -438,6 +534,14 @@ class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
             
             print(f"DEBUG: Sending moving alert command: {command}")
             self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
+            
+            # CORREÇÃO DO POP-UP: Adicionado o alerta que o dev original esqueceu
+            if self.serial_service.is_connected:
+                show_info(
+                    self,
+                    self.i18n.get("success", "Sucesso"),
+                    self.i18n.get("moving_alert_sent", "Alerta de movimento enviado com sucesso!")
+                )
             
         except Exception as e:
             show_error(

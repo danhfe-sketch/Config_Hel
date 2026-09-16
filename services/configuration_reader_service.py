@@ -1653,7 +1653,7 @@ class ConfigurationReaderService:
             'heartbeat_intervals': 'get_hbt',
             'protocol': 'get_protocol',
             'tcp_ack': 'get_tcp_ack',
-            'ignition_type': 'get_accline',
+            'ignition_type': 'get_ignition_type',
             'speed_alert': 'get_speed_alert',
             'speed_buzzer': 'get_speed_buzzer',
             'sleep_mode': 'get_sleep_mode',
@@ -1904,15 +1904,20 @@ class ConfigurationReaderService:
                     on_voltage = match.group(3)
                     off_voltage = match.group(4)
 
+                    # CORREÇÃO: As strings aqui agora batem 100% com o Dropdown da UI
                     ignition_mode_map = {
-                        ('1', '0'): 'Física (Physical)',
-                        ('0', '0'): 'Virtual por acelerômetro (Virtual by accelerometer)',
-                        ('1', '1'): 'Virtual por bateria (Virtual by battery)'
+                        ('1', '0'): 'Física (Fio Laranja)',
+                        ('0', '0'): 'Virtual por Acelerômetro',
+                        ('1', '1'): 'Virtual por Tensão da Bateria'
                     }
                     mode_key = (accline, cfg_type)
-                    ignition_mode = ignition_mode_map.get(mode_key, 'Unknown')
+                    
+                    # Se o aparelho retornar algo maluco, por padrão joga pra Física
+                    ignition_mode = ignition_mode_map.get(mode_key, 'Física (Fio Laranja)')
 
                     parsed_values['ignition_mode'] = ignition_mode
+                    
+                    # Se for virtual por bateria (cfg_type == '1'), passa as tensões pra UI
                     if cfg_type == '1' and on_voltage is not None and off_voltage is not None:
                         parsed_values['on_voltage'] = on_voltage
                         parsed_values['off_voltage'] = off_voltage

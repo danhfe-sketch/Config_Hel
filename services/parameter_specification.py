@@ -211,21 +211,21 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         name='ignition_mode',
                         label='Modo de Ignição',
                         ui_element='dropdown',
-                        options=['Física (Physical)', 'Virtual por acelerômetro (Virtual by accelerometer)', 'Virtual por bateria (Virtual by battery)']
+                        options=['Física (Fio Laranja)', 'Virtual por Acelerômetro', 'Virtual por Tensão da Bateria']
                     ),
                     'on_voltage': FieldConfig(
                         name='on_voltage',
                         label='Tensão para Ligar (ON)',
                         ui_element='number_input',
                         unit='0.1 volts',
-                        visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+                        visibility_condition="ignition_mode == 'Virtual por Tensão da Bateria'"
                     ),
                     'off_voltage': FieldConfig(
                         name='off_voltage',
                         label='Tensão para Desligar (OFF)',
                         ui_element='number_input',
                         unit='0.1volts',
-                        visibility_condition="ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+                        visibility_condition="ignition_mode == 'Virtual por Tensão da Bateria'"
                     )
                 },
                 commands={
@@ -678,14 +678,14 @@ PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
                         label='Raio de movimentação',
                         ui_element='number_input',
                         unit='meters',
-                        visibility_condition='enabled == true'  # Only show when enabled
+                        visibility_condition='enabled == true'
                     ),
                     'alert_type': FieldConfig(
                         name='alert_type',
                         label='Tipo de Alerta',
                         ui_element='dropdown',
                         options=['Apenas GPRS', 'GPRS+SMS'],
-                        visibility_condition='enabled == true'  # Only show when enabled
+                        visibility_condition='enabled == true'
                     )
                 },
                 commands={
@@ -836,8 +836,13 @@ COMMAND_VALUE_MAPPINGS = {
         'Deep Sleep (Ultra-baixo)': 2
     },
     'alert_type': {
+        '0 - Apenas GPRS': 0,
+        '1 - GPRS+SMS': 1,
         'Apenas GPRS': 0,
-        'GPRS+SMS': 1
+        'GPRS+SMS': 1,
+        'Alerta Enviado Apenas GPRS': 0,
+        'Alerta Enviado por GPRS+SMS': 1,
+        'Alerta Enviado por SMS+GPRS': 1
     },
     'jammer_output_operation': {
         'Sem Ação': 0,

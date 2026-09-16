@@ -971,7 +971,7 @@ class ParameterSpecificationFactory:
             return
 
         command = None
-        if ignition_mode == 'Virtual por bateria (Virtual by battery)':
+        if ignition_mode == 'Virtual por Tensão da Bateria':
             on_voltage = str(values.get('on_voltage', '')).strip()
             off_voltage = str(values.get('off_voltage', '')).strip()
             
@@ -983,9 +983,9 @@ class ParameterSpecificationFactory:
                 return
             
             command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage}-{off_voltage}"
-        elif ignition_mode == 'Física (Physical)':
+        elif ignition_mode == 'Física (Fio Laranja)':
             command = "ATSMS:SZCS#ACCLINE=1#ACC_CFG=0-000-000"
-        elif ignition_mode == 'Virtual por acelerômetro (Virtual by accelerometer)':
+        elif ignition_mode == 'Virtual por Acelerômetro':
             command = "ATSMS:SZCS#ACCLINE=0#ACC_CFG=0-000-000"
         else:
             messagebox.showerror(

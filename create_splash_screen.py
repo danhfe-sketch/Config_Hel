@@ -44,7 +44,7 @@ def create_splash_screen(version_text, master_image_path, output_path):
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    version = "1.3.3"
+    version = "1.3.5"
     master_image = "Master_splash.png"
     output_image = "splash.png"
     create_splash_screen(f"Version {version}", master_image, output_image)

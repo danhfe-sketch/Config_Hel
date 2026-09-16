@@ -411,9 +411,9 @@ class DeviceCommandMapper:
 
             # Ignition mode mapping
             'ignition_mode_value': {
-                'Física (Physical)': '1',
-                'Virtual por acelerômetro (Virtual by accelerometer)': '0',
-                'Virtual por bateria (Virtual by battery)': '1'
+                'Física (Fio Laranja)': '1',
+                'Virtual por Acelerômetro': '0',
+                'Virtual por Tensão da Bateria': '1'
             }
         }
 
@@ -1497,7 +1497,7 @@ class DeviceCommandMapper:
     
     def format_ignition_command(self, ignition_mode: str, on_voltage: float = None, off_voltage: float = None) -> str:
         """Format ignition configuration command."""
-        if ignition_mode == 'Virtual por bateria (Virtual by battery)':
+        if ignition_mode == 'Virtual por Tensão da Bateria':
             if on_voltage is None or off_voltage is None:
                 raise ValueError("On and off voltages are required for virtual battery ignition mode")
             
@@ -1506,9 +1506,9 @@ class DeviceCommandMapper:
             off_voltage_int = int(float(off_voltage))
             
             command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage_int}-{off_voltage_int}"
-        elif ignition_mode == 'Física (Physical)':
+        elif ignition_mode == 'Física (Fio Laranja)':
             command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=0-000-000"
-        else: # 'Virtual por acelerômetro (Virtual by accelerometer)'
+        else: # 'Virtual por Acelerômetro'
             command = f"ATSMS:SZCS#ACCLINE=0#ACC_CFG=0-000-000"
         
         if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:

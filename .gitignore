@@ -14,4 +14,4 @@ validation_errors.log
 validation_metrics.log
 .kiro/
 .kiro/specs/
-venv/
+.venv/

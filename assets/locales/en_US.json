@@ -1,5 +1,5 @@
 {
-    "app_title": "LT32Pro Device Configurator v1.3.2",
+    "app_title": "LT32Pro Device Configurator v1.3.4",
     "load_from_device_confirmation": "This will read the current device configuration and save it to:\n\n{profile_path}\n\nThe device must be connected and responding.\n\nContinue?",
     "load_from_device_success": "Device configuration loaded successfully!\n\nProfile name: {profile_name}\nParameters processed: {parameters_processed}\nProfile saved to: {file_path}",
     "confirm": "Confirm",

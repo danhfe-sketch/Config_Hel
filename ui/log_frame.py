@@ -72,6 +72,15 @@ class LogFrame(ctk.CTkFrame):
         self.send_command_button = ctk.CTkButton(command_frame, text=self.i18n.get("send"), width=80, command=self.send_free_command)
         self.send_command_button.grid(row=0, column=2, padx=(5, 0), pady=5)
         
+        # --- Container do Histórico de Comandos ---
+        # Pré-alocado e fixado para evitar pulos no layout
+        self.frame_historico = ctk.CTkFrame(command_frame, fg_color="transparent", height=24)
+        # RESOLUÇÃO DO PULO HORIZONTAL: columnspan=3 faz o histórico usar o espaço total sem empurrar a coluna do meio
+        self.frame_historico.grid(row=1, column=0, columnspan=3, padx=(0, 5), pady=(0, 5), sticky="w")
+        
+        self.historico_comandos = []
+        self.botoes_historico = []
+        
         # Last log update time to throttle updates for performance
         self.last_log_update = 0
         self.log_buffer = []
@@ -125,21 +134,25 @@ class LogFrame(ctk.CTkFrame):
         # Add to buffer for batched updates
         self.log_buffer.append(message)
         
-        # Immediately update for critical messages (errors, connection issues)
-        if "ERROR:" in message and ("connection" in message.lower() or "disconnected" in message.lower()):
-            # Force immediate update for connection errors
+        # Immediately update for critical messages or device responses (DEV:) to prevent delayed log rendering
+        if ("ERROR:" in message and ("connection" in message.lower() or "disconnected" in message.lower())) or message.startswith("DEV:"):
+            # Force immediate update for connection errors and device responses
             self._update_log_display()
             
             # Ensure the log is visible by scrolling to the end
             self.after(10, self.log_textbox.see, "end")
             
             # Flash the log area to draw attention for connection errors
-            self._flash_log_for_attention()
+            if "ERROR:" in message:
+                self._flash_log_for_attention()
         else:
             # Check if we should update the display now for regular messages
             current_time = time.time() * 1000  # Convert to milliseconds
             if current_time - self.last_log_update > self.update_interval:
                 self._update_log_display()
+            else:
+                # Schedule an update to flush the buffer even if no new messages arrive
+                self.after(int(self.update_interval), self._update_log_display)
                 
     def _get_theme_appropriate_background(self):
         """
@@ -439,11 +452,48 @@ class LogFrame(ctk.CTkFrame):
         return '\n'.join(formatted_lines)
 
     def send_free_command(self, event=None):
-        """Sends the command from the free command entry."""
+        """Sends the command from the free command entry and updates history."""
         command = self.command_entry.get().strip()
         if command and self.serial_service.is_connected:
             self.serial_service.send_command(command)
+            
+            # Adiciona ao histórico se for inédito (agora limitado a 8 comandos)
+            if command not in self.historico_comandos:
+                self.historico_comandos.insert(0, command)
+                self.historico_comandos = self.historico_comandos[:8]
+                self._atualizar_botoes_historico()
+                
+            # Apaga o texto após o disparo
             self.command_entry.delete(0, "end")
+
+    def _atualizar_botoes_historico(self):
+        """Limpa o frame de histórico e recria os botões com tamanho seguro."""
+        for btn in self.botoes_historico:
+            btn.destroy()
+        self.botoes_historico.clear()
+        
+        for cmd in self.historico_comandos:
+            # Trunca o nome do botão se for muito longo para evitar alargamento da tela
+            texto_exibicao = cmd if len(cmd) <= 12 else cmd[:10] + ".."
+            
+            btn = ctk.CTkButton(
+                self.frame_historico, 
+                text=texto_exibicao, 
+                width=30, 
+                height=20, 
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#34495E", 
+                hover_color="#1A252F",
+                command=lambda c=cmd: self._reenviar_do_historico(c)
+            )
+            btn.pack(side="left", padx=(0, 4))
+            self.botoes_historico.append(btn)
+
+    def _reenviar_do_historico(self, comando_selecionado):
+        """Insere o comando selecionado do histórico no campo e o envia."""
+        self.command_entry.delete(0, 'end')
+        self.command_entry.insert(0, comando_selecionado)
+        self.send_free_command()
     
     def update_language_display(self):
         """Updates all UI elements with the current language."""

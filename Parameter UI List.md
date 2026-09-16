@@ -123,19 +123,19 @@ This document provides a structured specification of the user interface componen
         *   **name:** ignition_mode
         *   **label:** "Modo de Ignição"
         *   **ui_element:** "dropdown"
-        *   **options:** ["Física (Physical)", "Virtual por acelerômetro (Virtual by accelerometer)", "Virtual por bateria (Virtual by battery)"]
+        *   **options:** ["Física (Fio Laranja)", "Virtual por Acelerômetro", "Virtual por Tensão da Bateria"]
     *   **field_2:**
         *   **name:** on_voltage
         *   **label:** "Tensão para Ligar (ON)"
         *   **ui_element:** "number_input"
         *   **unit:** "V"
-        *   **visibility_condition:** "ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+        *   **visibility_condition:** "ignition_mode == 'Virtual por Tensão da Bateria'"
     *   **field_3:**
         *   **name:** off_voltage
         *   **label:** "Tensão para Desligar (OFF)"
         *   **ui_element:** "number_input"
         *   **unit:** "V"
-        *   **visibility_condition:** "ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+        *   **visibility_condition:** "ignition_mode == 'Virtual por Tensão da Bateria'"
 *   **commands:**
     *   **set_physical:** `SZCS#ACCLINE=1#ACC_CFG=0-000-000`
     *   **set_accelerometer:** `SZCS#ACCLINE=0#ACC_CFG=0-000-000`

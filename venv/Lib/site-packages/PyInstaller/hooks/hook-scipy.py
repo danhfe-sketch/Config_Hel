@@ -42,7 +42,10 @@ hiddenimports = ['scipy._lib.%s' % m for m in ['messagestream', "_ccallback_c", 
 
 # In scipy 1.14.0, `scipy._lib.array_api_compat.numpy` added a programmatic import of its `.fft` submodule, which needs
 # to be added to hiddenimports.
-if check_requirement("scipy >= 1.14.0"):
+# In scipy 1.18.0rc1, `scipy._lib.array_api_compat` was renamed to `scipy._external.array_api_compat`.
+if check_requirement("scipy >= 1.18.0rc1"):
+    hiddenimports += ['scipy._external.array_api_compat.numpy.fft']
+elif check_requirement("scipy >= 1.14.0"):
     hiddenimports += ['scipy._lib.array_api_compat.numpy.fft']
 
 # If scipy is provided by Debian's python3-scipy, its scipy.__config__ submodule is renamed to a dynamically imported
@@ -57,3 +60,8 @@ if is_linux and "dist-packages" in get_module_file_attribute("scipy"):
 # we need to add both `numpy.f2py` and all its submodules to hiddenimports here.
 if check_requirement("numpy >= 2.0.0"):
     hiddenimports += collect_submodules('numpy.f2py', filter=lambda name: name != 'numpy.f2py.tests')
+
+# Starting with scipy 1.17.0, the `scipy._cyutility` extension is imported when top-level `scipy` package is imported
+# (via import of another extension, `scipy._lib`).
+if check_requirement("scipy >= 1.17.0"):
+    hiddenimports += ['scipy._cyutility']

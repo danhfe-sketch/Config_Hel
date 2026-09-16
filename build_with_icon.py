@@ -26,14 +26,19 @@ def build_executable_with_icon():
     
     # PyInstaller command
     cmd = [
-        "pyinstaller",
+        sys.executable, "-m", "PyInstaller",
+        "--clean",                      # FIX: Limpa todo o cache de compilação anterior
         "--onefile",                    # Create single executable
         "--windowed",                   # No console window
         "--name=LT32Pro_Configurator",  # Executable name
         icon_arg,                       # Icon argument
         "--add-data=assets;assets",     # Include assets folder
-        "--add-data=assets\locales;assets\locales",   # Include locales folder
+        "--add-data=assets/locales;assets/locales",   # Include locales folder
         "--add-data=Parameter UI List.md;.",  # Include Parameter UI List.md file
+        "--hidden-import=PIL._tkinter_finder",
+        "--hidden-import=PIL._imaging",
+        "--collect-all=PIL",                   # Força coleta do Pillow
+        "--collect-all=customtkinter",         # Força coleta do CustomTkinter
         "main.py"                       # Main script
     ]
     
