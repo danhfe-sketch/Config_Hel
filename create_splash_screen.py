@@ -34,7 +34,12 @@ def create_splash_screen(version_text, master_image_path, output_path):
         # Draw the version text
         draw.text((x, y), version_text, font=font, fill=text_color)
 
-        # Save the image
+        # --- NOVO: Garante que a pasta de destino exista ---
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Save the image (O PIL sobrescreve o arquivo automaticamente se ele já existir)
         image.save(output_path, "PNG")
         print(f"Splash screen saved to {output_path}")
 
@@ -46,5 +51,8 @@ def create_splash_screen(version_text, master_image_path, output_path):
 if __name__ == "__main__":
     version = "1.3.6"
     master_image = "Master_splash.png"
-    output_image = "splash.png"
+    
+    # --- NOVO: Define o caminho direcionando para assets/images ---
+    output_image = os.path.join("assets", "images", "splash.png")
+    
     create_splash_screen(f"Version {version}", master_image, output_image)

@@ -40,7 +40,7 @@ class ActionsFrame(ctk.CTkFrame):
         # <-- NOVO BOTÃO: TRADUTOR DE STRINGS -->
         self.translator_button = ctk.CTkButton(
             self,
-            text=self.i18n.get("string_translator", "Tradutor de Strings"),
+            text=self.i18n.get("string_translator", "Tradutor de Strings Brutas"),
             command=self.open_translator,
             fg_color="#1f538d",
             hover_color="#14375e"
