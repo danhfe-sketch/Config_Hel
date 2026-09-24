@@ -1031,9 +1031,27 @@ class SerialService:
                 for param_name, param_data in section_data.items():
                     if isinstance(param_data, dict):
                         for field_name, field_value in param_data.items():
-                            flattened[f"{param_name}.{field_name}"] = field_value
+                            # Remove o .0 transformando float em int perfeito
+                            val = field_value
+                            if isinstance(val, float) and val.is_integer():
+                                val = int(val)
+                            elif isinstance(val, str) and val.endswith('.0'):
+                                try:
+                                    val = int(float(val))
+                                except ValueError:
+                                    pass
+                            flattened[f"{param_name}.{field_name}"] = val
                     else:
-                        flattened[param_name] = param_data
+                        # Remove o .0 transformando float em int perfeito
+                        val = param_data
+                        if isinstance(val, float) and val.is_integer():
+                            val = int(val)
+                        elif isinstance(val, str) and val.endswith('.0'):
+                            try:
+                                val = int(float(val))
+                            except ValueError:
+                                pass
+                        flattened[param_name] = val
         return flattened
         
     def _process_config_check_results(self, results: Dict[str, Any]) -> None:

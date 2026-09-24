@@ -1,0 +1,4328 @@
+            # Parse bullet points (handle both * and indented content)
+            if line.startswith('*') or (in_fields_section and line.startswith('    *')) or (in_commands_section and line.startswith('    *')):
+                # Check for main sections
+                if '**fields:**' in line:
+                    in_fields_section = True
+                    in_commands_section = False
+                    config_data['fields'] = []
+                    current_field = None
+                    current_field_data = {}
+                elif '**commands:**' in line:
+                    in_commands_section = True
+                    in_fields_section = False
+                    config_data['commands'] = {}
+                    # Save any pending field
+                    if current_field and current_field_data:
+                        config_data['fields'].append(current_field_data.copy())
+                        current_field = None
+                        current_field_data = {}
+                elif '**field_' in line and line.strip().endswith(':**') and in_fields_section:
+                    # Save previous field if exists
+                    if current_field and current_field_data:
+                        config_data['fields'].append(current_field_data.copy())
+                    
+                    # Start new field
+                    current_field = self._extract_field_number(line)
+                    current_field_data = {}
+                elif ('**set' in line or '**read' in line) and in_commands_section:
+                    # Parse command
+                    command_type, command_value = self._parse_command(line)
+                    if command_type and command_value:
+                        config_data['commands'][command_type] = command_value
+                elif in_fields_section and current_field is not None:
+                    # Parse field properties (handle indented content)
+                    if '**name:**' in line:
+                        current_field_data['name'] = self._extract_value(line)
+                    elif '**label:**' in line:
+                        current_field_data['label'] = self._extract_value(line)
+                    elif '**ui_element:**' in line:
+                        current_field_data['ui_element'] = self._extract_value(line)
+                    elif '**validation:**' in line:
+                        current_field_data['validation'] = self._extract_value(line)
+                    elif '**unit:**' in line:
+                        current_field_data['unit'] = self._extract_value(line)
+                    elif '**options:**' in line:
+                        current_field_data['options'] = self._parse_options(line)
+                    elif '**visibility_condition:**' in line:
+                        current_field_data['visibility_condition'] = self._extract_value(line)
+                elif not in_fields_section and not in_commands_section:
+                    # Handle main config properties (not in fields or commands section)
+                    if '**name:**' in line:
+                        config_data['name'] = self._extract_value(line)
+                    elif '**label:**' in line:
+                        config_data['label'] = self._extract_value(line)
+                    elif '**description:**' in line:
+                        config_data['description'] = self._extract_value(line)
+                    elif '**ui_element:**' in line:
+                        config_data['ui_element'] = self._extract_value(line)
+                    elif '**validation:**' in line:
+                        config_data['validation'] = self._extract_value(line)
+                    elif '**unit:**' in line:
+                        config_data['unit'] = self._extract_value(line)
+                    elif '**options:**' in line:
+                        config_data['options'] = self._parse_options(line)
+                    elif '**visibility_condition:**' in line:
+                        config_data['visibility_condition'] = self._extract_value(line)
+            
+            i += 1
+        
+        # Don't forget the last field
+        if current_field and current_field_data and in_fields_section:
+            if 'fields' not in config_data:
+                config_data['fields'] = []
+            config_data['fields'].append(current_field_data)
+        
+        return i
+    
+    def _extract_value(self, line: str) -> str:
+        """Extract value from a markdown line."""
+        # Remove markdown formatting and extract the value
+        line = re.sub(r'\*\*[^*]+:\*\*', '', line)  # Remove **key:** part
+        line = line.strip('* ').strip()
+        # Remove quotes if present
+        if line.startswith('"') and line.endswith('"'):
+            line = line[1:-1]
+        return line
+    
+    def _parse_options(self, line: str) -> List[str]:
+        """Parse options from a markdown line."""
+        # Extract the array part
+        match = re.search(r'\[(.*?)\]', line)
+        if match:
+            options_str = match.group(1)
+            # Split by comma and clean up
+            options = [opt.strip().strip('"') for opt in options_str.split(',')]
+            return options
+        return []
+    
+    def _extract_field_number(self, line: str) -> str:
+        """Extract field number from field definition line."""
+        match = re.search(r'\*\*field_(\d+):\*\*', line)
+        return match.group(1) if match else None
+    
+    def _parse_command(self, line: str) -> tuple[Optional[str], Optional[str]]:
+        """Parse command from a markdown line."""
+        # Extract command type and value
+        match = re.search(r'\*\*([^*]+):\*\*\s*`([^`]+)`', line)
+        if match:
+            command_type = match.group(1).strip()
+            command_value = match.group(2).strip()
+            return command_type, command_value
+        return None, None
+    
+    def _parse_config_data(self, config_data: Dict[str, Any], section: str) -> Optional[ParameterSpec]:
+        """
+        Convert parsed config data into a ParameterSpec object.
+        
+        Args:
+            config_data: Raw parsed configuration data
+            section: Section name this config belongs to
+            
+        Returns:
+            Optional[ParameterSpec]: Created parameter specification or None if invalid
+        """
+        if 'name' not in config_data:
+            return None
+        
+        # Parse UI element type
+        ui_element = None
+        if 'ui_element' in config_data:
+            try:
+                ui_element = UIElementType(config_data['ui_element'])
+            except ValueError:
+                # Unknown UI element type, keep as None
+                pass
+        
+        # Parse fields
+        fields = None
+        if 'fields' in config_data and config_data['fields']:
+            fields = []
+            for field_data in config_data['fields']:
+                field = self._create_parameter_field(field_data)
+                if field:
+                    fields.append(field)
+        
+        # Parse commands
+        commands = ParameterCommands()
+        if 'commands' in config_data:
+            cmd_data = config_data['commands']
+            commands.set_command = cmd_data.get('set')
+            commands.read_command = cmd_data.get('read')
+            commands.set_physical = cmd_data.get('set_physical')
+            commands.set_accelerometer = cmd_data.get('set_accelerometer')
+            commands.set_battery = cmd_data.get('set_battery')
+            commands.set_level = cmd_data.get('set_level')
+            commands.read_level = cmd_data.get('read_level')
+        
+        return ParameterSpec(
+            name=config_data['name'],
+            label=config_data.get('label', config_data['name']),
+            section=section,
+            description=config_data.get('description'),
+            ui_element=ui_element,
+            validation=config_data.get('validation'),
+            unit=config_data.get('unit'),
+            options=config_data.get('options'),
+            visibility_condition=config_data.get('visibility_condition'),
+            commands=commands,
+            fields=fields
+        )
+    
+    def _create_parameter_field(self, field_data: Dict[str, Any]) -> Optional[ParameterField]:
+        """
+        Create a ParameterField from parsed field data.
+        
+        Args:
+            field_data: Raw parsed field data
+            
+        Returns:
+            Optional[ParameterField]: Created field or None if invalid
+        """
+        if 'name' not in field_data or 'label' not in field_data:
+            return None
+        
+        # Parse UI element type
+        ui_element = UIElementType.TEXT_INPUT  # Default
+        if 'ui_element' in field_data:
+            try:
+                ui_element = UIElementType(field_data['ui_element'])
+            except ValueError:
+                # Keep default if unknown type
+                pass
+        
+        return ParameterField(
+            name=field_data['name'],
+            label=field_data['label'],
+            ui_element=ui_element,
+            validation=field_data.get('validation'),
+            unit=field_data.get('unit'),
+            options=field_data.get('options'),
+            visibility_condition=field_data.get('visibility_condition')
+        )
+    
+    def get_parameter_spec(self, parameter_name: str) -> Optional[ParameterSpec]:
+        """
+        Get a specific parameter specification by name.
+        
+        Args:
+            parameter_name: Name of the parameter to retrieve
+            
+        Returns:
+            Optional[ParameterSpec]: Parameter specification or None if not found
+        """
+        specs = self.parse_specifications()
+        return specs.get(parameter_name)
+    
+    def get_all_parameters(self) -> List[str]:
+        """
+        Get a list of all parameter names.
+        
+        Returns:
+            List[str]: List of all parameter names
+        """
+        specs = self.parse_specifications()
+        return list(specs.keys())
+    
+    def get_parameters_by_section(self, section: str) -> List[ParameterSpec]:
+        """
+        Get all parameters in a specific section.
+        
+        Args:
+            section: Section name to filter by
+            
+        Returns:
+            List[ParameterSpec]: List of parameter specifications in the section
+        """
+        specs = self.parse_specifications()
+        return [spec for spec in specs.values() if spec.section == section]
+    
+    def get_all_sections(self) -> List[str]:
+        """
+        Get a list of all section names.
+        
+        Returns:
+            List[str]: List of all section names
+        """
+        self.parse_specifications()  # Ensure sections are parsed
+        return list(self._sections.keys()) if self._sections else []
+    
+    def validate_parameter_value(self, param_name: str, value: Any) -> ValidationResult:
+        """
+        Validate a parameter value against its specification.
+        
+        Args:
+            param_name: Name of the parameter
+            value: Value to validate
+            
+        Returns:
+            ValidationResult: Result of the validation
+        """
+        spec = self.get_parameter_spec(param_name)
+        if not spec:
+            return ValidationResult(
+                is_valid=False,
+                errors=[f"Parameter '{param_name}' not found in specifications"]
+            )
+        
+        return spec.validate_value(value)
+    
+    def get_parameter_default_value(self, param_name: str) -> Any:
+        """
+        Get the default value for a parameter.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            Any: Default value or None if parameter not found
+        """
+        spec = self.get_parameter_spec(param_name)
+        return spec.get_default_value() if spec else None
+    
+    def is_parameter_visible(self, param_name: str, context: Dict[str, Any]) -> bool:
+        """
+        Check if a parameter should be visible given the current context.
+        
+        Args:
+            param_name: Name of the parameter
+            context: Dictionary of current parameter values
+            
+        Returns:
+            bool: True if parameter should be visible
+        """
+        spec = self.get_parameter_spec(param_name)
+        return spec.is_visible(context) if spec else True
+    
+    def get_visible_fields(self, param_name: str, context: Dict[str, Any]) -> List[ParameterField]:
+        """
+        Get the visible fields for a parameter given the current context.
+        
+        Args:
+            param_name: Name of the parameter
+            context: Dictionary of current field values
+            
+        Returns:
+            List[ParameterField]: List of visible fields
+        """
+        spec = self.get_parameter_spec(param_name)
+        return spec.get_visible_fields(context) if spec else []
+</document_content>
+</document>
+<document index="59">
+<source>.\services\profile_converter.py</source>
+<document_content>
+"""
+Profile Converter - Format standardization and compatibility for profile files.
+
+This module provides format conversion and standardization for profile files including:
+1. Converting raw profile data to standard ProfileData format
+2. Legacy profile format migration utilities
+3. Parameter name mapping and value format conversion
+4. Integration with existing ProfileData structure
+5. Backward compatibility with different profile versions
+"""
+
+import re
+import logging
+import configparser
+from datetime import datetime
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional, Union, Tuple
+from enum import Enum
+
+# Import existing data models
+from services.profile_data_models import ProfileData, ProfileMetadata, ValidationInfo
+
+
+class ProfileFormatVersion(Enum):
+    """Supported profile format versions."""
+    LEGACY_V0_9 = "0.9"
+    CURRENT_V1_0 = "1.0"
+    CURRENT_V1_1 = "1.1"
+    FUTURE_V1_2 = "1.2"
+
+
+class ConversionErrorType(Enum):
+    """Types of conversion errors."""
+    UNSUPPORTED_VERSION = "unsupported_version"
+    MISSING_REQUIRED_DATA = "missing_required_data"
+    INVALID_PARAMETER_FORMAT = "invalid_parameter_format"
+    PARAMETER_MAPPING_ERROR = "parameter_mapping_error"
+    VALUE_CONVERSION_ERROR = "value_conversion_error"
+
+
+@dataclass
+class ConversionError:
+    """Conversion error information."""
+    error_type: ConversionErrorType
+    parameter_name: Optional[str]
+    original_value: Optional[str]
+    error_message: str
+    suggestion: Optional[str] = None
+
+
+@dataclass
+class ConversionResult:
+    """Result of profile conversion operation."""
+    success: bool
+    profile_data: Optional[ProfileData] = None
+    errors: List[ConversionError] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    conversion_summary: str = ""
+    parameters_converted: int = 0
+    parameters_failed: int = 0
+
+
+@dataclass
+class MigrationResult:
+    """Result of legacy profile migration."""
+    success: bool
+    original_version: str
+    target_version: str
+    migrated_data: Optional[ProfileData] = None
+    migration_log: List[str] = field(default_factory=list)
+    errors: List[ConversionError] = field(default_factory=list)
+
+
+class ProfileConverter:
+    """
+    Format standardization and compatibility for profile files.
+    
+    Features:
+    - Converting raw profile data to standard ProfileData format
+    - Legacy profile format migration utilities
+    - Parameter name mapping and value format conversion
+    - Integration with existing ProfileData structure
+    """
+    
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        """
+        Initialize the profile converter.
+        
+        Args:
+            logger: Optional logger instance for detailed logging
+        """
+        self.logger = logger or logging.getLogger(__name__)
+        self.current_version = ProfileFormatVersion.CURRENT_V1_0.value
+        
+        # Initialize parameter mappings
+        self._init_parameter_mappings()
+        
+        # Initialize value converters
+        self._init_value_converters()
+        
+        # Initialize legacy format handlers
+        self._init_legacy_format_handlers()
+        
+        # Initialize section mappings
+        self._init_section_mappings()
+        
+        self.logger.info("ProfileConverter initialized")
+
+    def convert_to_standard_format(self, raw_data: Dict[str, Any]) -> ConversionResult:
+        """
+        Convert raw profile data to standard ProfileData format.
+        
+        Args:
+            raw_data: Raw profile data dictionary (could be from ConfigParser or other sources)
+            
+        Returns:
+            ConversionResult with standardized ProfileData or conversion errors
+        """
+        self.logger.info("Converting raw data to standard format")
+        
+        errors = []
+        warnings = []
+        parameters_converted = 0
+        parameters_failed = 0
+        
+        try:
+            # Detect format version
+            format_version = self._detect_format_version(raw_data)
+            self.logger.debug(f"Detected format version: {format_version}")
+            
+            # Extract metadata
+            metadata_result = self._extract_and_convert_metadata(raw_data, format_version)
+            if not metadata_result['success']:
+                errors.extend(metadata_result['errors'])
+                if not metadata_result['metadata']:
+                    return ConversionResult(
+                        success=False,
+                        errors=errors,
+                        conversion_summary="Failed to extract profile metadata"
+                    )
+            
+            metadata = metadata_result['metadata']
+            warnings.extend(metadata_result.get('warnings', []))
+            
+            # Extract and convert device parameters
+            parameters_result = self._extract_and_convert_parameters(raw_data, format_version)
+            device_parameters = parameters_result['parameters']
+            errors.extend(parameters_result['errors'])
+            warnings.extend(parameters_result.get('warnings', []))
+            parameters_converted = parameters_result['converted_count']
+            parameters_failed = parameters_result['failed_count']
+            
+            # Create validation info
+            validation_info = ValidationInfo(
+                is_validated=True,
+                validation_date=datetime.now().isoformat(),
+                validation_errors=[]
+            )
+            
+            # Create standardized ProfileData
+            profile_data = ProfileData(
+                metadata=metadata,
+                device_parameters=device_parameters,
+                validation_info=validation_info,
+                format_version=self.current_version
+            )
+            
+            # Update parameter count in metadata
+            profile_data.metadata.parameter_count = len(device_parameters)
+            
+            success = len([e for e in errors if e.error_type in [
+                ConversionErrorType.UNSUPPORTED_VERSION,
+                ConversionErrorType.MISSING_REQUIRED_DATA
+            ]]) == 0
+            
+            conversion_summary = self._generate_conversion_summary(
+                parameters_converted, parameters_failed, len(warnings), format_version
+            )
+            
+            self.logger.info(f"Conversion completed: {conversion_summary}")
+            
+            return ConversionResult(
+                success=success,
+                profile_data=profile_data,
+                errors=errors,
+                warnings=warnings,
+                conversion_summary=conversion_summary,
+                parameters_converted=parameters_converted,
+                parameters_failed=parameters_failed
+            )
+            
+        except Exception as e:
+            error_msg = f"Unexpected error during conversion: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            
+            return ConversionResult(
+                success=False,
+                errors=[ConversionError(
+                    error_type=ConversionErrorType.INVALID_PARAMETER_FORMAT,
+                    parameter_name=None,
+                    original_value=None,
+                    error_message=error_msg
+                )],
+                conversion_summary="Conversion failed due to unexpected error"
+            )
+
+    def migrate_legacy_format(self, legacy_data: Dict[str, Any], version: str) -> MigrationResult:
+        """
+        Migrate legacy profile format to current standard format.
+        
+        Args:
+            legacy_data: Legacy profile data
+            version: Version of the legacy format
+            
+        Returns:
+            MigrationResult with migrated ProfileData or migration errors
+        """
+        self.logger.info(f"Migrating legacy format from version {version} to {self.current_version}")
+        
+        migration_log = []
+        errors = []
+        
+        try:
+            # Check if version is supported for migration
+            if version not in self.legacy_format_handlers:
+                error = ConversionError(
+                    error_type=ConversionErrorType.UNSUPPORTED_VERSION,
+                    parameter_name=None,
+                    original_value=version,
+                    error_message=f"Unsupported legacy version: {version}",
+                    suggestion=f"Supported versions: {', '.join(self.legacy_format_handlers.keys())}"
+                )
+                return MigrationResult(
+                    success=False,
+                    original_version=version,
+                    target_version=self.current_version,
+                    errors=[error]
+                )
+            
+            # Get migration handler for the version
+            migration_handler = self.legacy_format_handlers[version]
+            migration_log.append(f"Starting migration from version {version}")
+            
+            # Apply version-specific migrations
+            migrated_data = migration_handler(legacy_data, migration_log)
+            
+            # Convert migrated data to standard format
+            conversion_result = self.convert_to_standard_format(migrated_data)
+            
+            if not conversion_result.success:
+                errors.extend(conversion_result.errors)
+                migration_log.append("Migration failed during format conversion")
+                return MigrationResult(
+                    success=False,
+                    original_version=version,
+                    target_version=self.current_version,
+                    migration_log=migration_log,
+                    errors=errors
+                )
+            
+            migration_log.append(f"Migration completed successfully: {conversion_result.parameters_converted} parameters converted")
+            
+            return MigrationResult(
+                success=True,
+                original_version=version,
+                target_version=self.current_version,
+                migrated_data=conversion_result.profile_data,
+                migration_log=migration_log,
+                errors=conversion_result.errors
+            )
+            
+        except Exception as e:
+            error_msg = f"Migration failed: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            migration_log.append(error_msg)
+            
+            return MigrationResult(
+                success=False,
+                original_version=version,
+                target_version=self.current_version,
+                migration_log=migration_log,
+                errors=[ConversionError(
+                    error_type=ConversionErrorType.INVALID_PARAMETER_FORMAT,
+                    parameter_name=None,
+                    original_value=None,
+                    error_message=error_msg
+                )]
+            )
+
+    def extract_device_parameters(self, profile_data: ProfileData) -> Dict[str, Any]:
+        """
+        Extract device parameters from ProfileData in a format suitable for device deployment.
+        
+        Args:
+            profile_data: ProfileData object containing the parameters
+            
+        Returns:
+            Dictionary of device parameters ready for deployment
+        """
+        self.logger.debug("Extracting device parameters for deployment")
+        
+        try:
+            # Start with the device parameters from the profile
+            device_params = profile_data.device_parameters.copy()
+            
+            # Apply reverse parameter mapping (standard names to device-specific names)
+            mapped_params = {}
+            for param_name, param_value in device_params.items():
+                # Check if parameter needs reverse mapping
+                device_param_name = self._get_device_parameter_name(param_name)
+                
+                # Apply value conversion for device deployment
+                converted_value = self._convert_value_for_device(param_name, param_value)
+                
+                mapped_params[device_param_name] = converted_value
+            
+            self.logger.debug(f"Extracted {len(mapped_params)} device parameters")
+            return mapped_params
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting device parameters: {str(e)}")
+            return profile_data.device_parameters.copy()
+
+    def create_profile_metadata(self, device_info: Dict[str, Any], 
+                              parameters: Dict[str, Any]) -> ProfileMetadata:
+        """
+        Create ProfileMetadata from device information and parameters.
+        
+        Args:
+            device_info: Dictionary containing device information (IMEI, version, etc.)
+            parameters: Dictionary of device parameters
+            
+        Returns:
+            ProfileMetadata object with generated metadata
+        """
+        self.logger.debug("Creating profile metadata from device info")
+        
+        try:
+            # Generate profile name based on device info or timestamp
+            profile_name = self._generate_profile_name(device_info)
+            
+            # Extract device information
+            device_imei = device_info.get('imei') or device_info.get('device_imei')
+            device_version = device_info.get('version') or device_info.get('device_version')
+            
+            # Create metadata
+            metadata = ProfileMetadata(
+                profile_name=profile_name,
+                created_date=datetime.now().isoformat(),
+                device_imei=device_imei,
+                device_version=device_version,
+                parameter_count=len(parameters),
+                app_version=self.current_version,
+                checksum=None  # Will be calculated later if needed
+            )
+            
+            self.logger.debug(f"Created metadata for profile: {profile_name}")
+            return metadata
+            
+        except Exception as e:
+            self.logger.error(f"Error creating profile metadata: {str(e)}")
+            # Return minimal metadata
+            return ProfileMetadata(
+                profile_name=f"Profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                created_date=datetime.now().isoformat(),
+                parameter_count=len(parameters),
+                app_version=self.current_version
+            )
+
+    def convert_config_parser_to_profile_data(self, config: configparser.ConfigParser) -> ConversionResult:
+        """
+        Convert a ConfigParser object to ProfileData format.
+        
+        Args:
+            config: ConfigParser object containing profile data
+            
+        Returns:
+            ConversionResult with converted ProfileData
+        """
+        self.logger.debug("Converting ConfigParser to ProfileData")
+        
+        try:
+            # Convert ConfigParser to dictionary format
+            raw_data = {}
+            
+            for section_name in config.sections():
+                raw_data[section_name] = dict(config[section_name])
+            
+            # Use standard conversion method
+            return self.convert_to_standard_format(raw_data)
+            
+        except Exception as e:
+            error_msg = f"Error converting ConfigParser: {str(e)}"
+            self.logger.error(error_msg)
+            
+            return ConversionResult(
+                success=False,
+                errors=[ConversionError(
+                    error_type=ConversionErrorType.INVALID_PARAMETER_FORMAT,
+                    parameter_name=None,
+                    original_value=None,
+                    error_message=error_msg
+                )],
+                conversion_summary="Failed to convert ConfigParser to ProfileData"
+            )
+
+    def _init_parameter_mappings(self):
+        """Initialize parameter name mappings between different formats."""
+        # Standard parameter names to legacy parameter names
+        self.parameter_mappings = {
+            # Legacy v0.9 mappings
+            'legacy_0.9': {
+                # APN parameters
+                'apn_server': 'apn',
+                'apn_user': 'apn_username', 
+                'apn_password': 'apn_pwd',
+                'transmission_mode': 'protocol',
+                
+                # Server parameters
+                'server_ip': 'server_address',
+                'server_port': 'port',
+                'server_protocol': 'server_type',
+                
+                # Timer parameters
+                'timer_ign_on': 'ignition_on_timer',
+                'timer_ign_off': 'ignition_off_timer',
+                'heartbeat_ign_on': 'heartbeat_on',
+                'heartbeat_ign_off': 'heartbeat_off',
+                
+                # Device parameters
+                'vibration': 'vibration_level',
+                'sensitivity': 'shock_sensitivity',
+                'ignition_type': 'ignition_mode',
+                
+                # Alert parameters
+                'movement_alert': 'motion_alert',
+                'power_alert': 'power_cut_alert',
+                'battery_alert': 'low_battery_alert'
+            }
+        }
+        
+        # Reverse mappings (legacy to standard)
+        self.reverse_parameter_mappings = {}
+        for version, mappings in self.parameter_mappings.items():
+            self.reverse_parameter_mappings[version] = {v: k for k, v in mappings.items()}
+
+    def _init_value_converters(self):
+        """Initialize value conversion functions."""
+        self.value_converters = {
+            # Boolean conversions
+            'boolean_to_on_off': lambda x: 'ON' if str(x).lower() in ['true', '1', 'on', 'yes'] else 'OFF',
+            'on_off_to_boolean': lambda x: str(x).upper() == 'ON',
+            
+            # Numeric conversions
+            'string_to_int': lambda x: int(x) if str(x).isdigit() else 0,
+            'int_to_string': lambda x: str(x),
+            
+            # Protocol conversions
+            'protocol_number_to_name': self._convert_protocol_number_to_name,
+            'protocol_name_to_number': self._convert_protocol_name_to_number,
+            
+            # Transmission mode conversions
+            'transmission_mode_to_protocol': lambda x: '0' if str(x).upper() == 'TCP' else '1',
+            'protocol_to_transmission_mode': lambda x: 'TCP' if str(x) == '0' else 'UDP'
+        }
+
+    def _init_legacy_format_handlers(self):
+        """Initialize handlers for different legacy format versions."""
+        self.legacy_format_handlers = {
+            '0.9': self._migrate_from_v0_9,
+            '1.0': self._migrate_from_v1_0  # For future compatibility
+        }
+
+    def _init_section_mappings(self):
+        """Initialize section name mappings between formats."""
+        self.section_mappings = {
+            # Standard section organization
+            'standard': {
+                'Profile_Info': 'Profile_Info',
+                'APN_Configuration': 'APN_Configuration', 
+                'Server_Configuration': 'Server_Configuration',
+                'Timer_Settings': 'Timer_Settings',
+                'Device_Parameters': 'Device_Parameters',
+                'Alert_Settings': 'Alert_Settings',
+                'Advanced_Settings': 'Advanced_Settings'
+            },
+            
+            # Legacy v0.9 section mappings
+            'legacy_0.9': {
+                'ProfileInfo': 'Profile_Info',
+                'APNConfig': 'APN_Configuration',
+                'ServerConfig': 'Server_Configuration',
+                'TimerConfig': 'Timer_Settings',
+                'DeviceConfig': 'Device_Parameters',
+                'AlertConfig': 'Alert_Settings'
+            }
+        }
+
+    def _detect_format_version(self, raw_data: Dict[str, Any]) -> str:
+        """
+        Detect the format version of the profile data.
+        
+        Args:
+            raw_data: Raw profile data
+            
+        Returns:
+            Detected version string
+        """
+        # Validate that raw_data is a dictionary
+        if not isinstance(raw_data, dict):
+            raise ValueError(f"Invalid data type: expected dict, got {type(raw_data)}")
+        
+        # Check for explicit version in Profile_Info
+        if 'Profile_Info' in raw_data:
+            profile_info = raw_data['Profile_Info']
+            if isinstance(profile_info, dict):
+                if 'profile_version' in profile_info:
+                    return profile_info['profile_version']
+                if 'format_version' in profile_info:
+                    return profile_info['format_version']
+        
+        # Check for legacy section names
+        if 'ProfileInfo' in raw_data or 'APNConfig' in raw_data:
+            return '0.9'
+        
+        # Check for current format indicators
+        if 'APN_Configuration' in raw_data or 'Server_Configuration' in raw_data:
+            return '1.0'
+        
+        # Default to current version
+        return self.current_version
+
+    def _extract_and_convert_metadata(self, raw_data: Dict[str, Any], 
+                                    format_version: str) -> Dict[str, Any]:
+        """Extract and convert metadata from raw data."""
+        result = {
+            'success': True,
+            'metadata': None,
+            'errors': [],
+            'warnings': []
+        }
+        
+        try:
+            # Find metadata section
+            metadata_section = None
+            if 'Profile_Info' in raw_data:
+                metadata_section = raw_data['Profile_Info']
+            elif 'ProfileInfo' in raw_data:  # Legacy format
+                metadata_section = raw_data['ProfileInfo']
+                result['warnings'].append("Using legacy ProfileInfo section name")
+            
+            if not metadata_section:
+                # Create minimal metadata
+                result['warnings'].append("No metadata section found, creating minimal metadata")
+                metadata = ProfileMetadata(
+                    profile_name=f"Converted_Profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    created_date=datetime.now().isoformat(),
+                    parameter_count=0,
+                    app_version=self.current_version
+                )
+            else:
+                # Extract metadata fields
+                profile_name = metadata_section.get('profile_name', 
+                    f"Converted_Profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+                created_date = metadata_section.get('created_date', datetime.now().isoformat())
+                device_imei = metadata_section.get('device_imei')
+                device_version = metadata_section.get('device_version')
+                app_version = metadata_section.get('app_version', self.current_version)
+                
+                # Handle parameter count
+                parameter_count = 0
+                if 'parameter_count' in metadata_section:
+                    try:
+                        parameter_count = int(metadata_section['parameter_count'])
+                    except (ValueError, TypeError):
+                        result['warnings'].append("Invalid parameter_count value, will be recalculated")
+                
+                metadata = ProfileMetadata(
+                    profile_name=profile_name,
+                    created_date=created_date,
+                    device_imei=device_imei,
+                    device_version=device_version,
+                    parameter_count=parameter_count,
+                    app_version=app_version,
+                    checksum=metadata_section.get('checksum')
+                )
+            
+            result['metadata'] = metadata
+            
+        except Exception as e:
+            result['success'] = False
+            result['errors'].append(ConversionError(
+                error_type=ConversionErrorType.MISSING_REQUIRED_DATA,
+                parameter_name='metadata',
+                original_value=None,
+                error_message=f"Failed to extract metadata: {str(e)}"
+            ))
+        
+        return result
+
+    def _extract_and_convert_parameters(self, raw_data: Dict[str, Any], 
+                                      format_version: str) -> Dict[str, Any]:
+        """Extract and convert device parameters from raw data."""
+        result = {
+            'parameters': {},
+            'errors': [],
+            'warnings': [],
+            'converted_count': 0,
+            'failed_count': 0
+        }
+        
+        try:
+            # Collect parameters from all sections except Profile_Info
+            all_parameters = {}
+            
+            for section_name, section_data in raw_data.items():
+                if section_name in ['Profile_Info', 'ProfileInfo']:
+                    continue
+                
+                if isinstance(section_data, dict):
+                    all_parameters.update(section_data)
+            
+            # Convert parameters based on format version
+            for param_name, param_value in all_parameters.items():
+                try:
+                    # Apply parameter name mapping if needed
+                    standard_param_name = self._map_parameter_name(param_name, format_version)
+                    
+                    # Apply value conversion if needed
+                    converted_value = self._convert_parameter_value(
+                        standard_param_name, param_value, format_version
+                    )
+                    
+                    result['parameters'][standard_param_name] = converted_value
+                    result['converted_count'] += 1
+                    
+                except Exception as e:
+                    result['failed_count'] += 1
+                    result['errors'].append(ConversionError(
+                        error_type=ConversionErrorType.PARAMETER_MAPPING_ERROR,
+                        parameter_name=param_name,
+                        original_value=str(param_value),
+                        error_message=f"Failed to convert parameter: {str(e)}",
+                        suggestion=f"Check parameter format for {param_name}"
+                    ))
+            
+        except Exception as e:
+            result['errors'].append(ConversionError(
+                error_type=ConversionErrorType.INVALID_PARAMETER_FORMAT,
+                parameter_name=None,
+                original_value=None,
+                error_message=f"Failed to extract parameters: {str(e)}"
+            ))
+        
+        return result
+
+    def _map_parameter_name(self, param_name: str, format_version: str) -> str:
+        """Map parameter name from legacy format to standard format."""
+        if format_version in self.reverse_parameter_mappings:
+            return self.reverse_parameter_mappings[format_version].get(param_name, param_name)
+        return param_name
+
+    def _convert_parameter_value(self, param_name: str, param_value: Any, 
+                                format_version: str) -> Any:
+        """Convert parameter value based on parameter type and format version."""
+        # Convert to string first for consistent processing
+        str_value = str(param_value) if param_value is not None else ""
+        
+        # Apply parameter-specific conversions
+        if param_name in ['movement_alert', 'power_alert', 'battery_alert']:
+            # Convert boolean-like values to ON/OFF
+            return self.value_converters['boolean_to_on_off'](str_value)
+        
+        elif param_name == 'transmission_mode':
+            # Ensure transmission mode is properly formatted
+            if str_value.upper() in ['TCP', 'UDP']:
+                return str_value.upper()
+            elif str_value in ['0', '1']:
+                return self.value_converters['protocol_to_transmission_mode'](str_value)
+        
+        elif param_name == 'gt06_protocol':
+            # Convert protocol numbers to names if needed
+            return self._convert_protocol_number_to_name(str_value)
+        
+        elif param_name in ['vibration', 'sensitivity', 'timer_ign_on', 'timer_ign_off', 
+                           'heartbeat_ign_on', 'heartbeat_ign_off', 'server_port']:
+            # Ensure numeric parameters are properly formatted
+            try:
+                return str(int(str_value)) if str_value.isdigit() else str_value
+            except ValueError:
+                return str_value
+        
+        # Return original value if no specific conversion needed
+        return str_value
+
+    def _convert_protocol_number_to_name(self, protocol_value: str) -> str:
+        """Convert protocol number to protocol name."""
+        protocol_map = {
+            '0': 'GT06-0x60',
+            '1': 'CRX3', 
+            '2': 'GT06-0x12'
+        }
+        return protocol_map.get(str(protocol_value), protocol_value)
+
+    def _convert_protocol_name_to_number(self, protocol_name: str) -> str:
+        """Convert protocol name to protocol number."""
+        name_to_number = {
+            'GT06-0x60': '0',
+            'CRX3': '1',
+            'GT06-0x12': '2'
+        }
+        return name_to_number.get(protocol_name, '0')
+
+    def _get_device_parameter_name(self, standard_name: str) -> str:
+        """Get device-specific parameter name from standard name."""
+        # For now, return the standard name as device names match
+        # This can be extended if device-specific naming is needed
+        return standard_name
+
+    def _convert_value_for_device(self, param_name: str, param_value: Any) -> Any:
+        """Convert parameter value for device deployment."""
+        str_value = str(param_value) if param_value is not None else ""
+        
+        # Apply device-specific value conversions
+        if param_name == 'transmission_mode':
+            # Convert to protocol number for device
+            return self.value_converters['transmission_mode_to_protocol'](str_value)
+        
+        elif param_name == 'gt06_protocol':
+            # Convert protocol name to number for device
+            return self._convert_protocol_name_to_number(str_value)
+        
+        elif param_name in ['movement_alert', 'power_alert', 'battery_alert']:
+            # Convert ON/OFF to boolean for device
+            return self.value_converters['on_off_to_boolean'](str_value)
+        
+        # Return original value for other parameters
+        return param_value
+
+    def _generate_profile_name(self, device_info: Dict[str, Any]) -> str:
+        """Generate a profile name based on device information."""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        if device_info.get('imei'):
+            return f"Profile_IMEI_{device_info['imei'][-6:]}_{timestamp}"
+        elif device_info.get('device_version'):
+            version_clean = re.sub(r'[^\w\d]', '_', device_info['device_version'])
+            return f"Profile_{version_clean}_{timestamp}"
+        else:
+            return f"Profile_{timestamp}"
+
+    def _migrate_from_v0_9(self, legacy_data: Dict[str, Any], 
+                          migration_log: List[str]) -> Dict[str, Any]:
+        """Migrate profile data from version 0.9 to current format."""
+        migration_log.append("Applying v0.9 to v1.0 migration")
+        
+        migrated_data = {}
+        
+        # Migrate section names
+        for old_section, new_section in self.section_mappings['legacy_0.9'].items():
+            if old_section in legacy_data:
+                migrated_data[new_section] = legacy_data[old_section].copy()
+                migration_log.append(f"Migrated section: {old_section} -> {new_section}")
+        
+        # Migrate parameter names within sections
+        for section_name, section_data in migrated_data.items():
+            if section_name == 'Profile_Info':
+                continue
+                
+            if isinstance(section_data, dict):
+                migrated_params = {}
+                for param_name, param_value in section_data.items():
+                    # Map parameter name
+                    standard_name = self._map_parameter_name(param_name, 'legacy_0.9')
+                    migrated_params[standard_name] = param_value
+                    
+                    if standard_name != param_name:
+                        migration_log.append(f"Migrated parameter: {param_name} -> {standard_name}")
+                
+                migrated_data[section_name] = migrated_params
+        
+        # Ensure Profile_Info section exists with updated version
+        if 'Profile_Info' not in migrated_data:
+            migrated_data['Profile_Info'] = {}
+        
+        migrated_data['Profile_Info']['profile_version'] = self.current_version
+        migrated_data['Profile_Info']['migration_date'] = datetime.now().isoformat()
+        migrated_data['Profile_Info']['migrated_from'] = '0.9'
+        
+        migration_log.append("v0.9 migration completed")
+        return migrated_data
+
+    def _migrate_from_v1_0(self, data: Dict[str, Any], 
+                          migration_log: List[str]) -> Dict[str, Any]:
+        """Handle v1.0 format (current format, minimal changes needed)."""
+        migration_log.append("Processing v1.0 format (current version)")
+        
+        # For v1.0, just ensure all required fields are present
+        migrated_data = data.copy()
+        
+        if 'Profile_Info' not in migrated_data:
+            migrated_data['Profile_Info'] = {}
+        
+        # Ensure version is set correctly
+        migrated_data['Profile_Info']['profile_version'] = self.current_version
+        
+        migration_log.append("v1.0 processing completed")
+        return migrated_data
+
+    def _generate_conversion_summary(self, converted: int, failed: int, 
+                                   warnings: int, version: str) -> str:
+        """Generate a summary of the conversion operation."""
+        summary_parts = []
+        
+        if converted > 0:
+            summary_parts.append(f"{converted} parameters converted")
+        
+        if failed > 0:
+            summary_parts.append(f"{failed} parameters failed")
+        
+        if warnings > 0:
+            summary_parts.append(f"{warnings} warnings")
+        
+        summary = f"Conversion from v{version}: " + ", ".join(summary_parts)
+        
+        if not summary_parts:
+            summary = f"Conversion from v{version}: No parameters processed"
+        
+        return summary
+</document_content>
+</document>
+<document index="60">
+<source>.\services\profile_data_models.py</source>
+<document_content>
+"""
+Profile Data Models
+
+This module defines standardized data models for profile operations in the LT32Pro Device Configurator.
+These models ensure consistent data structures across all profile-related components.
+
+Requirements addressed:
+- 5.1: Standardized profile file format with consistent naming conventions
+- 5.2: Consistent structure handling for save and load operations
+- 3.1: Comprehensive validation with specific error reporting
+- 7.1: Clear error messages with specific parameter locations
+"""
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+
+
+@dataclass
+class ValidationError:
+    """
+    Represents a validation error with location and suggestion information.
+    
+    Addresses requirement 7.1: Clear error messages with specific parameter locations
+    """
+    error_type: str  # 'missing_section', 'invalid_parameter', 'format_error', 'value_error'
+    location: str    # section name, parameter name, or file location
+    message: str     # Human-readable error description
+    severity: str    # 'critical', 'error', 'warning'
+    suggestion: Optional[str] = None  # Actionable suggestion for fixing the error
+    parameter_name: Optional[str] = None  # Specific parameter that caused the error
+    expected_value: Optional[str] = None  # Expected value or format
+    actual_value: Optional[str] = None    # Actual value that caused the error
+
+
+@dataclass
+class ValidationWarning:
+    """
+    Represents a validation warning for non-critical issues.
+    """
+    warning_type: str
+    location: str
+    message: str
+    suggestion: Optional[str] = None
+
+
+@dataclass
+class CorrectionSuggestion:
+    """
+    Represents a suggested correction for validation issues.
+    """
+    parameter_name: str
+    current_value: Any
+    suggested_value: Any
+    reason: str
+
+
+@dataclass
+class ValidationSummary:
+    """
+    Summary of validation results.
+    """
+    total_parameters: int
+    valid_parameters: int
+    invalid_parameters: int
+    missing_sections: int
+    warnings_count: int
+    errors_count: int
+    critical_errors_count: int
+
+
+@dataclass
+class ValidationResult:
+    """
+    Comprehensive validation result with error information.
+    
+    Addresses requirement 3.1: Comprehensive validation with specific error reporting
+    """
+    is_valid: bool
+    errors: List[ValidationError] = field(default_factory=list)
+    warnings: List[ValidationWarning] = field(default_factory=list)
+    suggestions: List[CorrectionSuggestion] = field(default_factory=list)
+    validation_summary: Optional[ValidationSummary] = None
+    
+    def has_critical_errors(self) -> bool:
+        """Check if there are any critical errors that prevent operation."""
+        return any(error.severity == 'critical' for error in self.errors)
+    
+    def get_errors_by_severity(self, severity: str) -> List[ValidationError]:
+        """Get all errors of a specific severity level."""
+        return [error for error in self.errors if error.severity == severity]
+    
+    def get_errors_by_type(self, error_type: str) -> List[ValidationError]:
+        """Get all errors of a specific type."""
+        return [error for error in self.errors if error.error_type == error_type]
+
+
+@dataclass
+class ProfileMetadata:
+    """
+    Profile metadata with all required fields.
+    
+    Addresses requirement 5.1: Standardized profile file format with consistent naming conventions
+    """
+    profile_name: str
+    created_date: str
+    app_version: str
+    parameter_count: int
+    device_imei: Optional[str] = None
+    device_version: Optional[str] = None
+    checksum: Optional[str] = None
+    format_version: str = "1.0"
+    last_modified: Optional[str] = None
+    created_by: Optional[str] = None
+    description: Optional[str] = None
+    
+    @classmethod
+    def create_default(cls, profile_name: str, parameter_count: int = 0) -> 'ProfileMetadata':
+        """Create metadata with default values."""
+        return cls(
+            profile_name=profile_name,
+            created_date=datetime.now().isoformat(),
+            app_version="1.0.0",  # Should be populated from app config
+            parameter_count=parameter_count,
+            last_modified=datetime.now().isoformat()
+        )
+
+
+@dataclass
+class ValidationInfo:
+    """
+    Information about validation status and history.
+    """
+    last_validated: Optional[str] = None
+    validation_version: Optional[str] = None
+    is_validated: bool = False
+    validation_errors_count: int = 0
+    validation_warnings_count: int = 0
+
+
+@dataclass
+class ProfileData:
+    """
+    Complete profile data with metadata and parameters.
+    
+    Addresses requirements:
+    - 5.1: Standardized profile file format with consistent naming conventions
+    - 5.2: Consistent structure handling for save and load operations
+    """
+    metadata: ProfileMetadata
+    device_parameters: Dict[str, Any]
+    validation_info: ValidationInfo = field(default_factory=ValidationInfo)
+    format_version: str = "1.0"
+    raw_sections: Optional[Dict[str, Dict[str, Any]]] = None  # For preserving original structure
+    
+    def get_parameter(self, parameter_name: str, default: Any = None) -> Any:
+        """Get a parameter value with optional default."""
+        return self.device_parameters.get(parameter_name, default)
+    
+    def set_parameter(self, parameter_name: str, value: Any) -> None:
+        """Set a parameter value and update metadata."""
+        self.device_parameters[parameter_name] = value
+        self.metadata.parameter_count = len(self.device_parameters)
+        self.metadata.last_modified = datetime.now().isoformat()
+    
+    def remove_parameter(self, parameter_name: str) -> bool:
+        """Remove a parameter and return True if it existed."""
+        if parameter_name in self.device_parameters:
+            del self.device_parameters[parameter_name]
+            self.metadata.parameter_count = len(self.device_parameters)
+            self.metadata.last_modified = datetime.now().isoformat()
+            return True
+        return False
+    
+    def get_parameter_names(self) -> List[str]:
+        """Get list of all parameter names."""
+        return list(self.device_parameters.keys())
+    
+    def is_empty(self) -> bool:
+        """Check if profile has no parameters."""
+        return len(self.device_parameters) == 0
+    
+    def update_validation_info(self, validation_result: ValidationResult) -> None:
+        """Update validation information based on validation result."""
+        self.validation_info.last_validated = datetime.now().isoformat()
+        self.validation_info.is_validated = validation_result.is_valid
+        self.validation_info.validation_errors_count = len(validation_result.errors)
+        self.validation_info.validation_warnings_count = len(validation_result.warnings)
+
+
+# Additional data models for specific operations
+
+@dataclass
+class ProfileFileResult:
+    """Result of profile file reading operation."""
+    success: bool
+    profile_data: Optional[ProfileData] = None
+    error_message: Optional[str] = None
+    validation_result: Optional[ValidationResult] = None
+
+
+@dataclass
+class WriteResult:
+    """Result of profile file writing operation."""
+    success: bool
+    file_path: Optional[str] = None
+    error_message: Optional[str] = None
+    backup_created: bool = False
+    backup_path: Optional[str] = None
+
+
+@dataclass
+class AccessValidationResult:
+    """Result of file access validation."""
+    can_read: bool
+    can_write: bool
+    exists: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class BackupResult:
+    """Result of backup operation."""
+    success: bool
+    backup_path: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+@dataclass
+class ProcessingResult:
+    """Result of parameter processing operation."""
+    successful_parameters: Dict[str, Any]
+    failed_parameters: List[Dict[str, Any]]
+    partial_success: bool
+    total_processed: int = 0
+    
+    def __post_init__(self):
+        self.total_processed = len(self.successful_parameters) + len(self.failed_parameters)
+
+
+@dataclass
+class CompatibilityResult:
+    """Result of compatibility checking."""
+    is_compatible: bool
+    version_supported: bool
+    migration_required: bool
+    migration_available: bool
+    compatibility_issues: List[str] = field(default_factory=list)
+    recommendations: List[str] = field(default_factory=list)
+
+
+# Utility functions for working with data models
+
+def create_validation_error(error_type: str, location: str, message: str, 
+                          severity: str = 'error', suggestion: Optional[str] = None,
+                          parameter_name: Optional[str] = None) -> ValidationError:
+    """Helper function to create validation errors consistently."""
+    return ValidationError(
+        error_type=error_type,
+        location=location,
+        message=message,
+        severity=severity,
+        suggestion=suggestion,
+        parameter_name=parameter_name
+    )
+
+
+def create_profile_data(profile_name: str, parameters: Dict[str, Any], 
+                       device_imei: Optional[str] = None) -> ProfileData:
+    """Helper function to create ProfileData with proper metadata."""
+    metadata = ProfileMetadata.create_default(profile_name, len(parameters))
+    if device_imei:
+        metadata.device_imei = device_imei
+    
+    return ProfileData(
+        metadata=metadata,
+        device_parameters=parameters,
+        validation_info=ValidationInfo()
+    )
+</document_content>
+</document>
+<document index="61">
+<source>.\services\profile_error_handler.py</source>
+<document_content>
+"""
+Profile Error Handler for the LT32 PRO Universal Profile System.
+
+This module provides centralized error management for all profile operations,
+including user-friendly error messages, resolution suggestions, and retry logic
+for transient device communication errors.
+"""
+
+import time
+import logging
+from typing import Dict, Optional, List, Callable, Any, Tuple
+from enum import Enum
+from dataclasses import dataclass
+from models.operation_result import ProfileOperationResult, ParameterOperationResult, OperationType
+from models.validation_result import ValidationResult
+
+
+class ProfileErrorCategory(Enum):
+    """Categories of errors that can occur during profile operations."""
+    DEVICE_CONNECTION = "device_connection"
+    DEVICE_COMMUNICATION = "device_communication"
+    PARAMETER_VALIDATION = "parameter_validation"
+    PROFILE_FILE = "profile_file"
+    PROFILE_FORMAT = "profile_format"
+    PARAMETER_SPECIFICATION = "parameter_specification"
+    OPERATION_CANCELLED = "operation_cancelled"
+    SYSTEM_ERROR = "system_error"
+
+
+class ProfileErrorSeverity(Enum):
+    """Severity levels for profile errors."""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+@dataclass
+class ErrorHandlingResult:
+    """Result of error handling operation."""
+    should_retry: bool
+    retry_delay: float
+    user_message: str
+    technical_message: str
+    suggestions: List[str]
+    category: ProfileErrorCategory
+    severity: ProfileErrorSeverity
+    context: Dict[str, Any]
+
+
+class ProfileError(Exception):
+    """Base exception for profile-specific errors."""
+    
+    def __init__(self, message: str, category: ProfileErrorCategory, 
+                 severity: ProfileErrorSeverity = ProfileErrorSeverity.ERROR,
+                 suggestions: Optional[List[str]] = None,
+                 context: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.category = category
+        self.severity = severity
+        self.suggestions = suggestions or []
+        self.context = context or {}
+
+
+class DeviceConnectionError(ProfileError):
+    """Error related to device connection issues."""
+    
+    def __init__(self, message: str, suggestions: Optional[List[str]] = None,
+                 context: Optional[Dict[str, Any]] = None):
+        super().__init__(message, ProfileErrorCategory.DEVICE_CONNECTION, 
+                        ProfileErrorSeverity.ERROR, suggestions, context)
+
+
+class DeviceCommunicationError(ProfileError):
+    """Error related to device communication issues."""
+    
+    def __init__(self, message: str, severity: ProfileErrorSeverity = ProfileErrorSeverity.ERROR,
+                 suggestions: Optional[List[str]] = None,
+                 context: Optional[Dict[str, Any]] = None):
+        super().__init__(message, ProfileErrorCategory.DEVICE_COMMUNICATION, 
+                        severity, suggestions, context)
+
+
+class ParameterValidationError(ProfileError):
+    """Error related to parameter validation issues."""
+    
+    def __init__(self, message: str, suggestions: Optional[List[str]] = None,
+                 context: Optional[Dict[str, Any]] = None):
+        super().__init__(message, ProfileErrorCategory.PARAMETER_VALIDATION, 
+                        ProfileErrorSeverity.ERROR, suggestions, context)
+
+
+class ProfileFileError(ProfileError):
+    """Error related to profile file operations."""
+    
+    def __init__(self, message: str, suggestions: Optional[List[str]] = None,
+                 context: Optional[Dict[str, Any]] = None):
+        super().__init__(message, ProfileErrorCategory.PROFILE_FILE, 
+                        ProfileErrorSeverity.ERROR, suggestions, context)
+
+
+class ProfileErrorHandler:
+    """
+    Centralized error handler for profile operations.
+    
+    Provides error categorization, retry logic with exponential backoff,
+    user-friendly error messages, and resolution suggestions.
+    """
+    
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0, 
+                 max_delay: float = 30.0):
+        """
+        Initialize the profile error handler.
+        
+        Args:
+            max_retries: Maximum number of retry attempts for transient errors
+            base_delay: Base delay for exponential backoff (seconds)
+            max_delay: Maximum delay between retries (seconds)
+        """
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.logger = logging.getLogger(__name__)
+        
+        # Track retry attempts for different operations
+        self.retry_counts: Dict[str, int] = {}
+        
+        # Device error patterns and their meanings
+        self.device_error_patterns = {
+            "timeout": "Device communication timeout",
+            "error": "Device command error",
+            "invalid": "Invalid command format",
+            "busy": "Device is busy",
+            "nodata": "No data available",
+            "fail": "Command execution failed",
+            "unknown": "Unknown device response"
+        }
+    
+    def handle_error(self, error: Exception, operation_context: str,
+                    parameter_name: Optional[str] = None,
+                    attempt_number: int = 0) -> ErrorHandlingResult:
+        """
+        Handle an error with appropriate categorization and response.
+        
+        Args:
+            error: The exception that occurred
+            operation_context: Context of the operation (e.g., "load_from_device")
+            parameter_name: Name of parameter being processed (if applicable)
+            attempt_number: Current attempt number (0-based)
+            
+        Returns:
+            ErrorHandlingResult with handling decision and user messages
+        """
+        category = self._categorize_error(error)
+        severity = self._determine_severity(error, category)
+        
+        # Create context key for retry tracking
+        context_key = f"{operation_context}:{parameter_name or 'general'}"
+        
+        # Determine if we should retry
+        should_retry = self._should_retry_error(error, category, attempt_number)
+        retry_delay = self._calculate_retry_delay(attempt_number) if should_retry else 0.0
+        
+        # Generate user-friendly messages
+        user_message = self._create_user_message(error, category, parameter_name)
+        technical_message = self._create_technical_message(error, operation_context, parameter_name)
+        suggestions = self._get_resolution_suggestions(error, category, parameter_name)
+        
+        # Log the error
+        self._log_error(error, category, severity, operation_context, parameter_name, attempt_number)
+        
+        # Update retry count
+        if should_retry:
+            self.retry_counts[context_key] = attempt_number + 1
+        else:
+            self.retry_counts.pop(context_key, None)
+        
+        return ErrorHandlingResult(
+            should_retry=should_retry,
+            retry_delay=retry_delay,
+            user_message=user_message,
+            technical_message=technical_message,
+            suggestions=suggestions,
+            category=category,
+            severity=severity,
+            context={
+                "operation": operation_context,
+                "parameter": parameter_name,
+                "attempt": attempt_number,
+                "error_type": type(error).__name__
+            }
+        )
+    
+    def handle_device_communication_error(self, error: Exception, command: str,
+                                        parameter_name: str, attempt: int) -> ErrorHandlingResult:
+        """
+        Handle device communication errors with specific retry logic.
+        
+        Args:
+            error: The communication error
+            command: The device command that failed
+            parameter_name: Name of the parameter being processed
+            attempt: Current attempt number
+            
+        Returns:
+            ErrorHandlingResult with communication-specific handling
+        """
+        context = {
+            "command": command,
+            "parameter": parameter_name,
+            "attempt": attempt
+        }
+        
+        # Check for specific communication error patterns
+        error_str = str(error).lower()
+        
+        if "timeout" in error_str:
+            return self._handle_timeout_error(error, command, parameter_name, attempt, context)
+        elif "busy" in error_str or "device is busy" in error_str:
+            return self._handle_busy_error(error, command, parameter_name, attempt, context)
+        elif "invalid response" in error_str or "malformed" in error_str:
+            return self._handle_invalid_response_error(error, command, parameter_name, attempt, context)
+        else:
+            return self._handle_generic_communication_error(error, command, parameter_name, attempt, context)
+    
+    def handle_validation_error(self, validation_result: ValidationResult,
+                              parameter_name: str, value: Any) -> ErrorHandlingResult:
+        """
+        Handle parameter validation errors.
+        
+        Args:
+            validation_result: The validation result with errors
+            parameter_name: Name of the parameter that failed validation
+            value: The value that failed validation
+            
+        Returns:
+            ErrorHandlingResult for validation error
+        """
+        # Create a validation error with detailed information
+        error_messages = "; ".join(validation_result.errors)
+        error = ParameterValidationError(
+            f"Validation failed for parameter '{parameter_name}': {error_messages}",
+            context={
+                "parameter": parameter_name,
+                "value": value,
+                "errors": validation_result.errors,
+                "warnings": validation_result.warnings
+            }
+        )
+        
+        suggestions = [
+            f"Check the value format for parameter '{parameter_name}'",
+            "Refer to the Parameter UI List for valid values",
+            "Use default values if unsure about the correct format"
+        ]
+        
+        # Add specific suggestions based on validation errors
+        for error_msg in validation_result.errors:
+            if "range" in error_msg.lower():
+                suggestions.append("Ensure the value is within the allowed range")
+            elif "format" in error_msg.lower():
+                suggestions.append("Check the value format (e.g., IP address, number)")
+            elif "required" in error_msg.lower():
+                suggestions.append("Provide a value for this required parameter")
+        
+        return ErrorHandlingResult(
+            should_retry=False,  # Validation errors don't benefit from retry
+            retry_delay=0.0,
+            user_message=f"Invalid value for '{parameter_name}': {error_messages}",
+            technical_message=f"Parameter validation failed: {error_messages}",
+            suggestions=suggestions,
+            category=ProfileErrorCategory.PARAMETER_VALIDATION,
+            severity=ProfileErrorSeverity.ERROR,
+            context=error.context
+        )
+    
+    def handle_file_operation_error(self, error: Exception, file_path: str,
+                                  operation: str) -> ErrorHandlingResult:
+        """
+        Handle profile file operation errors.
+        
+        Args:
+            error: The file operation error
+            file_path: Path to the file that caused the error
+            operation: Type of operation (read/write)
+            
+        Returns:
+            ErrorHandlingResult for file operation error
+        """
+        error_str = str(error).lower()
+        suggestions = []
+        
+        if "permission" in error_str or "access" in error_str:
+            suggestions.extend([
+                "Check file permissions and access rights",
+                "Ensure the file is not open in another application",
+                "Try running the application as administrator",
+                "Choose a different file location"
+            ])
+        elif "not found" in error_str or "no such file" in error_str:
+            if operation == "read":
+                suggestions.extend([
+                    "Verify the file path is correct",
+                    "Check if the file exists",
+                    "Browse to select the correct file"
+                ])
+            else:
+                suggestions.extend([
+                    "Verify the directory exists",
+                    "Create the directory if it doesn't exist",
+                    "Choose a different save location"
+                ])
+        elif "disk" in error_str or "space" in error_str:
+            suggestions.extend([
+                "Free up disk space",
+                "Choose a different drive or location",
+                "Delete unnecessary files"
+            ])
+        else:
+            suggestions.extend([
+                "Check file format and encoding",
+                "Verify file is not corrupted",
+                "Try a different file location"
+            ])
+        
+        user_message = f"File {operation} error: {file_path}"
+        if "permission" in error_str or "access" in error_str:
+            user_message += " (Permission denied)"
+        elif "not found" in error_str:
+            user_message += " (File not found)"
+        
+        return ErrorHandlingResult(
+            should_retry=False,  # File errors typically don't benefit from retry
+            retry_delay=0.0,
+            user_message=user_message,
+            technical_message=f"File {operation} failed for {file_path}: {error}",
+            suggestions=suggestions,
+            category=ProfileErrorCategory.PROFILE_FILE,
+            severity=ProfileErrorSeverity.ERROR,
+            context={
+                "file_path": file_path,
+                "operation": operation,
+                "error_type": type(error).__name__
+            }
+        )
+    
+    def create_operation_result_with_error(self, operation_type: OperationType,
+                                         error: Exception,
+                                         context: Optional[Dict[str, Any]] = None) -> ProfileOperationResult:
+        """
+        Create a ProfileOperationResult for a failed operation.
+        
+        Args:
+            operation_type: Type of operation that failed
+            error: The error that occurred
+            context: Additional context information
+            
+        Returns:
+            ProfileOperationResult with error information
+        """
+        error_handling = self.handle_error(error, operation_type.value)
+        
+        result = ProfileOperationResult(
+            operation_type=operation_type,
+            success=False
+        )
+        
+        result.add_error(error_handling.user_message)
+        
+        # Add technical details if available
+        if context:
+            for key, value in context.items():
+                result.add_detail(key, value)
+        
+        result.add_detail("error_category", error_handling.category.value)
+        result.add_detail("error_severity", error_handling.severity.value)
+        result.add_detail("suggestions", error_handling.suggestions)
+        
+        return result
+    
+    def create_parameter_result_with_error(self, parameter_name: str, error: Exception,
+                                         context: Optional[Dict[str, Any]] = None) -> ParameterOperationResult:
+        """
+        Create a ParameterOperationResult for a failed parameter operation.
+        
+        Args:
+            parameter_name: Name of the parameter that failed
+            error: The error that occurred
+            context: Additional context information
+            
+        Returns:
+            ParameterOperationResult with error information
+        """
+        error_handling = self.handle_error(error, "parameter_operation", parameter_name)
+        
+        return ParameterOperationResult(
+            parameter_name=parameter_name,
+            success=False,
+            error_message=error_handling.user_message
+        )
+    
+    def _categorize_error(self, error: Exception) -> ProfileErrorCategory:
+        """Categorize an error based on its type and message."""
+        if isinstance(error, ProfileError):
+            return error.category
+        
+        error_str = str(error).lower()
+        error_type = type(error).__name__.lower()
+        
+        # Device connection errors
+        if any(keyword in error_str for keyword in [
+            "connection", "port", "access denied", "permission denied", 
+            "device not found", "no such file or directory"
+        ]) and any(keyword in error_str for keyword in ["com", "serial", "usb"]):
+            return ProfileErrorCategory.DEVICE_CONNECTION
+        
+        # Device communication errors
+        elif any(keyword in error_str for keyword in [
+            "timeout", "read", "write", "serial", "communication", "busy", "device"
+        ]):
+            return ProfileErrorCategory.DEVICE_COMMUNICATION
+        
+        # Parameter validation errors
+        elif any(keyword in error_str for keyword in [
+            "validation", "invalid", "format", "range", "required"
+        ]) or "validation" in error_type:
+            return ProfileErrorCategory.PARAMETER_VALIDATION
+        
+        # Profile file errors
+        elif any(keyword in error_str for keyword in [
+            "file", "directory", "path", "json", "encoding"
+        ]):
+            return ProfileErrorCategory.PROFILE_FILE
+        
+        # Parameter specification errors
+        elif any(keyword in error_str for keyword in [
+            "specification", "parsing", "markdown"
+        ]) and not any(keyword in error_str for keyword in ["validation", "invalid", "format"]):
+            return ProfileErrorCategory.PARAMETER_SPECIFICATION
+        
+        # Operation cancelled
+        elif any(keyword in error_str for keyword in [
+            "cancelled", "canceled", "interrupted", "stopped"
+        ]):
+            return ProfileErrorCategory.OPERATION_CANCELLED
+        
+        # Default to system error
+        return ProfileErrorCategory.SYSTEM_ERROR   
+ 
+    def _determine_severity(self, error: Exception, category: ProfileErrorCategory) -> ProfileErrorSeverity:
+        """Determine the severity of an error."""
+        if isinstance(error, ProfileError):
+            return error.severity
+        
+        # Critical errors that prevent operation
+        if category in [ProfileErrorCategory.DEVICE_CONNECTION, ProfileErrorCategory.SYSTEM_ERROR]:
+            return ProfileErrorSeverity.CRITICAL
+        
+        # Errors that affect operation but may be recoverable
+        elif category in [ProfileErrorCategory.DEVICE_COMMUNICATION, ProfileErrorCategory.PROFILE_FILE]:
+            return ProfileErrorSeverity.ERROR
+        
+        # Validation errors are typically user-correctable
+        elif category == ProfileErrorCategory.PARAMETER_VALIDATION:
+            return ProfileErrorSeverity.ERROR  # Changed from WARNING to ERROR
+        
+        # Default to error
+        return ProfileErrorSeverity.ERROR
+    
+    def _should_retry_error(self, error: Exception, category: ProfileErrorCategory, 
+                           attempt: int) -> bool:
+        """Determine if an error should be retried."""
+        # Don't retry if we've exceeded max attempts
+        if attempt >= self.max_retries:
+            return False
+        
+        # Don't retry validation or file errors
+        if category in [ProfileErrorCategory.PARAMETER_VALIDATION, 
+                       ProfileErrorCategory.PROFILE_FILE,
+                       ProfileErrorCategory.PARAMETER_SPECIFICATION]:
+            return False
+        
+        # Don't retry cancelled operations
+        if category == ProfileErrorCategory.OPERATION_CANCELLED:
+            return False
+        
+        # Retry communication errors
+        if category == ProfileErrorCategory.DEVICE_COMMUNICATION:
+            error_str = str(error).lower()
+            # Retry timeouts and busy errors
+            return any(keyword in error_str for keyword in ["timeout", "busy", "temporary"])
+        
+        # Don't retry connection errors by default (they need manual intervention)
+        if category == ProfileErrorCategory.DEVICE_CONNECTION:
+            return False
+        
+        # Default to not retrying
+        return False
+    
+    def _calculate_retry_delay(self, attempt: int) -> float:
+        """Calculate retry delay using exponential backoff."""
+        delay = self.base_delay * (2 ** attempt)
+        return min(delay, self.max_delay)
+    
+    def _create_user_message(self, error: Exception, category: ProfileErrorCategory,
+                           parameter_name: Optional[str] = None) -> str:
+        """Create a user-friendly error message."""
+        if isinstance(error, ProfileError):
+            return str(error)
+        
+        param_context = f" for parameter '{parameter_name}'" if parameter_name else ""
+        
+        if category == ProfileErrorCategory.DEVICE_CONNECTION:
+            return f"Cannot connect to device{param_context}. Please check your device connection."
+        
+        elif category == ProfileErrorCategory.DEVICE_COMMUNICATION:
+            return f"Communication error with device{param_context}. The device may be busy or not responding."
+        
+        elif category == ProfileErrorCategory.PARAMETER_VALIDATION:
+            return f"Invalid parameter value{param_context}. Please check the value format."
+        
+        elif category == ProfileErrorCategory.PROFILE_FILE:
+            return f"Profile file error{param_context}. Please check file permissions and location."
+        
+        elif category == ProfileErrorCategory.PARAMETER_SPECIFICATION:
+            return f"Parameter specification error{param_context}. The Parameter UI List may be invalid."
+        
+        elif category == ProfileErrorCategory.OPERATION_CANCELLED:
+            return f"Operation was cancelled{param_context}."
+        
+        else:
+            return f"An unexpected error occurred{param_context}: {str(error)}"
+    
+    def _create_technical_message(self, error: Exception, operation_context: str,
+                                parameter_name: Optional[str] = None) -> str:
+        """Create a technical error message for logging."""
+        param_info = f" (parameter: {parameter_name})" if parameter_name else ""
+        return f"Error in {operation_context}{param_info}: {type(error).__name__}: {str(error)}"
+    
+    def _get_resolution_suggestions(self, error: Exception, category: ProfileErrorCategory,
+                                  parameter_name: Optional[str] = None) -> List[str]:
+        """Get resolution suggestions based on error category."""
+        if isinstance(error, ProfileError) and error.suggestions:
+            return error.suggestions
+        
+        suggestions = []
+        
+        if category == ProfileErrorCategory.DEVICE_CONNECTION:
+            suggestions.extend([
+                "Check that the LT32 PRO device is connected via USB",
+                "Verify the correct COM port is selected",
+                "Ensure no other applications are using the COM port",
+                "Try unplugging and reconnecting the device",
+                "Check Device Manager for available COM ports",
+                "Install or update device drivers if necessary"
+            ])
+        
+        elif category == ProfileErrorCategory.DEVICE_COMMUNICATION:
+            suggestions.extend([
+                "Check that the device is powered on and responsive",
+                "Verify the device is not busy with another operation",
+                "Try reducing communication speed or timeout settings",
+                "Check for electromagnetic interference",
+                "Restart the device and try again",
+                "Verify device firmware is compatible"
+            ])
+        
+        elif category == ProfileErrorCategory.PARAMETER_VALIDATION:
+            suggestions.extend([
+                "Check the parameter value format and range",
+                "Refer to the Parameter UI List for valid values",
+                "Use default values if unsure about the correct format",
+                "Verify IP addresses are in correct format (e.g., 192.168.1.1)",
+                "Check that port numbers are within valid range (1-65535)"
+            ])
+            
+            if parameter_name:
+                suggestions.append(f"Review the specification for parameter '{parameter_name}'")
+        
+        elif category == ProfileErrorCategory.PROFILE_FILE:
+            suggestions.extend([
+                "Check file permissions and access rights",
+                "Ensure the file is not open in another application",
+                "Verify the file path exists and is accessible",
+                "Try saving to a different location",
+                "Check available disk space",
+                "Verify file format is valid JSON"
+            ])
+        
+        elif category == ProfileErrorCategory.PARAMETER_SPECIFICATION:
+            suggestions.extend([
+                "Check that the Parameter UI List file exists and is readable",
+                "Verify the Parameter UI List format is correct",
+                "Update the Parameter UI List if it's outdated",
+                "Check for syntax errors in the markdown file"
+            ])
+        
+        elif category == ProfileErrorCategory.OPERATION_CANCELLED:
+            suggestions.extend([
+                "Restart the operation if needed",
+                "Check if the operation was intentionally cancelled",
+                "Ensure stable device connection before retrying"
+            ])
+        
+        else:  # SYSTEM_ERROR
+            suggestions.extend([
+                "Restart the application and try again",
+                "Check system resources and available memory",
+                "Verify all required files and dependencies are present",
+                "Contact support if the problem persists"
+            ])
+        
+        return suggestions
+    
+    def _log_error(self, error: Exception, category: ProfileErrorCategory,
+                  severity: ProfileErrorSeverity, operation_context: str,
+                  parameter_name: Optional[str] = None, attempt: int = 0) -> None:
+        """Log error with appropriate level based on severity."""
+        param_info = f" (parameter: {parameter_name})" if parameter_name else ""
+        attempt_info = f" (attempt {attempt + 1})" if attempt > 0 else ""
+        
+        log_message = f"{operation_context}{param_info}{attempt_info}: {category.value} - {str(error)}"
+        
+        if severity == ProfileErrorSeverity.CRITICAL:
+            self.logger.critical(log_message)
+        elif severity == ProfileErrorSeverity.ERROR:
+            self.logger.error(log_message)
+        elif severity == ProfileErrorSeverity.WARNING:
+            self.logger.warning(log_message)
+        else:  # INFO
+            self.logger.info(log_message)
+    
+    def _handle_timeout_error(self, error: Exception, command: str, parameter_name: str,
+                            attempt: int, context: Dict[str, Any]) -> ErrorHandlingResult:
+        """Handle timeout errors with specific retry logic."""
+        should_retry = attempt < self.max_retries
+        retry_delay = self._calculate_retry_delay(attempt) if should_retry else 0.0
+        
+        user_message = f"Device timeout while processing '{parameter_name}'. "
+        if should_retry:
+            user_message += f"Retrying in {retry_delay:.1f} seconds..."
+        else:
+            user_message += "Maximum retries exceeded."
+        
+        suggestions = [
+            "Check device power and connection stability",
+            "Verify the device is not busy with another operation",
+            "Try reducing communication speed",
+            "Check for electromagnetic interference"
+        ]
+        
+        return ErrorHandlingResult(
+            should_retry=should_retry,
+            retry_delay=retry_delay,
+            user_message=user_message,
+            technical_message=f"Timeout for command '{command}' on parameter '{parameter_name}': {error}",
+            suggestions=suggestions,
+            category=ProfileErrorCategory.DEVICE_COMMUNICATION,
+            severity=ProfileErrorSeverity.WARNING if should_retry else ProfileErrorSeverity.ERROR,
+            context=context
+        )
+    
+    def _handle_busy_error(self, error: Exception, command: str, parameter_name: str,
+                         attempt: int, context: Dict[str, Any]) -> ErrorHandlingResult:
+        """Handle device busy errors with backoff."""
+        should_retry = attempt < self.max_retries
+        # Use longer delay for busy errors
+        retry_delay = self._calculate_retry_delay(attempt) * 1.5 if should_retry else 0.0
+        
+        user_message = f"Device is busy processing '{parameter_name}'. "
+        if should_retry:
+            user_message += f"Waiting {retry_delay:.1f} seconds before retry..."
+        else:
+            user_message += "Device remains busy after multiple attempts."
+        
+        suggestions = [
+            "Wait for the device to complete its current operation",
+            "Check if another application is communicating with the device",
+            "Restart the device if it appears stuck",
+            "Reduce the number of concurrent operations"
+        ]
+        
+        return ErrorHandlingResult(
+            should_retry=should_retry,
+            retry_delay=retry_delay,
+            user_message=user_message,
+            technical_message=f"Device busy for command '{command}' on parameter '{parameter_name}': {error}",
+            suggestions=suggestions,
+            category=ProfileErrorCategory.DEVICE_COMMUNICATION,
+            severity=ProfileErrorSeverity.WARNING,
+            context=context
+        )
+    
+    def _handle_invalid_response_error(self, error: Exception, command: str, parameter_name: str,
+                                     attempt: int, context: Dict[str, Any]) -> ErrorHandlingResult:
+        """Handle invalid device response errors."""
+        # Invalid responses typically don't benefit from retry
+        should_retry = False
+        retry_delay = 0.0
+        
+        user_message = f"Invalid response from device for parameter '{parameter_name}'. The device may not support this parameter or the command format is incorrect."
+        
+        suggestions = [
+            "Verify the parameter is supported by your device firmware",
+            "Check the Parameter UI List for correct command format",
+            "Update device firmware if available",
+            "Skip this parameter if it's optional"
+        ]
+        
+        return ErrorHandlingResult(
+            should_retry=should_retry,
+            retry_delay=retry_delay,
+            user_message=user_message,
+            technical_message=f"Invalid response for command '{command}' on parameter '{parameter_name}': {error}",
+            suggestions=suggestions,
+            category=ProfileErrorCategory.DEVICE_COMMUNICATION,
+            severity=ProfileErrorSeverity.ERROR,
+            context=context
+        )
+    
+    def _handle_generic_communication_error(self, error: Exception, command: str, parameter_name: str,
+                                          attempt: int, context: Dict[str, Any]) -> ErrorHandlingResult:
+        """Handle generic communication errors."""
+        should_retry = attempt < self.max_retries
+        retry_delay = self._calculate_retry_delay(attempt) if should_retry else 0.0
+        
+        user_message = f"Communication error for parameter '{parameter_name}'. "
+        if should_retry:
+            user_message += f"Retrying in {retry_delay:.1f} seconds..."
+        else:
+            user_message += "Unable to communicate with device."
+        
+        suggestions = [
+            "Check device connection and power",
+            "Verify COM port settings",
+            "Restart the device and try again",
+            "Check for cable or connection issues"
+        ]
+        
+        return ErrorHandlingResult(
+            should_retry=should_retry,
+            retry_delay=retry_delay,
+            user_message=user_message,
+            technical_message=f"Communication error for command '{command}' on parameter '{parameter_name}': {error}",
+            suggestions=suggestions,
+            category=ProfileErrorCategory.DEVICE_COMMUNICATION,
+            severity=ProfileErrorSeverity.ERROR,
+            context=context
+        )
+    
+    def reset_retry_counts(self) -> None:
+        """Reset all retry counts. Useful when starting a new operation."""
+        self.retry_counts.clear()
+    
+    def get_retry_count(self, operation_context: str, parameter_name: Optional[str] = None) -> int:
+        """Get the current retry count for a specific operation/parameter."""
+        context_key = f"{operation_context}:{parameter_name or 'general'}"
+        return self.retry_counts.get(context_key, 0)
+    
+    def create_error_summary(self, errors: List[Exception], 
+                           operation_context: str) -> Dict[str, Any]:
+        """
+        Create a summary of multiple errors for reporting.
+        
+        Args:
+            errors: List of errors that occurred
+            operation_context: Context of the operation
+            
+        Returns:
+            Dictionary containing error summary
+        """
+        if not errors:
+            return {"total_errors": 0, "categories": {}, "suggestions": []}
+        
+        categories = {}
+        all_suggestions = set()
+        
+        for error in errors:
+            category = self._categorize_error(error)
+            category_name = category.value
+            
+            if category_name not in categories:
+                categories[category_name] = {
+                    "count": 0,
+                    "errors": [],
+                    "severity": ProfileErrorSeverity.INFO.value
+                }
+            
+            categories[category_name]["count"] += 1
+            categories[category_name]["errors"].append(str(error))
+            
+            # Update severity to highest level
+            error_severity = self._determine_severity(error, category)
+            if error_severity.value == "critical":
+                categories[category_name]["severity"] = "critical"
+            elif error_severity.value == "error" and categories[category_name]["severity"] != "critical":
+                categories[category_name]["severity"] = "error"
+            elif error_severity.value == "warning" and categories[category_name]["severity"] not in ["critical", "error"]:
+                categories[category_name]["severity"] = "warning"
+            
+            # Collect suggestions
+            suggestions = self._get_resolution_suggestions(error, category)
+            all_suggestions.update(suggestions)
+        
+        return {
+            "total_errors": len(errors),
+            "categories": categories,
+            "suggestions": list(all_suggestions),
+            "operation_context": operation_context
+        }
+</document_content>
+</document>
+<document index="62">
+<source>.\services\profile_error_handler_enhanced.py</source>
+<document_content>
+"""
+Enhanced Profile Error Handler - Comprehensive error management for profile operations.
+
+This module provides centralized error handling for profile operations with:
+1. Error categorization (critical, non-critical, user confirmation required)
+2. Consistent error management across operations
+3. Detailed logging for non-critical issues
+4. Single confirmation dialog for user decisions
+5. Translation support for all user-facing messages
+"""
+
+import logging
+import threading
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Dict, Any, List, Optional, Union, Callable, Tuple
+from pathlib import Path
+
+from services.i18n_service import I18nService
+from ui.custom_dialogs import CTkMessageBox, show_info, show_warning, show_error
+
+
+class ErrorCategory(Enum):
+    """Categories of profile-related errors."""
+    CRITICAL = "critical"           # Stop operation, show error dialog
+    NON_CRITICAL = "non_critical"   # Log only, continue operation
+    USER_CONFIRMATION = "user_confirmation"  # Single confirmation dialog
+
+
+class ErrorType(Enum):
+    """Types of errors that can occur during profile operations."""
+    # File-related errors
+    FILE_NOT_FOUND = "file_not_found"
+    FILE_PERMISSION_DENIED = "file_permission_denied"
+    FILE_CORRUPTED = "file_corrupted"
+    FILE_ACCESS_ERROR = "file_access_error"
+    
+    # Device-related errors
+    DEVICE_CONNECTION_LOST = "device_connection_lost"
+    DEVICE_TIMEOUT = "device_timeout"
+    DEVICE_COMMUNICATION_ERROR = "device_communication_error"
+    DEVICE_BUSY = "device_busy"
+    
+    # Parameter-related errors
+    PARAMETER_VALIDATION_FAILED = "parameter_validation_failed"
+    PARAMETER_NOT_FOUND = "parameter_not_found"
+    PARAMETER_READ_FAILED = "parameter_read_failed"
+    PARAMETER_WRITE_FAILED = "parameter_write_failed"
+    
+    # Profile format errors
+    PROFILE_FORMAT_INVALID = "profile_format_invalid"
+    PROFILE_SECTION_MISSING = "profile_section_missing"
+    PROFILE_CONVERSION_FAILED = "profile_conversion_failed"
+    
+    # Operation errors
+    OPERATION_CANCELLED = "operation_cancelled"
+    OPERATION_TIMEOUT = "operation_timeout"
+    OPERATION_FAILED = "operation_failed"
+    
+    # System errors
+    MEMORY_ERROR = "memory_error"
+    THREAD_ERROR = "thread_error"
+    UNKNOWN_ERROR = "unknown_error"
+
+
+@dataclass
+class ProfileOperationContext:
+    """Context information for profile operations."""
+    operation_type: str  # 'load_from_device', 'load_to_device', 'load_to_ui', 'save_from_ui'
+    operation_id: str
+    file_path: Optional[str] = None
+    parameters: Dict[str, str] = field(default_factory=dict)
+    start_time: datetime = field(default_factory=datetime.now)
+    current_parameter: Optional[str] = None
+    progress_callback: Optional[Callable] = None
+    completion_callback: Optional[Callable] = None
+    cancellation_token: Optional[threading.Event] = None
+
+
+@dataclass
+class ProfileError:
+    """Represents a profile operation error."""
+    error_type: ErrorType
+    category: ErrorCategory
+    message: str
+    details: str = ""
+    context: Optional[ProfileOperationContext] = None
+    timestamp: datetime = field(default_factory=datetime.now)
+    exception: Optional[Exception] = None
+    suggested_actions: List[str] = field(default_factory=list)
+    recovery_possible: bool = False
+
+
+@dataclass
+class ErrorSummary:
+    """Summary of errors for an operation."""
+    operation_id: str
+    operation_type: str
+    total_errors: int = 0
+    critical_errors: int = 0
+    non_critical_errors: int = 0
+    user_confirmations: int = 0
+    errors_by_type: Dict[str, int] = field(default_factory=dict)
+    detailed_errors: List[ProfileError] = field(default_factory=list)
+    operation_successful: bool = False
+    recovery_actions_taken: int = 0
+
+
+class ProfileErrorHandler:
+    """
+    Comprehensive error management for profile operations.
+    
+    Features:
+    - Error categorization (critical, non-critical, user confirmation required)
+    - Consistent error management across operations
+    - Detailed logging for non-critical issues
+    - Single confirmation dialog for user decisions
+    - Translation support for all user-facing messages
+    """
+    
+    def __init__(self, parent_widget=None, i18n_service: Optional[I18nService] = None):
+        """
+        Initialize the ProfileErrorHandler.
+        
+        Args:
+            parent_widget: Parent widget for dialogs
+            i18n_service: Translation service instance
+        """
+        self.parent_widget = parent_widget
+        self.i18n_service = i18n_service or I18nService()
+        
+        # Setup logging
+        self._setup_logging()
+        
+        # Error tracking
+        self._operation_errors: Dict[str, List[ProfileError]] = {}
+        self._error_lock = threading.Lock()
+        
+        # Error categorization rules
+        self._init_error_categorization()
+        
+        # Translation keys
+        self._register_translation_keys()
+        
+        # User confirmation cache to avoid duplicate dialogs
+        self._confirmation_cache: Dict[str, bool] = {}
+        
+        self.logger.info("ProfileErrorHandler initialized")
+    
+    def _setup_logging(self):
+        """Setup logging for profile errors."""
+        # Create logger for profile errors
+        self.logger = logging.getLogger('profile_errors')
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Create file handler if it doesn't exist
+        if not self.logger.handlers:
+            # Ensure logs directory exists
+            Path('logs').mkdir(exist_ok=True)
+            
+            handler = logging.FileHandler('logs/profile_errors.log', encoding='utf-8')
+            formatter = logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+    
+    def _init_error_categorization(self):
+        """Initialize error categorization rules."""
+        self.error_categories = {
+            # Critical errors - stop operation, show dialog
+            ErrorType.FILE_NOT_FOUND: ErrorCategory.CRITICAL,
+            ErrorType.FILE_PERMISSION_DENIED: ErrorCategory.CRITICAL,
+            ErrorType.FILE_CORRUPTED: ErrorCategory.CRITICAL,
+            ErrorType.DEVICE_CONNECTION_LOST: ErrorCategory.CRITICAL,
+            ErrorType.PROFILE_FORMAT_INVALID: ErrorCategory.CRITICAL,
+            ErrorType.MEMORY_ERROR: ErrorCategory.CRITICAL,
+            ErrorType.THREAD_ERROR: ErrorCategory.CRITICAL,
+            
+            # Non-critical errors - log only, continue operation
+            ErrorType.PARAMETER_READ_FAILED: ErrorCategory.NON_CRITICAL,
+            ErrorType.PARAMETER_NOT_FOUND: ErrorCategory.NON_CRITICAL,
+            ErrorType.DEVICE_TIMEOUT: ErrorCategory.NON_CRITICAL,
+            ErrorType.PARAMETER_VALIDATION_FAILED: ErrorCategory.NON_CRITICAL,
+            
+            # User confirmation required
+            ErrorType.FILE_ACCESS_ERROR: ErrorCategory.USER_CONFIRMATION,
+            ErrorType.DEVICE_BUSY: ErrorCategory.USER_CONFIRMATION,
+            ErrorType.OPERATION_TIMEOUT: ErrorCategory.USER_CONFIRMATION,
+            ErrorType.PROFILE_CONVERSION_FAILED: ErrorCategory.USER_CONFIRMATION,
+            
+            # Default category
+            ErrorType.UNKNOWN_ERROR: ErrorCategory.CRITICAL,
+        }
+        
+        # Suggested actions for each error type
+        self.error_suggestions = {
+            ErrorType.FILE_NOT_FOUND: [
+                "Check that the file path is correct",
+                "Verify the file exists in the specified location",
+                "Try browsing for the file manually"
+            ],
+            ErrorType.FILE_PERMISSION_DENIED: [
+                "Run the application as administrator",
+                "Check file permissions and ownership",
+                "Ensure the file is not open in another application"
+            ],
+            ErrorType.FILE_CORRUPTED: [
+                "Try using a backup copy of the profile",
+                "Recreate the profile from device settings",
+                "Check if the file was partially downloaded"
+            ],
+            ErrorType.DEVICE_CONNECTION_LOST: [
+                "Check the physical connection to the device",
+                "Verify the device is powered on",
+                "Try reconnecting to the device"
+            ],
+            ErrorType.DEVICE_TIMEOUT: [
+                "Check if the device is responding",
+                "Try increasing the timeout settings",
+                "Verify the device is not busy with another operation"
+            ],
+            ErrorType.PARAMETER_READ_FAILED: [
+                "Try reading the parameter individually",
+                "Check if the parameter exists on the device",
+                "Verify the device connection is stable"
+            ],
+            ErrorType.PARAMETER_WRITE_FAILED: [
+                "Verify the parameter value is valid",
+                "Check if the device accepts this parameter",
+                "Try writing the parameter individually"
+            ],
+            ErrorType.PROFILE_FORMAT_INVALID: [
+                "Check the profile file format",
+                "Try opening the file in a text editor",
+                "Use a different profile file"
+            ]
+        }
+    
+    def _register_translation_keys(self):
+        """Register translation keys for error messages."""
+        self.translation_keys = {
+            # Error dialog titles
+            'critical_error_title': 'Critical Error',
+            'operation_error_title': 'Operation Error',
+            'confirmation_required_title': 'Confirmation Required',
+            'error_summary_title': 'Operation Summary',
+            
+            # Error messages
+            'file_not_found_msg': 'Profile file not found: {file_path}',
+            'file_permission_denied_msg': 'Permission denied accessing file: {file_path}',
+            'file_corrupted_msg': 'Profile file appears to be corrupted: {file_path}',
+            'device_connection_lost_msg': 'Connection to device was lost during operation',
+            'device_timeout_msg': 'Device operation timed out for parameter: {parameter}',
+            'parameter_read_failed_msg': 'Failed to read parameter: {parameter}',
+            'parameter_write_failed_msg': 'Failed to write parameter: {parameter}',
+            'profile_format_invalid_msg': 'Invalid profile file format',
+            'operation_cancelled_msg': 'Operation was cancelled by user',
+            'unknown_error_msg': 'An unexpected error occurred: {details}',
+            
+            # Confirmation messages
+            'continue_with_errors_msg': 'Continue operation despite {error_count} non-critical errors?',
+            'retry_failed_operation_msg': 'Operation failed. Would you like to retry?',
+            'overwrite_file_msg': 'File already exists. Do you want to overwrite it?',
+            'device_busy_retry_msg': 'Device is busy. Would you like to wait and retry?',
+            
+            # Summary messages
+            'operation_completed_msg': 'Operation completed with {error_count} errors and {warning_count} warnings',
+            'operation_failed_msg': 'Operation failed due to critical errors',
+            'recovery_actions_msg': '{recovery_count} recovery actions were taken',
+            
+            # Buttons
+            'ok': 'OK',
+            'cancel': 'Cancel',
+            'retry': 'Retry',
+            'continue': 'Continue',
+            'abort': 'Abort',
+            'yes': 'Yes',
+            'no': 'No',
+            
+            # Suggestions
+            'suggested_actions': 'Suggested actions:',
+            'error_details': 'Error details:',
+            'see_logs_for_details': 'See logs for detailed information',
+        }
+    
+    def handle_error(self, error_type: ErrorType, message: str, 
+                    context: Optional[ProfileOperationContext] = None,
+                    details: str = "", exception: Optional[Exception] = None) -> bool:
+        """
+        Handle a profile operation error.
+        
+        Args:
+            error_type: Type of error that occurred
+            message: Human-readable error message
+            context: Operation context information
+            details: Additional error details
+            exception: Original exception if available
+            
+        Returns:
+            True if operation should continue, False if it should stop
+        """
+        # Determine error category
+        category = self.error_categories.get(error_type, ErrorCategory.CRITICAL)
+        
+        # Create error object
+        error = ProfileError(
+            error_type=error_type,
+            category=category,
+            message=message,
+            details=details,
+            context=context,
+            exception=exception,
+            suggested_actions=self.error_suggestions.get(error_type, []),
+            recovery_possible=category != ErrorCategory.CRITICAL
+        )
+        
+        # Track the error
+        self._track_error(error)
+        
+        # Handle based on category
+        if category == ErrorCategory.CRITICAL:
+            return self._handle_critical_error(error)
+        elif category == ErrorCategory.NON_CRITICAL:
+            return self._handle_non_critical_error(error)
+        elif category == ErrorCategory.USER_CONFIRMATION:
+            return self._handle_user_confirmation_error(error)
+        
+        return False
+    
+    def _track_error(self, error: ProfileError):
+        """Track an error for the operation."""
+        with self._error_lock:
+            operation_id = error.context.operation_id if error.context else "unknown"
+            
+            if operation_id not in self._operation_errors:
+                self._operation_errors[operation_id] = []
+            
+            self._operation_errors[operation_id].append(error)
+    
+    def _handle_critical_error(self, error: ProfileError) -> bool:
+        """
+        Handle a critical error that stops the operation.
+        
+        Args:
+            error: The critical error
+            
+        Returns:
+            False (operation should stop)
+        """
+        # Log the critical error
+        self.logger.error(f"CRITICAL ERROR: {error.message}")
+        if error.details:
+            self.logger.error(f"Details: {error.details}")
+        if error.exception:
+            self.logger.error(f"Exception: {str(error.exception)}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Show error dialog
+        self._show_critical_error_dialog(error)
+        
+        return False
+    
+    def _handle_non_critical_error(self, error: ProfileError) -> bool:
+        """
+        Handle a non-critical error by logging it.
+        
+        Args:
+            error: The non-critical error
+            
+        Returns:
+            True (operation should continue)
+        """
+        # Log the non-critical error
+        self.logger.warning(f"NON-CRITICAL ERROR: {error.message}")
+        if error.details:
+            self.logger.warning(f"Details: {error.details}")
+        
+        # Log suggested actions
+        if error.suggested_actions:
+            self.logger.info(f"Suggested actions: {', '.join(error.suggested_actions)}")
+        
+        return True
+    
+    def _handle_user_confirmation_error(self, error: ProfileError) -> bool:
+        """
+        Handle an error that requires user confirmation.
+        
+        Args:
+            error: The error requiring confirmation
+            
+        Returns:
+            True if user chooses to continue, False otherwise
+        """
+        # Log the error
+        self.logger.warning(f"USER CONFIRMATION REQUIRED: {error.message}")
+        if error.details:
+            self.logger.warning(f"Details: {error.details}")
+        
+        # Check confirmation cache to avoid duplicate dialogs
+        cache_key = f"{error.error_type.value}_{error.message}"
+        if cache_key in self._confirmation_cache:
+            return self._confirmation_cache[cache_key]
+        
+        # Show confirmation dialog
+        result = self._show_confirmation_dialog(error)
+        
+        # Cache the result
+        self._confirmation_cache[cache_key] = result
+        
+        return result
+    
+    def _show_critical_error_dialog(self, error: ProfileError):
+        """Show a critical error dialog."""
+        if not self.parent_widget:
+            return
+        
+        title = self._get_translated_text('critical_error_title')
+        
+        # Get error-specific message
+        message_key = f"{error.error_type.value}_msg"
+        message = self._get_translated_text(message_key, {
+            'file_path': error.context.file_path if error.context else '',
+            'parameter': error.context.current_parameter if error.context else '',
+            'details': error.details
+        })
+        
+        # Add suggested actions
+        full_message = message
+        if error.suggested_actions:
+            suggestions_title = self._get_translated_text('suggested_actions')
+            full_message += f"\n\n{suggestions_title}\n"
+            for i, action in enumerate(error.suggested_actions, 1):
+                full_message += f"{i}. {action}\n"
+        
+        # Add details if available
+        if error.details:
+            details_title = self._get_translated_text('error_details')
+            full_message += f"\n{details_title}\n{error.details}"
+        
+        show_error(self.parent_widget, title, full_message)
+    
+    def _show_confirmation_dialog(self, error: ProfileError) -> bool:
+        """
+        Show a confirmation dialog for user decision.
+        
+        Args:
+            error: The error requiring confirmation
+            
+        Returns:
+            True if user confirms to continue, False otherwise
+        """
+        if not self.parent_widget:
+            return False
+        
+        title = self._get_translated_text('confirmation_required_title')
+        
+        # Get error-specific confirmation message
+        if error.error_type == ErrorType.DEVICE_BUSY:
+            message = self._get_translated_text('device_busy_retry_msg')
+        elif error.error_type == ErrorType.OPERATION_TIMEOUT:
+            message = self._get_translated_text('retry_failed_operation_msg')
+        elif error.error_type == ErrorType.FILE_ACCESS_ERROR:
+            message = self._get_translated_text('overwrite_file_msg')
+        else:
+            message = f"{error.message}\n\nDo you want to continue?"
+        
+        # Add details if available
+        if error.details:
+            message += f"\n\nDetails: {error.details}"
+        
+        # Add suggested actions
+        if error.suggested_actions:
+            suggestions_title = self._get_translated_text('suggested_actions')
+            message += f"\n\n{suggestions_title}\n"
+            for i, action in enumerate(error.suggested_actions, 1):
+                message += f"{i}. {action}\n"
+        
+        # Show confirmation dialog
+        dialog = CTkMessageBox(
+            master=self.parent_widget,
+            title=title,
+            message=message,
+            icon="question",
+            option_1=self._get_translated_text('yes'),
+            option_2=self._get_translated_text('no')
+        )
+        
+        result = dialog.get()
+        return result == self._get_translated_text('yes')
+    
+    def create_error_summary(self, operation_id: str) -> ErrorSummary:
+        """
+        Create a summary of errors for an operation.
+        
+        Args:
+            operation_id: Operation identifier
+            
+        Returns:
+            ErrorSummary with comprehensive error analysis
+        """
+        with self._error_lock:
+            errors = self._operation_errors.get(operation_id, [])
+        
+        # Count errors by category
+        critical_errors = len([e for e in errors if e.category == ErrorCategory.CRITICAL])
+        non_critical_errors = len([e for e in errors if e.category == ErrorCategory.NON_CRITICAL])
+        user_confirmations = len([e for e in errors if e.category == ErrorCategory.USER_CONFIRMATION])
+        
+        # Count errors by type
+        errors_by_type = {}
+        for error in errors:
+            error_type = error.error_type.value
+            errors_by_type[error_type] = errors_by_type.get(error_type, 0) + 1
+        
+        # Determine operation success
+        operation_successful = critical_errors == 0
+        
+        # Get operation type
+        operation_type = "unknown"
+        if errors and errors[0].context:
+            operation_type = errors[0].context.operation_type
+        
+        return ErrorSummary(
+            operation_id=operation_id,
+            operation_type=operation_type,
+            total_errors=len(errors),
+            critical_errors=critical_errors,
+            non_critical_errors=non_critical_errors,
+            user_confirmations=user_confirmations,
+            errors_by_type=errors_by_type,
+            detailed_errors=errors,
+            operation_successful=operation_successful,
+            recovery_actions_taken=0  # This would be tracked separately
+        )
+    
+    def show_error_summary(self, operation_id: str):
+        """
+        Show a summary dialog of all errors for an operation.
+        
+        Args:
+            operation_id: Operation identifier
+        """
+        if not self.parent_widget:
+            return
+        
+        summary = self.create_error_summary(operation_id)
+        
+        if summary.total_errors == 0:
+            # No errors to show
+            return
+        
+        title = self._get_translated_text('error_summary_title')
+        
+        # Build summary message
+        if summary.operation_successful:
+            message = self._get_translated_text('operation_completed_msg', {
+                'error_count': summary.non_critical_errors,
+                'warning_count': summary.user_confirmations
+            })
+        else:
+            message = self._get_translated_text('operation_failed_msg')
+        
+        # Add error breakdown
+        details_lines = [
+            f"Total errors: {summary.total_errors}",
+            f"Critical errors: {summary.critical_errors}",
+            f"Non-critical errors: {summary.non_critical_errors}",
+            f"User confirmations: {summary.user_confirmations}"
+        ]
+        
+        # Add error types breakdown
+        if summary.errors_by_type:
+            details_lines.append("\nError types:")
+            for error_type, count in summary.errors_by_type.items():
+                details_lines.append(f"  {error_type.replace('_', ' ').title()}: {count}")
+        
+        # Add recent errors (last 5)
+        if summary.detailed_errors:
+            details_lines.append("\nRecent errors:")
+            for error in summary.detailed_errors[-5:]:
+                timestamp = error.timestamp.strftime("%H:%M:%S")
+                details_lines.append(f"  [{timestamp}] {error.message}")
+        
+        full_message = message + "\n\n" + "\n".join(details_lines)
+        
+        # Add suggestion to check logs
+        full_message += f"\n\n{self._get_translated_text('see_logs_for_details')}"
+        
+        # Show appropriate dialog based on severity
+        if summary.critical_errors > 0:
+            show_error(self.parent_widget, title, full_message)
+        else:
+            show_warning(self.parent_widget, title, full_message)
+    
+    def clear_operation_errors(self, operation_id: str):
+        """Clear all errors for an operation."""
+        with self._error_lock:
+            if operation_id in self._operation_errors:
+                del self._operation_errors[operation_id]
+        
+        # Clear confirmation cache for this operation
+        keys_to_remove = [k for k in self._confirmation_cache.keys() if operation_id in k]
+        for key in keys_to_remove:
+            del self._confirmation_cache[key]
+    
+    def log_non_critical_issue(self, issue: str, context: Optional[ProfileOperationContext] = None,
+                              details: str = ""):
+        """
+        Log a non-critical issue without showing a dialog.
+        
+        Args:
+            issue: Issue description
+            context: Operation context
+            details: Additional details
+        """
+        # Use a non-critical error type for logging
+        self.handle_error(
+            error_type=ErrorType.PARAMETER_VALIDATION_FAILED,  # This is categorized as non-critical
+            message=issue,
+            context=context,
+            details=details
+        )
+    
+    def request_user_confirmation(self, message: str, context: Optional[ProfileOperationContext] = None) -> bool:
+        """
+        Request user confirmation for an operation.
+        
+        Args:
+            message: Confirmation message
+            context: Operation context
+            
+        Returns:
+            True if user confirms, False otherwise
+        """
+        # Use a user confirmation error type
+        return self.handle_error(
+            error_type=ErrorType.OPERATION_TIMEOUT,  # This is categorized as user confirmation
+            message=message,
+            context=context
+        )
+    
+    def _get_translated_text(self, key: str, parameters: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Get translated text for a key with parameter substitution.
+        
+        Args:
+            key: Translation key
+            parameters: Parameters for string formatting
+            
+        Returns:
+            Translated and formatted text
+        """
+        # Try to get translation from i18n service
+        text = self.i18n_service.get(key)
+        
+        # If not found, try fallback keys
+        if text == f"_{key}_":
+            text = self.translation_keys.get(key, key)
+        
+        # Apply parameter substitution
+        if parameters:
+            try:
+                text = text.format(**parameters)
+            except (KeyError, ValueError) as e:
+                # Log formatting error but don't crash
+                self.logger.warning(f"Failed to format message '{key}' with parameters {parameters}: {e}")
+        
+        return text
+    
+    def set_parent_widget(self, parent_widget):
+        """Set the parent widget for dialogs."""
+        self.parent_widget = parent_widget
+    
+    def get_error_statistics(self) -> Dict[str, Any]:
+        """
+        Get overall error statistics across all operations.
+        
+        Returns:
+            Dictionary with error statistics
+        """
+        with self._error_lock:
+            total_operations = len(self._operation_errors)
+            total_errors = sum(len(errors) for errors in self._operation_errors.values())
+            
+            # Count by category
+            critical_count = 0
+            non_critical_count = 0
+            confirmation_count = 0
+            
+            # Count by type
+            type_counts = {}
+            
+            for errors in self._operation_errors.values():
+                for error in errors:
+                    if error.category == ErrorCategory.CRITICAL:
+                        critical_count += 1
+                    elif error.category == ErrorCategory.NON_CRITICAL:
+                        non_critical_count += 1
+                    elif error.category == ErrorCategory.USER_CONFIRMATION:
+                        confirmation_count += 1
+                    
+                    error_type = error.error_type.value
+                    type_counts[error_type] = type_counts.get(error_type, 0) + 1
+            
+            return {
+                'total_operations': total_operations,
+                'total_errors': total_errors,
+                'critical_errors': critical_count,
+                'non_critical_errors': non_critical_count,
+                'user_confirmations': confirmation_count,
+                'errors_by_type': type_counts,
+                'average_errors_per_operation': total_errors / max(total_operations, 1)
+            }
+</document_content>
+</document>
+<document index="63">
+<source>.\services\profile_file_handler.py</source>
+<document_content>
+"""
+Profile File Handler for the LT32 PRO Universal Profile System.
+
+This module provides comprehensive file I/O operations for universal profiles,
+including JSON serialization/deserialization, metadata handling, version information,
+timestamps, and profile migration logic for handling format changes.
+
+Requirements addressed:
+- 3.2: Save profile to file with proper validation metadata
+- 3.3: Load profile from file with validation
+- 3.4: Handle profile file format validation and migration
+- 5.5: Include version information for future compatibility
+"""
+
+import json
+import os
+import shutil
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import logging
+
+from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+from models.validation_result import ValidationResult
+from models.operation_result import ProfileOperationResult, OperationType
+
+
+@dataclass
+class OperationResult:
+    """Simple operation result for file operations."""
+    operation_type: str
+    success: bool
+    message: str = ""
+    error_message: str = ""
+    duration_seconds: float = 0.0
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+class ProfileFileError(Exception):
+    """Custom exception for profile file operations."""
+    pass
+
+
+class ProfileMigrationError(Exception):
+    """Custom exception for profile migration operations."""
+    pass
+
+
+class ProfileFileHandler:
+    """
+    Handles file I/O operations for universal profiles with JSON format.
+    
+    This handler provides robust file operations including:
+    - JSON serialization/deserialization
+    - Profile metadata handling with version information and timestamps
+    - Profile migration logic for handling format changes
+    - Comprehensive error handling and recovery
+    - File validation and backup operations
+    """
+    
+    # Current profile format version
+    CURRENT_FORMAT_VERSION = "1.0"
+    
+    # Supported format versions for migration
+    SUPPORTED_VERSIONS = ["1.0"]
+    
+    # File extension for profile files
+    PROFILE_EXTENSION = ".json"
+    
+    # Backup directory name
+    BACKUP_DIR = "backups"
+    
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        """
+        Initialize the profile file handler.
+        
+        Args:
+            logger: Optional logger instance for logging operations
+        """
+        self.logger = logger or logging.getLogger(__name__)
+    
+    def save_profile_to_file(self, profile: UniversalProfile, file_path: str, 
+                           create_backup: bool = True) -> OperationResult:
+        """
+        Save a universal profile to a JSON file.
+        
+        Args:
+            profile: Universal profile to save
+            file_path: Path where to save the profile file
+            create_backup: Whether to create a backup if file exists
+            
+        Returns:
+            OperationResult: Result of the save operation
+        """
+        operation_start = datetime.now()
+        
+        try:
+            # Ensure file has correct extension
+            file_path = self._ensure_profile_extension(file_path)
+            
+            # Create backup if file exists and backup is requested
+            if create_backup and os.path.exists(file_path):
+                backup_result = self._create_backup(file_path)
+                if not backup_result.success:
+                    self.logger.warning(f"Backup creation failed: {backup_result.error_message}")
+            
+            # Ensure directory exists
+            directory = os.path.dirname(file_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            
+            # Update profile metadata before saving
+            profile.modified_at = datetime.now()
+            profile.metadata.profile_format_version = self.CURRENT_FORMAT_VERSION
+            
+            # Convert profile to dictionary for saving (without runtime metadata)
+            profile_data = profile.to_dict(for_save=True)
+            
+            # Add file metadata
+            file_metadata = {
+                "file_format_version": self.CURRENT_FORMAT_VERSION,
+                "saved_at": datetime.now().isoformat(),
+                "saved_by": "LT32 PRO Universal Profile System"
+            }
+            profile_data["_file_metadata"] = file_metadata
+            
+            # Write to temporary file first for atomic operation
+            temp_file_path = file_path + ".tmp"
+            
+            with open(temp_file_path, 'w', encoding='utf-8') as file:
+                json.dump(profile_data, file, indent=2, ensure_ascii=False)
+            
+            # Verify the written file
+            verification_result = self._verify_saved_file(temp_file_path, profile)
+            if not verification_result.success:
+                os.remove(temp_file_path)
+                return OperationResult(
+                    operation_type="save_profile",
+                    success=False,
+                    error_message=f"File verification failed: {verification_result.error_message}",
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            # Move temporary file to final location (atomic operation)
+            shutil.move(temp_file_path, file_path)
+            
+            # Log successful save
+            self.logger.info(f"Profile '{profile.name}' saved successfully to {file_path}")
+            
+            return OperationResult(
+                operation_type="save_profile",
+                success=True,
+                message=f"Profile saved to {file_path}",
+                duration_seconds=(datetime.now() - operation_start).total_seconds(),
+                details={
+                    "file_path": file_path,
+                    "profile_name": profile.name,
+                    "parameter_count": len(profile.parameters),
+                    "file_size_bytes": os.path.getsize(file_path)
+                }
+            )
+            
+        except PermissionError as e:
+            error_msg = f"Permission denied writing to {file_path}: {str(e)}"
+            self.logger.error(error_msg)
+            return OperationResult(
+                operation_type="save_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+            
+        except OSError as e:
+            error_msg = f"OS error writing file {file_path}: {str(e)}"
+            self.logger.error(error_msg)
+            return OperationResult(
+                operation_type="save_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+            
+        except Exception as e:
+            error_msg = f"Unexpected error saving profile: {str(e)}"
+            self.logger.error(error_msg)
+            return OperationResult(
+                operation_type="save_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+    
+    def load_profile_from_file(self, file_path: str, 
+                             auto_migrate: bool = True) -> Tuple[Optional[UniversalProfile], OperationResult]:
+        """
+        Load a universal profile from a JSON file.
+        
+        Args:
+            file_path: Path to the profile file to load
+            auto_migrate: Whether to automatically migrate older format versions
+            
+        Returns:
+            Tuple of (loaded profile or None, operation result)
+        """
+        operation_start = datetime.now()
+        
+        try:
+            # Check if file exists
+            if not os.path.exists(file_path):
+                error_msg = f"Profile file not found: {file_path}"
+                return None, OperationResult(
+                    operation_type="load_profile",
+                    success=False,
+                    error_message=error_msg,
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            # Check file permissions
+            if not os.access(file_path, os.R_OK):
+                error_msg = f"Profile file is not readable: {file_path}"
+                return None, OperationResult(
+                    operation_type="load_profile",
+                    success=False,
+                    error_message=error_msg,
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            # Check file size
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                error_msg = "Profile file is empty"
+                return None, OperationResult(
+                    operation_type="load_profile",
+                    success=False,
+                    error_message=error_msg,
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            # Read and parse JSON file
+            with open(file_path, 'r', encoding='utf-8') as file:
+                profile_data = json.load(file)
+
+            # Normalize parameter values that were produced by device dumps and may contain
+            # Python-style stringified dicts (single quotes) or literal values.
+            # This makes the loader tolerant of the two sample files you provided.
+            try:
+                import ast
+                import json as _json
+                if isinstance(profile_data, dict) and "parameters" in profile_data and isinstance(profile_data["parameters"], dict):
+                    for p_name, p_data in profile_data["parameters"].items():
+                        # Expect param entry to be a dict with a "value" key in most cases
+                        if not isinstance(p_data, dict):
+                            continue
+                        if "value" not in p_data:
+                            continue
+                        val = p_data["value"]
+                        # Only attempt parsing for string values that look like structured data or literals
+                        if isinstance(val, str):
+                            v = val.strip()
+                            parsed = None
+                            try:
+                                # Use ast.literal_eval first ÔÇö safe for Python-style dicts/literals
+                                if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")) or v in ("True", "False", "None") or v.replace('.', '', 1).isdigit():
+                                    parsed = ast.literal_eval(v)
+                            except Exception:
+                                parsed = None
+                            if parsed is None:
+                                # Try a JSON-safe fallback by converting single quotes to double quotes
+                                try:
+                                    if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")):
+                                        parsed = _json.loads(v.replace("'", "\""))
+                                except Exception:
+                                    parsed = None
+                            if parsed is not None:
+                                p_data["value"] = parsed
+
+                        # Targeted normalization for known problematic device dump structures
+                        # - server_settings: ensure port is an integer and address is clean
+                        # - tcp_ack and other single-field toggle params: unwrap dicts like {'tcp_ack': 'Disabled'} to 'Disabled'
+                        try:
+                            # Handle server_settings entries which may appear as 'network_parameters.server_settings' or similar
+                            if isinstance(p_data.get("value"), dict) and p_name.endswith("server_settings"):
+                                sv = p_data["value"]
+                                # Normalize port
+                                if "port" in sv:
+                                    port_val = sv["port"]
+                                    if isinstance(port_val, str):
+                                        port_str = port_val.strip()
+                                        if port_str.isdigit():
+                                            sv["port"] = int(port_str)
+                                        else:
+                                            # try extracting digits
+                                            import re
+                                            digits = re.findall(r'\d+', port_str)
+                                            sv["port"] = int(digits[-1]) if digits else 0
+                                    elif isinstance(port_val, (int, float)):
+                                        sv["port"] = int(port_val)
+                                # Clean address string
+                                if "address" in sv and isinstance(sv["address"], str):
+                                    sv["address"] = sv["address"].strip()
+                                p_data["value"] = sv
+
+                            # Unwrap single-key dict values for single-value parameters like tcp_ack
+                            if isinstance(p_data.get("value"), dict) and len(p_data["value"]) == 1:
+                                sole_key = next(iter(p_data["value"]))
+                                sole_val = p_data["value"][sole_key]
+                                # If key matches the parameter short name, unwrap it
+                                short_name = p_name.split('.')[-1]
+                                if sole_key == short_name:
+                                    # Map boolean-like strings to normalized labels (trim)
+                                    if isinstance(sole_val, str):
+                                        sv = sole_val.strip()
+                                        # Accept 'True'/'False' or '1'/'0' or 'Enabled'/'Disabled'
+                                        if sv.lower() in ("true", "1"):
+                                            p_data["value"] = True
+                                        elif sv.lower() in ("false", "0"):
+                                            p_data["value"] = False
+                                        else:
+                                            p_data["value"] = sv
+                                    else:
+                                        p_data["value"] = sole_val
+                        except Exception:
+                            # Ignore normalization errors per-profile entry
+                            pass
+            except Exception:
+                # Keep original data if normalization fails for any reason
+                pass
+            
+            # Validate file format
+            validation_result = self._validate_profile_data(profile_data)
+            if not validation_result.is_valid:
+                error_msg = f"Invalid profile format: {'; '.join(validation_result.errors)}"
+                return None, OperationResult(
+                    operation_type="load_profile",
+                    success=False,
+                    error_message=error_msg,
+                    duration_seconds=(datetime.now() - operation_start).total_seconds(),
+                    details={"validation_errors": validation_result.errors}
+                )
+            
+            # Check format version and migrate if needed
+            file_format_version = self._get_format_version(profile_data)
+            migration_performed = False
+            
+            if file_format_version != self.CURRENT_FORMAT_VERSION:
+                if auto_migrate:
+                    migration_result = self._migrate_profile_data(profile_data, file_format_version)
+                    if migration_result.success:
+                        profile_data = migration_result.details["migrated_data"]
+                        migration_performed = True
+                        self.logger.info(f"Profile migrated from version {file_format_version} to {self.CURRENT_FORMAT_VERSION}")
+                    else:
+                        error_msg = f"Profile migration failed: {migration_result.error_message}"
+                        return None, OperationResult(
+                            operation_type="load_profile",
+                            success=False,
+                            error_message=error_msg,
+                            duration_seconds=(datetime.now() - operation_start).total_seconds()
+                        )
+                else:
+                    self.logger.warning(f"Profile format version {file_format_version} differs from current {self.CURRENT_FORMAT_VERSION}")
+            
+            # Create profile from data
+            profile = UniversalProfile.from_dict(profile_data)
+            
+            # Log successful load
+            self.logger.info(f"Profile '{profile.name}' loaded successfully from {file_path}")
+            
+            return profile, OperationResult(
+                operation_type="load_profile",
+                success=True,
+                message=f"Profile loaded from {file_path}",
+                duration_seconds=(datetime.now() - operation_start).total_seconds(),
+                details={
+                    "file_path": file_path,
+                    "profile_name": profile.name,
+                    "parameter_count": len(profile.parameters),
+                    "file_size_bytes": file_size,
+                    "migration_performed": migration_performed,
+                    "format_version": file_format_version
+                }
+            )
+            
+        except json.JSONDecodeError as e:
+            error_msg = f"Invalid JSON format in profile file: {str(e)}"
+            self.logger.error(error_msg)
+            return None, OperationResult(
+                operation_type="load_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+            
+        except UnicodeDecodeError as e:
+            error_msg = f"File encoding error: {str(e)}"
+            self.logger.error(error_msg)
+            return None, OperationResult(
+                operation_type="load_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+            
+        except Exception as e:
+            error_msg = f"Unexpected error loading profile: {str(e)}"
+            self.logger.error(error_msg)
+            return None, OperationResult(
+                operation_type="load_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+    
+    def validate_profile_file(self, file_path: str) -> ValidationResult:
+        """
+        Validate a profile file without loading it completely.
+        
+        Args:
+            file_path: Path to the profile file to validate
+            
+        Returns:
+            ValidationResult: Validation result with detailed information
+        """
+        result = ValidationResult(is_valid=True)
+        
+        try:
+            # Check file existence and permissions
+            if not os.path.exists(file_path):
+                result.add_error(f"Profile file not found: {file_path}")
+                return result
+            
+            if not os.access(file_path, os.R_OK):
+                result.add_error(f"Profile file is not readable: {file_path}")
+                return result
+            
+            # Check file size
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                result.add_error("Profile file is empty")
+                return result
+            
+            if file_size > 10 * 1024 * 1024:  # 10MB limit
+                result.add_warning(f"Profile file is very large: {file_size} bytes")
+            
+            # Validate JSON format
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    profile_data = json.load(file)
+            except json.JSONDecodeError as e:
+                result.add_error(f"Invalid JSON format: {str(e)}")
+                return result
+            except UnicodeDecodeError as e:
+                result.add_error(f"File encoding error: {str(e)}")
+                return result
+            
+            # Validate profile data structure
+            data_validation = self._validate_profile_data(profile_data)
+            result.errors.extend(data_validation.errors)
+            result.warnings.extend(data_validation.warnings)
+            
+            # Check format version
+            format_version = self._get_format_version(profile_data)
+            if format_version not in self.SUPPORTED_VERSIONS:
+                result.add_error(f"Unsupported profile format version: {format_version}")
+            elif format_version != self.CURRENT_FORMAT_VERSION:
+                result.add_warning(f"Profile format version {format_version} is older than current {self.CURRENT_FORMAT_VERSION}")
+            
+            # Validate required fields
+            required_fields = ["name", "version", "created_at", "modified_at", "metadata", "parameters"]
+            for field in required_fields:
+                if field not in profile_data:
+                    result.add_error(f"Missing required field: {field}")
+            
+            # Validate metadata structure
+            if "metadata" in profile_data:
+                metadata = profile_data["metadata"]
+                if not isinstance(metadata, dict):
+                    result.add_error("Metadata must be a dictionary")
+                else:
+                    required_metadata_fields = ["parameter_spec_version", "device_model", "profile_format_version"]
+                    for field in required_metadata_fields:
+                        if field not in metadata:
+                            result.add_warning(f"Missing metadata field: {field}")
+            
+            # Validate parameters structure
+            if "parameters" in profile_data:
+                parameters = profile_data["parameters"]
+                if not isinstance(parameters, dict):
+                    result.add_error("Parameters must be a dictionary")
+                else:
+                    # Validate parameter structure
+                    for param_name, param_data in parameters.items():
+                        if not isinstance(param_data, dict):
+                            result.add_error(f"Parameter '{param_name}' data must be a dictionary")
+                            continue
+                        
+                        required_param_fields = ["value", "source", "timestamp"]
+                        for field in required_param_fields:
+                            if field not in param_data:
+                                result.add_warning(f"Parameter '{param_name}' missing field: {field}")
+            
+        except Exception as e:
+            result.add_error(f"Unexpected error during validation: {str(e)}")
+        
+        return result 
+   
+    def migrate_profile_file(self, file_path: str, backup: bool = True) -> OperationResult:
+        """
+        Migrate a profile file to the current format version.
+        
+        Args:
+            file_path: Path to the profile file to migrate
+            backup: Whether to create a backup before migration
+            
+        Returns:
+            OperationResult: Result of the migration operation
+        """
+        operation_start = datetime.now()
+        
+        try:
+            # Load the profile
+            profile, load_result = self.load_profile_from_file(file_path, auto_migrate=False)
+            if not load_result.success:
+                return OperationResult(
+                    operation_type="migrate_profile",
+                    success=False,
+                    error_message=f"Failed to load profile for migration: {load_result.error_message}",
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            # Check if migration is needed
+            with open(file_path, 'r', encoding='utf-8') as file:
+                profile_data = json.load(file)
+            
+            current_version = self._get_format_version(profile_data)
+            if current_version == self.CURRENT_FORMAT_VERSION:
+                return OperationResult(
+                    operation_type="migrate_profile",
+                    success=True,
+                    message="Profile is already at current format version",
+                    duration_seconds=(datetime.now() - operation_start).total_seconds(),
+                    details={"format_version": current_version}
+                )
+            
+            # Create backup if requested
+            if backup:
+                backup_result = self._create_backup(file_path)
+                if not backup_result.success:
+                    self.logger.warning(f"Backup creation failed: {backup_result.error_message}")
+            
+            # Perform migration
+            migration_result = self._migrate_profile_data(profile_data, current_version)
+            if not migration_result.success:
+                return OperationResult(
+                    operation_type="migrate_profile",
+                    success=False,
+                    error_message=f"Migration failed: {migration_result.error_message}",
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            # Create migrated profile
+            migrated_data = migration_result.details["migrated_data"]
+            migrated_profile = UniversalProfile.from_dict(migrated_data)
+            
+            # Save migrated profile
+            save_result = self.save_profile_to_file(migrated_profile, file_path, create_backup=False)
+            if not save_result.success:
+                return OperationResult(
+                    operation_type="migrate_profile",
+                    success=False,
+                    error_message=f"Failed to save migrated profile: {save_result.error_message}",
+                    duration_seconds=(datetime.now() - operation_start).total_seconds()
+                )
+            
+            self.logger.info(f"Profile migrated from version {current_version} to {self.CURRENT_FORMAT_VERSION}")
+            
+            return OperationResult(
+                operation_type="migrate_profile",
+                success=True,
+                message=f"Profile migrated from version {current_version} to {self.CURRENT_FORMAT_VERSION}",
+                duration_seconds=(datetime.now() - operation_start).total_seconds(),
+                details={
+                    "old_version": current_version,
+                    "new_version": self.CURRENT_FORMAT_VERSION,
+                    "backup_created": backup
+                }
+            )
+            
+        except Exception as e:
+            error_msg = f"Unexpected error during migration: {str(e)}"
+            self.logger.error(error_msg)
+            return OperationResult(
+                operation_type="migrate_profile",
+                success=False,
+                error_message=error_msg,
+                duration_seconds=(datetime.now() - operation_start).total_seconds()
+            )
+    
+    def get_profile_info(self, file_path: str) -> Dict[str, Any]:
+        """
+        Get basic information about a profile file without loading it completely.
+        
+        Args:
+            file_path: Path to the profile file
+            
+        Returns:
+            Dict[str, Any]: Profile information dictionary
+        """
+        info = {
+            "file_path": file_path,
+            "exists": False,
+            "readable": False,
+            "file_size_bytes": 0,
+            "format_version": None,
+            "profile_name": None,
+            "created_at": None,
+            "modified_at": None,
+            "parameter_count": 0,
+            "validation_status": "unknown"
+        }
+        
+        try:
+            if os.path.exists(file_path):
+                info["exists"] = True
+                info["readable"] = os.access(file_path, os.R_OK)
+                info["file_size_bytes"] = os.path.getsize(file_path)
+                
+                if info["readable"] and info["file_size_bytes"] > 0:
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as file:
+                            profile_data = json.load(file)
+                        
+                        info["format_version"] = self._get_format_version(profile_data)
+                        info["profile_name"] = profile_data.get("name")
+                        info["created_at"] = profile_data.get("created_at")
+                        info["modified_at"] = profile_data.get("modified_at")
+                        
+                        if "parameters" in profile_data and isinstance(profile_data["parameters"], dict):
+                            info["parameter_count"] = len(profile_data["parameters"])
+                        
+                        # Quick validation
+                        validation_result = self._validate_profile_data(profile_data)
+                        if validation_result.is_valid:
+                            info["validation_status"] = "valid"
+                        elif validation_result.errors:
+                            info["validation_status"] = "invalid"
+                        else:
+                            info["validation_status"] = "warnings"
+                            
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        info["validation_status"] = "invalid_format"
+                    except Exception:
+                        info["validation_status"] = "error"
+        
+        except Exception:
+            info["validation_status"] = "error"
+        
+        return info
+    
+    def list_profile_files(self, directory: str, recursive: bool = False) -> List[Dict[str, Any]]:
+        """
+        List all profile files in a directory.
+        
+        Args:
+            directory: Directory to search for profile files
+            recursive: Whether to search subdirectories recursively
+            
+        Returns:
+            List[Dict[str, Any]]: List of profile file information dictionaries
+        """
+        profile_files = []
+        
+        try:
+            if not os.path.exists(directory):
+                return profile_files
+            
+            if recursive:
+                for root, dirs, files in os.walk(directory):
+                    for file in files:
+                        if file.endswith(self.PROFILE_EXTENSION):
+                            file_path = os.path.join(root, file)
+                            profile_info = self.get_profile_info(file_path)
+                            profile_files.append(profile_info)
+            else:
+                for file in os.listdir(directory):
+                    if file.endswith(self.PROFILE_EXTENSION):
+                        file_path = os.path.join(directory, file)
+                        if os.path.isfile(file_path):
+                            profile_info = self.get_profile_info(file_path)
+                            profile_files.append(profile_info)
+        
+        except Exception as e:
+            self.logger.error(f"Error listing profile files in {directory}: {str(e)}")
+        
+        return profile_files
+    
+    def _ensure_profile_extension(self, file_path: str) -> str:
+        """Ensure file path has the correct profile extension."""
+        if not file_path.endswith(self.PROFILE_EXTENSION):
+            return file_path + self.PROFILE_EXTENSION
+        return file_path
+    
+    def _create_backup(self, file_path: str) -> OperationResult:
+        """Create a backup of an existing profile file."""
+        try:
+            if not os.path.exists(file_path):
+                return OperationResult(
+                    operation_type="create_backup",
+                    success=False,
+                    error_message="File does not exist"
+                )
+            
+            # Create backup directory
+            directory = os.path.dirname(file_path)
+            backup_dir = os.path.join(directory, self.BACKUP_DIR)
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # Generate backup filename with timestamp
+            filename = os.path.basename(file_path)
+            name, ext = os.path.splitext(filename)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"{name}_backup_{timestamp}{ext}"
+            backup_path = os.path.join(backup_dir, backup_filename)
+            
+            # Copy file to backup location
+            shutil.copy2(file_path, backup_path)
+            
+            return OperationResult(
+                operation_type="create_backup",
+                success=True,
+                message=f"Backup created at {backup_path}",
+                details={"backup_path": backup_path}
+            )
+            
+        except Exception as e:
+            return OperationResult(
+                operation_type="create_backup",
+                success=False,
+                error_message=f"Backup creation failed: {str(e)}"
+            )
+    
+    def _verify_saved_file(self, file_path: str, original_profile: UniversalProfile) -> OperationResult:
+        """Verify that a saved file can be loaded and matches the original profile."""
+        try:
+            # Try to load the saved file
+            with open(file_path, 'r', encoding='utf-8') as file:
+                saved_data = json.load(file)
+            
+            # Basic structure validation
+            validation_result = self._validate_profile_data(saved_data)
+            if not validation_result.is_valid:
+                return OperationResult(
+                    operation_type="verify_file",
+                    success=False,
+                    error_message=f"Saved file validation failed: {'; '.join(validation_result.errors)}"
+                )
+            
+            # Create profile from saved data and compare key fields
+            loaded_profile = UniversalProfile.from_dict(saved_data)
+            
+            if loaded_profile.name != original_profile.name:
+                return OperationResult(
+                    operation_type="verify_file",
+                    success=False,
+                    error_message="Profile name mismatch after save"
+                )
+            
+            if len(loaded_profile.parameters) != len(original_profile.parameters):
+                return OperationResult(
+                    operation_type="verify_file",
+                    success=False,
+                    error_message="Parameter count mismatch after save"
+                )
+            
+            return OperationResult(
+                operation_type="verify_file",
+                success=True,
+                message="File verification successful"
+            )
+            
+        except Exception as e:
+            return OperationResult(
+                operation_type="verify_file",
+                success=False,
+                error_message=f"File verification error: {str(e)}"
+            )
+    
+    def _validate_profile_data(self, profile_data: Dict[str, Any]) -> ValidationResult:
+        """Validate the structure of profile data."""
+        result = ValidationResult(is_valid=True)
+        
+        if not isinstance(profile_data, dict):
+            result.add_error("Profile data must be a dictionary")
+            return result
+        
+        # Check required top-level fields
+        required_fields = ["name", "version", "created_at", "modified_at", "metadata", "parameters"]
+        for field in required_fields:
+            if field not in profile_data:
+                result.add_error(f"Missing required field: {field}")
+        
+        # Validate field types
+        if "name" in profile_data and not isinstance(profile_data["name"], str):
+            result.add_error("Profile name must be a string")
+        
+        if "version" in profile_data and not isinstance(profile_data["version"], str):
+            result.add_error("Profile version must be a string")
+        
+        if "metadata" in profile_data and not isinstance(profile_data["metadata"], dict):
+            result.add_error("Profile metadata must be a dictionary")
+        
+        if "parameters" in profile_data and not isinstance(profile_data["parameters"], dict):
+            result.add_error("Profile parameters must be a dictionary")
+        
+        # Validate timestamp formats
+        for timestamp_field in ["created_at", "modified_at"]:
+            if timestamp_field in profile_data:
+                try:
+                    datetime.fromisoformat(profile_data[timestamp_field])
+                except (ValueError, TypeError):
+                    result.add_error(f"Invalid timestamp format for {timestamp_field}")
+        
+        return result
+    
+    def _get_format_version(self, profile_data: Dict[str, Any]) -> str:
+        """Extract format version from profile data."""
+        # Check file metadata first
+        if "_file_metadata" in profile_data:
+            file_metadata = profile_data["_file_metadata"]
+            if isinstance(file_metadata, dict) and "file_format_version" in file_metadata:
+                return file_metadata["file_format_version"]
+        
+        # Check profile metadata
+        if "metadata" in profile_data:
+            metadata = profile_data["metadata"]
+            if isinstance(metadata, dict) and "profile_format_version" in metadata:
+                return metadata["profile_format_version"]
+        
+        # Default to version 1.0 if not found
+        return "1.0"
+    
+    def _migrate_profile_data(self, profile_data: Dict[str, Any], from_version: str) -> OperationResult:
+        """
+        Migrate profile data from an older format version to the current version.
+        
+        Args:
+            profile_data: Profile data to migrate
+            from_version: Source format version
+            
+        Returns:
+            OperationResult: Migration result with migrated data
+        """
+        try:
+            migrated_data = profile_data.copy()
+            migration_actions = []
+            
+            # Migration logic for different versions
+            if from_version == "1.0":
+                # Already current version, no migration needed
+                pass
+            else:
+                # Future migration logic would go here
+                # For now, we only support version 1.0
+                migration_actions.append(f"No migration needed from version {from_version}")
+            
+            # Update format version in metadata
+            if "metadata" not in migrated_data:
+                migrated_data["metadata"] = {}
+            
+            if not isinstance(migrated_data["metadata"], dict):
+                migrated_data["metadata"] = {}
+            
+            migrated_data["metadata"]["profile_format_version"] = self.CURRENT_FORMAT_VERSION
+            
+            # Add file metadata
+            file_metadata = {
+                "file_format_version": self.CURRENT_FORMAT_VERSION,
+                "migrated_at": datetime.now().isoformat(),
+                "migrated_from_version": from_version,
+                "migration_actions": migration_actions
+            }
+            migrated_data["_file_metadata"] = file_metadata
+            
+            # Update modified timestamp
+            migrated_data["modified_at"] = datetime.now().isoformat()
+            
+            return OperationResult(
+                operation_type="migrate_profile_data",
+                success=True,
+                message=f"Profile data migrated from version {from_version} to {self.CURRENT_FORMAT_VERSION}",
+                details={
+                    "migrated_data": migrated_data,
+                    "migration_actions": migration_actions,
+                    "from_version": from_version,
+                    "to_version": self.CURRENT_FORMAT_VERSION
+                }
+            )
+            
+        except Exception as e:
+            return OperationResult(
+                operation_type="migrate_profile_data",
+                success=False,
+                error_message=f"Migration failed: {str(e)}"
+            )
+</document_content>
+</document>
+<document index="64">
+<source>.\services\profile_log_analyzer.py</source>
+<document_content>
+"""
+Profile Log Analyzer
+
+This service provides tools for analyzing profile operation logs to identify
+common issues, performance patterns, and troubleshooting insights.
+"""
+
+import json
+import re
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Tuple
+from pathlib import Path
+from collections import defaultdict, Counter
+from dataclasses import dataclass
+import logging
+
+
+@dataclass
+class LogAnalysisResult:
+    """Result of log analysis."""
+    analysis_timestamp: datetime
+    time_period: str
+    total_entries: int
+    error_count: int
+    warning_count: int
+    common_issues: List[Dict[str, Any]]
+    performance_insights: Dict[str, Any]
+    recommendations: List[str]
+
+
+@dataclass
+class CommonIssue:
+    """Represents a common issue found in logs."""
+    issue_type: str
+    description: str
+    frequency: int
+    first_occurrence: datetime
+    last_occurrence: datetime
+    affected_operations: List[str]
+    suggested_solution: str
+    severity: str  # 'low', 'medium', 'high', 'critical'
+
+
+class ProfileLogAnalyzer:
+    """
+    Analyzes profile operation logs to identify patterns, issues, and performance insights.
+    """
+    
+    def __init__(self, log_directory: str = "logs"):
+        """
+        Initialize the log analyzer.
+        
+        Args:
+            log_directory: Directory containing log files
+        """
+        self.log_directory = Path(log_directory)
+        self.logger = logging.getLogger(__name__)
+        
+        # Define common error patterns
+        self._error_patterns = {
+            'file_not_found': {
+                'pattern': r'FileNotFoundError|No such file or directory',
+                'description': 'Profile file not found',
+                'severity': 'high',
+                'solution': 'Verify file path exists and is accessible'
+            },
+            'permission_denied': {
+                'pattern': r'PermissionError|Permission denied',
+                'description': 'File permission issues',
+                'severity': 'high',
+                'solution': 'Check file permissions and user access rights'
+            },
+            'invalid_format': {
+                'pattern': r'Invalid profile format|Malformed profile|ConfigParser.*Error',
+                'description': 'Invalid profile file format',
+                'severity': 'medium',
+                'solution': 'Validate profile file structure and content'
+            },
+            'validation_failure': {
+                'pattern': r'VALIDATION_FAILURE|Validation failed',
+                'description': 'Profile validation errors',
+                'severity': 'medium',
+                'solution': 'Review parameter values and ranges'
+            },
+            'memory_error': {
+                'pattern': r'MemoryError|Out of memory',
+                'description': 'Memory allocation issues',
+                'severity': 'critical',
+                'solution': 'Check available system memory and file sizes'
+            },
+            'timeout_error': {
+                'pattern': r'TimeoutError|Operation timed out',
+                'description': 'Operation timeout',
+                'severity': 'medium',
+                'solution': 'Check system performance and network connectivity'
+            },
+            'encoding_error': {
+                'pattern': r'UnicodeDecodeError|Encoding error',
+                'description': 'File encoding issues',
+                'severity': 'medium',
+                'solution': 'Ensure profile files use UTF-8 encoding'
+            },
+            'device_communication': {
+                'pattern': r'Device not responding|Communication error|Serial.*Error',
+                'description': 'Device communication problems',
+                'severity': 'high',
+                'solution': 'Check device connection and communication settings'
+            }
+        }
+        
+        # Performance thresholds
+        self._performance_thresholds = {
+            'slow_operation_ms': 5000,  # 5 seconds
+            'very_slow_operation_ms': 10000,  # 10 seconds
+            'high_memory_usage_mb': 100,  # 100 MB
+            'high_cpu_usage_percent': 80  # 80%
+        }
+    
+    def analyze_logs(self, hours: int = 24) -> LogAnalysisResult:
+        """
+        Perform comprehensive log analysis.
+        
+        Args:
+            hours: Number of hours to analyze
+            
+        Returns:
+            Analysis results
+        """
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        
+        # Analyze different log files
+        operation_logs = self._analyze_operation_logs(cutoff_time)
+        performance_logs = self._analyze_performance_logs(cutoff_time)
+        error_logs = self._analyze_error_logs(cutoff_time)
+        
+        # Identify common issues
+        common_issues = self._identify_common_issues(operation_logs, error_logs)
+        
+        # Generate performance insights
+        performance_insights = self._generate_performance_insights(performance_logs)
+        
+        # Generate recommendations
+        recommendations = self._generate_recommendations(common_issues, performance_insights)
+        
+        return LogAnalysisResult(
+            analysis_timestamp=datetime.now(),
+            time_period=f"{hours} hours",
+            total_entries=len(operation_logs) + len(performance_logs) + len(error_logs),
+            error_count=len(error_logs),
+            warning_count=len([log for log in operation_logs if 'WARNING' in log.get('level', '')]),
+            common_issues=[self._issue_to_dict(issue) for issue in common_issues],
+            performance_insights=performance_insights,
+            recommendations=recommendations
+        )
+    
+    def _analyze_operation_logs(self, cutoff_time: datetime) -> List[Dict[str, Any]]:
+        """Analyze profile operation logs."""
+        log_file = self.log_directory / 'profile_operations.log'
+        if not log_file.exists():
+            return []
+        
+        logs = []
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        # Parse log line
+                        parts = line.strip().split(' - ', 3)
+                        if len(parts) >= 4:
+                            timestamp_str = parts[0]
+                            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
+                            
+                            if timestamp >= cutoff_time:
+                                logs.append({
+                                    'timestamp': timestamp,
+                                    'logger': parts[1],
+                                    'level': parts[2],
+                                    'message': parts[3]
+                                })
+                    except Exception:
+                        continue  # Skip malformed lines
+        except Exception as e:
+            self.logger.warning(f"Failed to read operation logs: {e}")
+        
+        return logs
+    
+    def _analyze_performance_logs(self, cutoff_time: datetime) -> List[Dict[str, Any]]:
+        """Analyze performance logs."""
+        log_file = self.log_directory / 'profile_performance.log'
+        if not log_file.exists():
+            return []
+        
+        logs = []
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        data = json.loads(line.strip())
+                        timestamp = datetime.fromisoformat(data['timestamp'])
+                        
+                        if timestamp >= cutoff_time:
+                            logs.append(data)
+                    except Exception:
+                        continue  # Skip malformed lines
+        except Exception as e:
+            self.logger.warning(f"Failed to read performance logs: {e}")
+        
+        return logs
+    
+    def _analyze_error_logs(self, cutoff_time: datetime) -> List[Dict[str, Any]]:
+        """Analyze error logs."""
+        log_file = self.log_directory / 'profile_errors.log'
+        if not log_file.exists():
+            return []
+        
+        logs = []
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        # Parse log line
+                        parts = line.strip().split(' - ', 3)
+                        if len(parts) >= 4:
+                            timestamp_str = parts[0]
+                            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
+                            
+                            if timestamp >= cutoff_time:
+                                logs.append({
+                                    'timestamp': timestamp,
+                                    'logger': parts[1],
+                                    'level': parts[2],
+                                    'message': parts[3]
+                                })
+                    except Exception:
+                        continue  # Skip malformed lines
+        except Exception as e:
+            self.logger.warning(f"Failed to read error logs: {e}")
+        
+        return logs
+    
+    def _identify_common_issues(self, operation_logs: List[Dict[str, Any]], 
+                              error_logs: List[Dict[str, Any]]) -> List[CommonIssue]:
+        """Identify common issues from logs."""
+        issues = []
+        all_logs = operation_logs + error_logs
+        
+        for issue_type, pattern_info in self._error_patterns.items():
+            pattern = re.compile(pattern_info['pattern'], re.IGNORECASE)
+            matching_logs = []
+            affected_operations = set()
+            
+            for log in all_logs:
+                message = log.get('message', '')
+                if pattern.search(message):
+                    matching_logs.append(log)
+                    
+                    # Extract operation ID if present
+                    op_match = re.search(r'OPERATION_\w+: (\w+_\d+)', message)
+                    if op_match:
+                        affected_operations.add(op_match.group(1))
+            
+            if matching_logs:
+                issues.append(CommonIssue(
+                    issue_type=issue_type,
+                    description=pattern_info['description'],
+                    frequency=len(matching_logs),
+                    first_occurrence=min(log['timestamp'] for log in matching_logs),
+                    last_occurrence=max(log['timestamp'] for log in matching_logs),
+                    affected_operations=list(affected_operations),
+                    suggested_solution=pattern_info['solution'],
+                    severity=pattern_info['severity']
+                ))
+        
+        # Sort by frequency (most common first)
+        issues.sort(key=lambda x: x.frequency, reverse=True)
+        return issues
+    
+    def _generate_performance_insights(self, performance_logs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate performance insights from logs."""
+        if not performance_logs:
+            return {'message': 'No performance data available'}
+        
+        # Calculate statistics
+        durations = [log.get('duration_ms', 0) for log in performance_logs if log.get('duration_ms')]
+        memory_usage = [log.get('memory_usage_mb', 0) for log in performance_logs if log.get('memory_usage_mb') is not None]
+        cpu_usage = [log.get('cpu_usage_percent', 0) for log in performance_logs if log.get('cpu_usage_percent') is not None]
+        
+        # Operation type analysis
+        operation_stats = defaultdict(list)
+        for log in performance_logs:
+            op_type = log.get('operation_type', 'unknown')
+            if log.get('duration_ms'):
+                operation_stats[op_type].append(log['duration_ms'])
+        
+        # Identify slow operations
+        slow_operations = [
+            log for log in performance_logs
+            if log.get('duration_ms', 0) > self._performance_thresholds['slow_operation_ms']
+        ]
+        
+        # Identify high resource usage
+        high_memory_ops = [
+            log for log in performance_logs
+            if (log.get('memory_usage_mb') or 0) > self._performance_thresholds['high_memory_usage_mb']
+        ]
+        
+        high_cpu_ops = [
+            log for log in performance_logs
+            if (log.get('cpu_usage_percent') or 0) > self._performance_thresholds['high_cpu_usage_percent']
+        ]
+        
+        insights = {
+            'total_operations': len(performance_logs),
+            'average_duration_ms': round(sum(durations) / len(durations), 2) if durations else 0,
+            'median_duration_ms': round(sorted(durations)[len(durations)//2], 2) if durations else 0,
+            'max_duration_ms': max(durations) if durations else 0,
+            'min_duration_ms': min(durations) if durations else 0,
+            'slow_operations_count': len(slow_operations),
+            'slow_operations_percentage': round(len(slow_operations) / len(performance_logs) * 100, 2),
+            'average_memory_usage_mb': round(sum(memory_usage) / len(memory_usage), 2) if memory_usage else 0,
+            'max_memory_usage_mb': max(memory_usage) if memory_usage else 0,
+            'high_memory_operations_count': len(high_memory_ops),
+            'average_cpu_usage_percent': round(sum(cpu_usage) / len(cpu_usage), 2) if cpu_usage else 0,
+            'max_cpu_usage_percent': max(cpu_usage) if cpu_usage else 0,
+            'high_cpu_operations_count': len(high_cpu_ops),
+            'operation_type_performance': {}
+        }
+        
+        # Add per-operation-type statistics
+        for op_type, durations in operation_stats.items():
+            insights['operation_type_performance'][op_type] = {
+                'count': len(durations),
+                'average_duration_ms': round(sum(durations) / len(durations), 2),
+                'max_duration_ms': max(durations),
+                'min_duration_ms': min(durations)
+            }
+        
+        return insights
+    
+    def _generate_recommendations(self, common_issues: List[CommonIssue], 
+                                performance_insights: Dict[str, Any]) -> List[str]:
+        """Generate recommendations based on analysis."""
+        recommendations = []
+        
+        # Issue-based recommendations
+        critical_issues = [issue for issue in common_issues if issue.severity == 'critical']
+        if critical_issues:
+            recommendations.append(
+                f"CRITICAL: Address {len(critical_issues)} critical issues immediately, "
+                f"including: {', '.join(issue.description for issue in critical_issues[:3])}"
+            )
+        
+        high_issues = [issue for issue in common_issues if issue.severity == 'high']
+        if high_issues:
+            recommendations.append(
+                f"HIGH PRIORITY: Resolve {len(high_issues)} high-priority issues, "
+                f"most common: {high_issues[0].description} ({high_issues[0].frequency} occurrences)"
+            )
+        
+        # Performance-based recommendations
+        if performance_insights.get('slow_operations_percentage', 0) > 20:
+            recommendations.append(
+                f"PERFORMANCE: {performance_insights['slow_operations_percentage']:.1f}% of operations "
+                f"are slow (>{self._performance_thresholds['slow_operation_ms']}ms). "
+                f"Consider optimizing profile processing logic."
+            )
+        
+        if performance_insights.get('high_memory_operations_count', 0) > 0:
+            recommendations.append(
+                f"MEMORY: {performance_insights['high_memory_operations_count']} operations used "
+                f"high memory (>{self._performance_thresholds['high_memory_usage_mb']}MB). "
+                f"Review memory usage patterns and consider optimization."
+            )
+        
+        if performance_insights.get('high_cpu_operations_count', 0) > 0:
+            recommendations.append(
+                f"CPU: {performance_insights['high_cpu_operations_count']} operations used "
+                f"high CPU (>{self._performance_thresholds['high_cpu_usage_percent']}%). "
+                f"Consider background processing or optimization."
+            )
+        
+        # General recommendations
+        if not recommendations:
+            recommendations.append("System appears to be operating normally. Continue monitoring.")
+        
+        return recommendations
+    
+    def _issue_to_dict(self, issue: CommonIssue) -> Dict[str, Any]:
+        """Convert CommonIssue to dictionary."""
+        return {
+            'issue_type': issue.issue_type,
+            'description': issue.description,
+            'frequency': issue.frequency,
+            'first_occurrence': issue.first_occurrence.isoformat(),
+            'last_occurrence': issue.last_occurrence.isoformat(),
+            'affected_operations_count': len(issue.affected_operations),
+            'suggested_solution': issue.suggested_solution,
+            'severity': issue.severity
+        }
+    
+    def generate_report(self, hours: int = 24, output_file: str = None) -> str:
+        """
+        Generate a comprehensive analysis report.
+        
+        Args:
+            hours: Number of hours to analyze
+            output_file: Optional file to save report
+            
+        Returns:
+            Report content as string
+        """
+        analysis = self.analyze_logs(hours)
+        
+        report_lines = [
+            "=" * 80,
+            "PROFILE OPERATIONS LOG ANALYSIS REPORT",
+            "=" * 80,
+            f"Analysis Timestamp: {analysis.analysis_timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Time Period: {analysis.time_period}",
+            f"Total Log Entries: {analysis.total_entries}",
+            f"Error Count: {analysis.error_count}",
+            f"Warning Count: {analysis.warning_count}",
+            "",
+            "COMMON ISSUES",
+            "-" * 40
+        ]
+        
+        if analysis.common_issues:
+            for i, issue in enumerate(analysis.common_issues[:10], 1):  # Top 10 issues
+                report_lines.extend([
+                    f"{i}. {issue['description']} ({issue['severity'].upper()})",
+                    f"   Frequency: {issue['frequency']} occurrences",
+                    f"   First seen: {issue['first_occurrence']}",
+                    f"   Last seen: {issue['last_occurrence']}",
+                    f"   Solution: {issue['suggested_solution']}",
+                    ""
+                ])
+        else:
+            report_lines.append("No common issues identified.")
+        
+        report_lines.extend([
+            "",
+            "PERFORMANCE INSIGHTS",
+            "-" * 40
+        ])
+        
+        perf = analysis.performance_insights
+        if 'message' not in perf:
+            report_lines.extend([
+                f"Total Operations: {perf.get('total_operations', 0)}",

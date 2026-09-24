@@ -697,7 +697,13 @@ class ParameterSpecificationFactory:
                 print(f"DEBUG: Sending moving alert command with values: {param_values}")
                 # Format enabled correctly as boolean
                 enabled = bool(param_values.get('enabled', False))
-                radius = param_values.get('radius', 1000)
+                
+                # Garante que o radius seja sempre int, evitando o .0
+                try:
+                    radius = int(float(param_values.get('radius', 1000)))
+                except (ValueError, TypeError):
+                    radius = 1000
+                    
                 alert_type = param_values.get('alert_type', 'Apenas GPRS')
                 
                 # Format command
@@ -710,6 +716,11 @@ class ParameterSpecificationFactory:
                 print(f"DEBUG: Sending command: {command}")
                 if self.serial_service:
                     self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
+                    # ADICIONADO: Pop-up de sucesso!
+                    messagebox.showinfo(
+                        self.i18n_service.get("success", "Sucesso"),
+                        self.i18n_service.get("moving_alert_sent", "Alerta de movimento enviado com sucesso!")
+                    )
                 else:
                     print("ERROR: No serial service available to send command")
             elif param_name == 'motion_sensor_alert':

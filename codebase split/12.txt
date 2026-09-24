@@ -1,0 +1,4328 @@
+    
+    This class handles various parameter types including time parameters with units,
+    odometer readings, and hourmeter values from device responses with comprehensive
+    error handling and fallback mechanisms.
+    """
+    
+    def __init__(self):
+        """Initialize the ParameterProcessor."""
+        self.processing_errors = []
+        self.processing_warnings = []
+        self.failed_parameters = []
+        self.successful_parameters = []
+    
+    def safe_process_parameters(self, parameters: Dict[str, str], device_responses: Dict[str, str] = None) -> ProcessingSummary:
+        """
+        Safely process multiple parameters with comprehensive error handling.
+        
+        This method processes all parameters while ensuring that failures in individual
+        parameters don't affect the processing of others. It provides detailed feedback
+        about successes and failures.
+        
+        Args:
+            parameters: Dictionary of parameter names to raw values
+            device_responses: Optional raw device responses for context
+            
+        Returns:
+            ProcessingSummary with detailed results and error information
+            
+        Requirements: 5.1, 5.2, 5.3, 5.4, 5.5
+        """
+        # Reset processing state
+        self.processing_errors = []
+        self.processing_warnings = []
+        self.failed_parameters = []
+        self.successful_parameters = []
+        
+        processing_results = {}
+        warnings = []
+        errors = []
+        
+        # Time parameter names that need cleaning
+        time_parameter_names = {
+            'heartbeat_interval', 'report_interval', 'upload_interval', 'sleep_time',
+            'moving_time', 'stopped_time', 'moving_heartbeat', 'stopped_heartbeat',
+            'timeout', 'interval', 'delay', 'duration'
+        }
+        
+        for param_name, param_value in parameters.items():
+            try:
+                # Determine parameter type and process accordingly
+                param_name_lower = param_name.lower()
+                
+                if any(time_param in param_name_lower for time_param in time_parameter_names):
+                    result = self._safe_clean_time_parameter(param_name, param_value)
+                elif 'odometer' in param_name_lower or 'mileage' in param_name_lower:
+                    # Use device response if available for better processing
+                    response = self._find_relevant_response(param_name, device_responses) if device_responses else param_value
+                    result = self._safe_process_odometer_value(param_name, response or param_value)
+                elif 'hourmeter' in param_name_lower or 'acc_on' in param_name_lower or 'accont' in param_name_lower:
+                    # Use device response if available for better processing
+                    response = self._find_relevant_response(param_name, device_responses) if device_responses else param_value
+                    result = self._safe_process_hourmeter_value(param_name, response or param_value)
+                else:
+                    # For other parameters, just validate and clean basic formatting
+                    result = self._safe_clean_generic_parameter(param_name, param_value)
+                
+                processing_results[param_name] = result
+                
+                if result.success:
+                    self.successful_parameters.append(param_name)
+                else:
+                    self.failed_parameters.append(param_name)
+                    if result.error_severity == ErrorSeverity.ERROR:
+                        errors.append(f"{param_name}: {result.error_message}")
+                    elif result.error_severity == ErrorSeverity.WARNING:
+                        warnings.append(f"{param_name}: {result.error_message}")
+                        
+            except Exception as e:
+                # Handle unexpected errors during parameter processing
+                error_msg = f"Unexpected error processing parameter {param_name}: {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+                self.failed_parameters.append(param_name)
+                
+                # Create a failed result for this parameter
+                processing_results[param_name] = ProcessingResult(
+                    success=False,
+                    original_value=str(param_value) if param_value is not None else "",
+                    processed_value="",
+                    error_message=error_msg,
+                    error_severity=ErrorSeverity.ERROR,
+                    parameter_name=param_name
+                )
+        
+        # Create summary
+        summary = ProcessingSummary(
+            total_parameters=len(parameters),
+            successful_parameters=len(self.successful_parameters),
+            failed_parameters=len(self.failed_parameters),
+            warnings=warnings,
+            errors=errors,
+            processing_results=processing_results
+        )
+        
+        # Log summary information
+        if summary.failed_parameters > 0:
+            logger.warning(f"Parameter processing completed with {summary.failed_parameters} failures out of {summary.total_parameters} parameters")
+        else:
+            logger.info(f"Successfully processed all {summary.total_parameters} parameters")
+            
+        return summary
+    
+    def _safe_clean_time_parameter(self, param_name: str, raw_value: str) -> ProcessingResult:
+        """
+        Safely clean a time parameter with error handling.
+        
+        Args:
+            param_name: Name of the parameter being processed
+            raw_value: Raw parameter value
+            
+        Returns:
+            ProcessingResult with success status and processed value
+        """
+        try:
+            if not raw_value or not isinstance(raw_value, str):
+                return ProcessingResult(
+                    success=True,
+                    original_value=str(raw_value) if raw_value is not None else "",
+                    processed_value="",
+                    parameter_name=param_name
+                )
+            
+            clean_value = self.extract_numeric_value(raw_value)
+            
+            # Log the cleaning operation for debugging
+            if clean_value != raw_value:
+                logger.debug(f"Cleaned time parameter {param_name}: '{raw_value}' -> '{clean_value}'")
+            
+            return ProcessingResult(
+                success=True,
+                original_value=raw_value,
+                processed_value=clean_value,
+                parameter_name=param_name
+            )
+            
+        except Exception as e:
+            error_msg = f"Failed to clean time parameter: {str(e)}"
+            logger.warning(f"Parameter {param_name}: {error_msg}")
+            
+            return ProcessingResult(
+                success=False,
+                original_value=raw_value,
+                processed_value=raw_value,  # Fallback to original value
+                error_message=error_msg,
+                error_severity=ErrorSeverity.WARNING,
+                parameter_name=param_name
+            )
+    
+    def _safe_process_odometer_value(self, param_name: str, raw_response: str) -> ProcessingResult:
+        """
+        Safely process an odometer value with error handling.
+        
+        Args:
+            param_name: Name of the parameter being processed
+            raw_response: Raw device response or parameter value
+            
+        Returns:
+            ProcessingResult with success status and processed value
+        """
+        try:
+            if not raw_response or not isinstance(raw_response, str):
+                return ProcessingResult(
+                    success=True,
+                    original_value=str(raw_response) if raw_response is not None else "",
+                    processed_value="",
+                    parameter_name=param_name
+                )
+            
+            processed_value = self._process_odometer_value_internal(raw_response)
+            
+            if processed_value:
+                logger.debug(f"Processed odometer parameter {param_name}: '{raw_response}' -> '{processed_value}'")
+                return ProcessingResult(
+                    success=True,
+                    original_value=raw_response,
+                    processed_value=processed_value,
+                    parameter_name=param_name
+                )
+            else:
+                # No value extracted, but not necessarily an error
+                warning_msg = "Could not extract odometer value, using original"
+                return ProcessingResult(
+                    success=True,
+                    original_value=raw_response,
+                    processed_value=raw_response,  # Fallback to original
+                    error_message=warning_msg,
+                    error_severity=ErrorSeverity.WARNING,
+                    parameter_name=param_name
+                )
+                
+        except Exception as e:
+            error_msg = f"Failed to process odometer value: {str(e)}"
+            logger.warning(f"Parameter {param_name}: {error_msg}")
+            
+            return ProcessingResult(
+                success=False,
+                original_value=raw_response,
+                processed_value=raw_response,  # Fallback to original value
+                error_message=error_msg,
+                error_severity=ErrorSeverity.WARNING,
+                parameter_name=param_name
+            )
+    
+    def _safe_process_hourmeter_value(self, param_name: str, raw_response: str) -> ProcessingResult:
+        """
+        Safely process a hourmeter value with error handling.
+        
+        Args:
+            param_name: Name of the parameter being processed
+            raw_response: Raw device response or parameter value
+            
+        Returns:
+            ProcessingResult with success status and processed value
+        """
+        try:
+            if not raw_response or not isinstance(raw_response, str):
+                return ProcessingResult(
+                    success=True,
+                    original_value=str(raw_response) if raw_response is not None else "",
+                    processed_value="",
+                    parameter_name=param_name
+                )
+            
+            processed_value = self._process_hourmeter_value_internal(raw_response)
+            
+            if processed_value:
+                logger.debug(f"Processed hourmeter parameter {param_name}: '{raw_response}' -> '{processed_value}'")
+                return ProcessingResult(
+                    success=True,
+                    original_value=raw_response,
+                    processed_value=processed_value,
+                    parameter_name=param_name
+                )
+            else:
+                # No value extracted, but not necessarily an error
+                warning_msg = "Could not extract hourmeter value, using original"
+                return ProcessingResult(
+                    success=True,
+                    original_value=raw_response,
+                    processed_value=raw_response,  # Fallback to original
+                    error_message=warning_msg,
+                    error_severity=ErrorSeverity.WARNING,
+                    parameter_name=param_name
+                )
+                
+        except Exception as e:
+            error_msg = f"Failed to process hourmeter value: {str(e)}"
+            logger.warning(f"Parameter {param_name}: {error_msg}")
+            
+            return ProcessingResult(
+                success=False,
+                original_value=raw_response,
+                processed_value=raw_response,  # Fallback to original value
+                error_message=error_msg,
+                error_severity=ErrorSeverity.WARNING,
+                parameter_name=param_name
+            )
+    
+    def _safe_clean_generic_parameter(self, param_name: str, raw_value: str) -> ProcessingResult:
+        """
+        Safely clean a generic parameter with basic validation.
+        
+        Args:
+            param_name: Name of the parameter being processed
+            raw_value: Raw parameter value
+            
+        Returns:
+            ProcessingResult with success status and processed value
+        """
+        try:
+            if raw_value is None:
+                return ProcessingResult(
+                    success=True,
+                    original_value="",
+                    processed_value="",
+                    parameter_name=param_name
+                )
+            
+            # Basic cleaning: strip whitespace and handle empty values
+            cleaned_value = str(raw_value).strip()
+            
+            return ProcessingResult(
+                success=True,
+                original_value=str(raw_value),
+                processed_value=cleaned_value,
+                parameter_name=param_name
+            )
+            
+        except Exception as e:
+            error_msg = f"Failed to clean generic parameter: {str(e)}"
+            logger.warning(f"Parameter {param_name}: {error_msg}")
+            
+            return ProcessingResult(
+                success=False,
+                original_value=str(raw_value) if raw_value is not None else "",
+                processed_value=str(raw_value) if raw_value is not None else "",
+                error_message=error_msg,
+                error_severity=ErrorSeverity.WARNING,
+                parameter_name=param_name
+            )
+    
+    def _find_relevant_response(self, param_name: str, device_responses: Dict[str, str]) -> Optional[str]:
+        """
+        Find the most relevant device response for a given parameter.
+        
+        Args:
+            param_name: Name of the parameter
+            device_responses: Dictionary of device responses
+            
+        Returns:
+            Most relevant response string or None
+        """
+        if not device_responses:
+            return None
+            
+        param_lower = param_name.lower()
+        
+        # Map parameter types to likely response keys
+        if 'odometer' in param_lower or 'mileage' in param_lower:
+            for key in ['ODOMETER', 'MILEAGE', 'ATSMS:MILEAGE#', 'STATUS']:
+                if key in device_responses:
+                    return device_responses[key]
+        elif 'hourmeter' in param_lower or 'acc_on' in param_lower or 'accont' in param_lower:
+            for key in ['HOURMETER', 'ACCONT', 'ATSMS:ACCONT#', 'STATUS']:
+                if key in device_responses:
+                    return device_responses[key]
+        
+        return None
+    
+    def clean_time_parameter(self, raw_value: str) -> str:
+        """
+        Clean time parameter values by extracting only numeric portions.
+        
+        Handles various time parameter formats:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "Moving Time: 30s" -> "30"
+        - "180" -> "180" (already clean)
+        
+        Args:
+            raw_value (str): Raw time parameter value from device
+            
+        Returns:
+            str: Clean numeric value, or empty string if extraction fails
+            
+        Requirements: 1.1, 1.2, 1.3
+        """
+        result = self._safe_clean_time_parameter("time_parameter", raw_value)
+        return result.processed_value
+    
+    def extract_numeric_value(self, raw_value: str) -> str:
+        """
+        Extract numeric value from formatted parameter strings.
+        
+        Handles various formats:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "Moving Time: 30s" -> "30"
+        - "Value=45" -> "45"
+        - "180" -> "180"
+        
+        Args:
+            raw_value (str): Raw parameter value
+            
+        Returns:
+            str: Extracted numeric value, or original value if no extraction needed
+            
+        Requirements: 1.2, 1.3
+        """
+        if not raw_value or not isinstance(raw_value, str):
+            return ""
+        
+        # Remove leading/trailing whitespace
+        value = raw_value.strip()
+        
+        # If already numeric, return as-is
+        if value.isdigit():
+            return value
+        
+        # Pattern to extract numbers from various formats
+        # This handles: "60s", "ACC OFF:120s", "Value=45", "Time: 30s", etc.
+        numeric_pattern = r'(\d+)'
+        
+        # Find all numeric values in the string
+        matches = re.findall(numeric_pattern, value)
+        
+        if matches:
+            # Return the last numeric value found (handles cases like "ACC OFF:120s")
+            return matches[-1]
+        
+        # If no numeric value found, return empty string
+        return ""
+    
+    def process_odometer_value(self, raw_response: str) -> str:
+        """
+        Extract odometer value from device response.
+        
+        Handles various odometer response formats:
+        - "MILEAGE=12345" -> "12345"
+        - "Cur Mileage Value:12345KM" -> "12345"
+        - "Odometer: 98765 km" -> "98765"
+        
+        Args:
+            raw_response (str): Raw device response containing odometer data
+            
+        Returns:
+            str: Extracted odometer value, or empty string if extraction fails
+            
+        Requirements: 3.2
+        """
+        result = self._safe_process_odometer_value("odometer", raw_response)
+        return result.processed_value
+    
+    def _process_odometer_value_internal(self, raw_response: str) -> str:
+        """
+        Internal method to extract odometer value from device response.
+        
+        Args:
+            raw_response (str): Raw device response containing odometer data
+            
+        Returns:
+            str: Extracted odometer value, or empty string if extraction fails
+        """
+        if not raw_response or not isinstance(raw_response, str):
+            return ""
+        
+        # Remove leading/trailing whitespace
+        response = raw_response.strip()
+        
+        # Pattern to match various odometer formats
+        # Handles: MILEAGE=12345, Cur Mileage Value:12345KM, Odometer: 98765 km
+        odometer_patterns = [
+            r'MILEAGE[=:](\d+)',
+            r'Cur\s+Mileage\s+Value[=:](\d+)',
+            r'Odometer[=:]?\s*(\d+)',
+            r'Mileage[=:]?\s*(\d+)',
+        ]
+        
+        for pattern in odometer_patterns:
+            match = re.search(pattern, response, re.IGNORECASE)
+            if match:
+                value = match.group(1)
+                logger.debug(f"Extracted odometer value: '{raw_response}' -> '{value}'")
+                return value
+        
+        # If no specific pattern matches, try to extract any numeric value
+        numeric_value = self.extract_numeric_value(response)
+        if numeric_value:
+            logger.debug(f"Extracted odometer value (fallback): '{raw_response}' -> '{numeric_value}'")
+            return numeric_value
+        
+        logger.warning(f"Could not extract odometer value from: '{raw_response}'")
+        return ""
+    
+    def process_hourmeter_value(self, raw_response: str) -> str:
+        """
+        Extract hourmeter value from device response.
+        
+        Handles various hourmeter response formats:
+        - "ACCONT=5678" -> "5678"
+        - "Get ACC ON Time:5678 Minute" -> "5678"
+        - "Engine Hours: 1234 hours" -> "1234"
+        
+        Args:
+            raw_response (str): Raw device response containing hourmeter data
+            
+        Returns:
+            str: Extracted hourmeter value, or empty string if extraction fails
+            
+        Requirements: 4.2
+        """
+        result = self._safe_process_hourmeter_value("hourmeter", raw_response)
+        return result.processed_value
+    
+    def _process_hourmeter_value_internal(self, raw_response: str) -> str:
+        """
+        Internal method to extract hourmeter value from device response.
+        
+        Args:
+            raw_response (str): Raw device response containing hourmeter data
+            
+        Returns:
+            str: Extracted hourmeter value, or empty string if extraction fails
+        """
+        if not raw_response or not isinstance(raw_response, str):
+            return ""
+        
+        # Remove leading/trailing whitespace
+        response = raw_response.strip()
+        
+        # Pattern to match various hourmeter formats
+        # Handles: ACCONT=5678, Get ACC ON Time:5678 Minute, Engine Hours: 1234 hours
+        hourmeter_patterns = [
+            r'ACCONT[=:](\d+)',
+            r'Get\s+ACC\s+ON\s+Time[=:](\d+)',
+            r'Engine\s+Hours[=:]?\s*(\d+)',
+            r'ACC\s+ON\s+Time[=:]?\s*(\d+)',
+            r'Hourmeter[=:]?\s*(\d+)',
+        ]
+        
+        for pattern in hourmeter_patterns:
+            match = re.search(pattern, response, re.IGNORECASE)
+            if match:
+                value = match.group(1)
+                logger.debug(f"Extracted hourmeter value: '{raw_response}' -> '{value}'")
+                return value
+        
+        # If no specific pattern matches, try to extract any numeric value
+        numeric_value = self.extract_numeric_value(response)
+        if numeric_value:
+            logger.debug(f"Extracted hourmeter value (fallback): '{raw_response}' -> '{numeric_value}'")
+            return numeric_value
+        
+        logger.warning(f"Could not extract hourmeter value from: '{raw_response}'")
+        return ""
+    
+    def get_processing_summary(self) -> Dict[str, any]:
+        """
+        Get a summary of the last parameter processing operation.
+        
+        Returns:
+            Dictionary containing processing statistics and error information
+        """
+        return {
+            'successful_parameters': len(self.successful_parameters),
+            'failed_parameters': len(self.failed_parameters),
+            'total_parameters': len(self.successful_parameters) + len(self.failed_parameters),
+            'processing_errors': self.processing_errors.copy(),
+            'processing_warnings': self.processing_warnings.copy(),
+            'failed_parameter_names': self.failed_parameters.copy(),
+            'successful_parameter_names': self.successful_parameters.copy()
+        }
+</document_content>
+</document>
+<document index="55">
+<source>.\services\parameter_response_parser.py</source>
+<document_content>
+"""
+Parameter Response Parser for LT32 PRO Configurator
+
+This module provides comprehensive response parsing for all parameter types
+as defined in the Parameter UI List specification. It handles different response
+formats, extracts multiple values from complex responses, and provides detailed
+error handling for invalid or unexpected response formats.
+"""
+
+import re
+import logging
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Union, Tuple
+from datetime import datetime
+from services.parameter_specification import (
+    get_parameter_specification, 
+    get_command_value_mapping,
+    PARAMETER_SPECIFICATION
+)
+
+
+@dataclass
+class ParsedResponse:
+    """Result of parsing a device response."""
+    parameter_name: str
+    command: str
+    success: bool
+    parsed_values: Dict[str, Any]
+    raw_response: str
+    error_message: Optional[str]
+    timestamp: datetime
+
+
+@dataclass
+class ParseError:
+    """Details of a parsing error."""
+    parameter_name: str
+    raw_response: str
+    expected_pattern: str
+    error_type: str
+    error_message: str
+    timestamp: datetime
+
+
+class ParameterResponseParser:
+    """
+    Parser for device responses to parameter read commands.
+    
+    This class handles parsing of all parameter response formats according to
+    the Parameter UI List specification, including complex multi-value responses
+    and conditional parameter parsing.
+    """
+
+    def __init__(self):
+        """Initialize the parameter response parser."""
+        self.logger = logging.getLogger(__name__)
+        self._init_response_patterns()
+        self._init_value_mappings()
+
+    def _init_response_patterns(self) -> None:
+        """Initialize regex patterns for parsing device responses based on specification."""
+        self.response_patterns = {
+            # Network Parameters
+            'apn_settings': {
+                'pattern': r'APN:([^,]*),([^,]*),([^#]*)',
+                'fields': ['apn', 'user', 'password'],
+                'description': 'APN configuration response'
+            },
+            'server_settings': {
+                'pattern': r'SERVER:(\d+),([^,]*),(\d+),(\d+)',
+                'fields': ['type', 'address', 'port', 'protocol'],
+                'description': 'Server configuration response',
+                'post_process': self._process_server_response
+            },
+            
+            # Time Parameters
+            'report_intervals': {
+                'pattern': r'TIMER:\s*(\d+)\s*,\s*(\d+)|TIMER\s+ACC\s+ON:\s*(\d+)s?\s*,\s*ACC\s+OFF:\s*(\d+)s?',
+                'fields': ['moving_time', 'stopped_time'],
+                'description': 'Report interval configuration response',
+                'post_process': self._process_timer_response
+            },
+            'heartbeat_intervals': {
+                'pattern': r'HBT:(\d+),(\d+)|HBT ACC ON:(\d+)s,ACC OFF:(\d+)s',
+                'fields': ['moving_heartbeat', 'stopped_heartbeat'],
+                'description': 'Heartbeat interval configuration response',
+                'post_process': self._process_hbt_response
+            },
+            
+            # Service Parameters
+            'protocol': {
+                'pattern': r'GT06SEL=(\d+)',
+                'fields': ['protocol_value'],
+                'description': 'Protocol selection response',
+                'post_process': self._process_protocol_response
+            },
+            'tcp_ack': {
+                'pattern': r'POSBYACK=(\d+)',
+                'fields': ['ack_value'],
+                'description': 'TCP ACK configuration response',
+                'post_process': self._process_tcp_ack_response
+            },
+            
+            # Ignition Parameters (complex multi-command response)
+            'ignition_type': {
+                'pattern': r'ACCLINE=(\d+).*ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
+                'fields': ['accline', 'cfg_type', 'on_voltage', 'off_voltage'],
+                'description': 'Ignition type configuration response',
+                'post_process': self._process_ignition_response
+            },
+            
+            # Speed Parameters
+            'speed_alert': {
+                'pattern': r'SPEED:(ON|OFF)(?:,(\d+),(\d+),(\d+))?',
+                'fields': ['enabled_status', 'detection_time', 'speed_limit', 'alert_type'],
+                'description': 'Speed alert configuration response',
+                'post_process': self._process_speed_alert_response
+            },
+            'speed_buzzer': {
+                'pattern': r'SPD_LED_SHOW=(\d+)',
+                'fields': ['enabled'],
+                'description': 'Speed buzzer configuration response',
+                'post_process': self._process_boolean_response
+            },
+            
+            # Power Saving Parameters
+            'sleep_mode': {
+                'pattern': r'SLPDISCONNECT=(\d+)',
+                'fields': ['mode_value'],
+                'description': 'Sleep mode configuration response',
+                'post_process': self._process_sleep_mode_response
+            },
+            'sleep_time': {
+                'pattern': r'SLEEPT=(\d+)',
+                'fields': ['time_minutes'],
+                'description': 'Sleep time configuration response'
+            },
+            
+            # Angle Parameters
+            'angle_report': {
+                'pattern': r'ANGLEVALUE=(\d+)-(\d+)',
+                'fields': ['min_speed', 'angle_variation'],
+                'description': 'Angle report configuration response',
+                'post_process': self._process_angle_response
+            },
+            
+            # Battery Alert Parameters
+            'backup_battery_alert': {
+                'pattern': r'BATALM:(OFF|(\d+),(\d+))',
+                'fields': ['full_match', 'enabled', 'mode'],
+                'description': 'Backup battery alert configuration response',
+                'post_process': self._process_backup_battery_alert_response
+            },
+            'main_power_alert': {
+                'pattern': r'POWERALM:(\d+),(\d+),(\d+),(\d+)',
+                'fields': ['enabled', 'alert_type', 'detection_time', 'min_charge_time'],
+                'description': 'Main power alert configuration response',
+                'post_process': self._process_power_alert_response
+            },
+            
+            # Vibration Sensor Parameters
+            'vibration_sensitivity': {
+                'pattern': r'VIBL=(\d+)',
+                'fields': ['level'],
+                'description': 'Vibration sensitivity configuration response'
+            },
+            
+            # Jammer Detection Parameters
+            'jammer_detection': {
+                'pattern': r'JAMMER:(ON|OFF|\d+)(?:,(\d+))?',
+                'fields': ['enabled', 'mode'],
+                'description': 'Jammer detection configuration response',
+                'post_process': self._process_jammer_detection_response
+            },
+            'jammer_relay_action': {
+                'pattern': r'JAMRELAY:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)',
+                'fields': ['enabled', 'output_operation', 'confirmation_time', 'speed_limit', 'param_d', 'param_e', 'param_f'],
+                'description': 'Jammer relay action configuration response',
+                'post_process': self._process_jammer_relay_response
+            },
+            
+            'acc_on_alert': {
+                'pattern': r'ACCALM,(ON|OFF)(?:,(\d))?',
+                'fields': ['enabled', 'mode'],
+                'description': 'ACC ON alert configuration response',
+                'post_process': self._process_acc_on_alert_response
+            },
+            'acc_off_alert': {
+                'pattern': r'ACCOFFALM,(ON|OFF)(?:,(\d))?',
+                'fields': ['enabled', 'mode'],
+                'description': 'ACC OFF alert configuration response',
+                'post_process': self._process_acc_off_alert_response
+            },
+            
+            # Miscellaneous Parameters
+            'odometer': {
+                'pattern': r'MILEAGE=(\d+)',
+                'fields': ['value_meters'],
+                'description': 'Odometer configuration response'
+            },
+            'hourmeter': {
+                'pattern': r'ACCONT:(\d+)',
+                'fields': ['value_minutes'],
+                'description': 'Hourmeter configuration response'
+            },
+            
+            # Movement Alert Parameters
+            'moving': {
+                'pattern': r'MOVING:(OFF|ON,(\d+),(\d+))',
+                'fields': ['full_match', 'radius', 'notification_mode'],
+                'description': 'Movement alert configuration response',
+                'post_process': self._process_moving_alert_response
+            },
+            'moving_alert': {
+                'pattern': r'MOVING:(OFF|ON,(\d+),(\d+))',
+                'fields': ['full_match', 'radius', 'notification_mode'],
+                'description': 'Movement alert configuration response',
+                'post_process': self._process_moving_alert_response
+            },
+            
+            # Device Information Patterns
+            'device_imei': {
+                'pattern': r'IMEI[=:]\s*(\d+)',
+                'fields': ['imei'],
+                'description': 'Device IMEI response'
+            },
+            'device_iccid': {
+                'pattern': r'ICCID[=:]\s*(\d+)',
+                'fields': ['iccid'],
+                'description': 'Device ICCID response'
+            },
+            'device_version': {
+                'pattern': r'(.+)',
+                'fields': ['version'],
+                'description': 'Device version response'
+            },
+            'device_status': {
+                'pattern': r'(.+)',
+                'fields': ['status'],
+                'description': 'Device status response',
+                'post_process': self._process_status_response
+            }
+        }
+        # Alias mapping for legacy/alternate parameter names
+        # Keep this as a direct reference to avoid duplicating pattern definitions.
+        self.response_patterns['get_acc_off_alert'] = self.response_patterns['acc_off_alert']
+
+    def _init_value_mappings(self) -> None:
+        """Initialize value mappings for converting numeric responses to human-readable values."""
+        self.value_mappings = {
+            'protocol': {
+                0: 'GT06 (0x60)',
+                1: 'CRX3 (0x22)',
+                2: 'GT06 (0x12)'
+            },
+            'tcp_ack': {
+                0: 'Disabled',
+                1: 'Enabled'
+            },
+            'sleep_mode': {
+                0: 'Desabilitado (Disabled)',
+                1: 'Sleep (Habilitado)',
+                2: 'Deep Sleep (Ultra-baixo)'
+            },
+            'alert_type': {
+                0: 'Apenas GPRS',
+                1: 'GPRS+SMS'
+            },
+            'jammer_output_operation': {
+                0: 'Sem A├º├úo',
+                1: 'Ativar e Manter',
+                2: 'Ativar e Desativar com Jammer'
+            },
+            'ignition_mode': {
+                ('1', '0'): 'F├¡sica (Physical)',
+                ('0', '0'): 'Virtual por aceler├┤metro (Virtual by accelerometer)',
+                ('1', '1'): 'Virtual por bateria (Virtual by battery)'
+            },
+            'boolean': {
+                0: False,
+                1: True
+            }
+        }
+
+    def parse_response(self, parameter_name: str, raw_response: str, command: str = '') -> ParsedResponse:
+        """
+        Parse a device response for a specific parameter.
+        
+        Args:
+            parameter_name: Name of the parameter being parsed
+            raw_response: Raw response string from the device
+            command: Original command that generated this response
+            
+        Returns:
+            ParsedResponse object with parsing results
+        """
+        try:
+            # Debug entry
+            self.logger.debug(f"parse_response: parameter_name={parameter_name}, command={command}")
+
+            # Clean the response
+            cleaned_response = self._clean_response(raw_response)
+            
+            # Get the response pattern for this parameter
+            pattern_config = self.response_patterns.get(parameter_name)
+            # Debug cleaned response and pattern config presence
+            self.logger.debug(f"cleaned_response: '{cleaned_response}'")
+            self.logger.debug(f"pattern_config found: {bool(pattern_config)} -> {pattern_config.get('pattern') if pattern_config else None}")
+
+            if not pattern_config:
+                return self._create_error_response(
+                    parameter_name, raw_response, command,
+                    f"No parsing pattern defined for parameter '{parameter_name}'"
+                )
+            
+            # Parse the response
+            parsed_values = self._parse_with_pattern(parameter_name, cleaned_response, pattern_config)
+            
+            if parsed_values is None:
+                return self._create_error_response(
+                    parameter_name, raw_response, command,
+                    f"Response does not match expected pattern for '{parameter_name}'"
+                )
+            
+            return ParsedResponse(
+                parameter_name=parameter_name,
+                command=command,
+                success=True,
+                parsed_values=parsed_values,
+                raw_response=raw_response,
+                error_message=None,
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing response for {parameter_name}: {str(e)}")
+            return self._create_error_response(
+                parameter_name, raw_response, command,
+                f"Parsing error: {str(e)}"
+            )
+
+    def _clean_response(self, raw_response: str) -> str:
+        """
+        Clean the raw response by removing common prefixes and suffixes.
+        
+        Args:
+            raw_response: Raw response from device
+            
+        Returns:
+            Cleaned response string
+        """
+        if not raw_response:
+            return ""
+        
+        # Remove common prefixes and suffixes
+        cleaned = raw_response.strip()
+        
+        # Remove ATSMS: prefix if present
+        if cleaned.startswith('ATSMS:'):
+            cleaned = cleaned[6:]
+        
+        # Remove OK suffix if present
+        if cleaned.endswith(' OK'):
+            cleaned = cleaned[:-3]
+        
+        # Remove trailing # if present
+        if cleaned.endswith('#'):
+            cleaned = cleaned[:-1]
+        
+        return cleaned.strip()
+
+    def _parse_with_pattern(self, parameter_name: str, response: str, pattern_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Parse response using the specified pattern configuration.
+        
+        Args:
+            parameter_name: Name of the parameter
+            response: Cleaned response string
+            pattern_config: Pattern configuration dictionary
+            
+        Returns:
+            Dictionary of parsed values or None if parsing failed
+        """
+        # Handle complex multi-pattern parameters (like ignition_type)
+        if 'patterns' in pattern_config:
+            return self._parse_multi_pattern_response(parameter_name, response, pattern_config)
+        
+        # Handle single pattern parameters
+        pattern = pattern_config['pattern']
+        fields = pattern_config['fields']
+        
+        # Debug pattern usage
+        self.logger.debug(f"using pattern: {pattern} (flags=IGNORECASE)")
+
+        match = re.search(pattern, response, re.IGNORECASE)
+        # Debug match result
+        self.logger.debug(f"regex match: {bool(match)}, groups={match.groups() if match else None}")
+        if not match:
+            return None
+        
+        # Extract values from regex groups
+        groups = match.groups()
+        parsed_values = {}
+        
+        # Standard pattern matching - map all groups to fields
+        for i, field in enumerate(fields):
+            if i < len(groups):
+                parsed_values[field] = groups[i]
+        
+        # Debug parsed values before post-processing
+        self.logger.debug(f"parsed_values (raw): {parsed_values}")
+
+        # Apply post-processing if defined
+        if 'post_process' in pattern_config:
+            parsed_values = pattern_config['post_process'](parsed_values, response)
+            # Debug parsed values after post-processing
+            self.logger.debug(f"parsed_values (post): {parsed_values}")
+        
+        return parsed_values
+
+    def _parse_multi_pattern_response(self, parameter_name: str, response: str, pattern_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Parse response that requires multiple patterns (like ignition configuration).
+        
+        Args:
+            parameter_name: Name of the parameter
+            response: Response string (may contain multiple lines)
+            pattern_config: Pattern configuration with multiple patterns
+            
+        Returns:
+            Dictionary of parsed values or None if parsing failed
+        """
+        patterns = pattern_config['patterns']
+        fields = pattern_config['fields']
+        parsed_values = {}
+        
+        # Split response into lines for multi-line responses
+        response_lines = response.split('\n')
+        response_text = ' '.join(response_lines)
+        
+        # Try to match each pattern
+        for pattern_name, pattern in patterns.items():
+            match = re.search(pattern, response_text, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                pattern_fields = fields.get(pattern_name, [])
+                
+                for i, field in enumerate(pattern_fields):
+                    if i < len(groups):
+                        parsed_values[f"{pattern_name}_{field}"] = groups[i]
+        
+        # Apply post-processing if defined
+        if 'post_process' in pattern_config:
+            parsed_values = pattern_config['post_process'](parsed_values, response)
+        
+        return parsed_values if parsed_values else None
+
+    def _create_error_response(self, parameter_name: str, raw_response: str, command: str, error_message: str) -> ParsedResponse:
+        """
+        Create an error response object.
+        
+        Args:
+            parameter_name: Name of the parameter
+            raw_response: Raw response from device
+            command: Original command
+            error_message: Error description
+            
+        Returns:
+            ParsedResponse object indicating failure
+        """
+        return ParsedResponse(
+            parameter_name=parameter_name,
+            command=command,
+            success=False,
+            parsed_values={},
+            raw_response=raw_response,
+            error_message=error_message,
+            timestamp=datetime.now()
+        )
+
+    # Post-processing methods for specific parameter types
+    
+    def _process_server_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process server configuration response."""
+        if 'type' in values:
+            # Convert type to human-readable format
+            server_type = int(values['type'])
+            values['address_type'] = 'IP Address' if server_type == 0 else 'Domain'
+        
+        if 'port' in values:
+            values['port'] = int(values['port'])
+        
+        return values
+
+    def _process_timer_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process timer configuration response."""
+        # Convert string values to integers
+        for key in ['moving_time', 'stopped_time']:
+            if key in values and values[key]:
+                values[key] = int(values[key])
+        
+        return values
+
+    def _process_hbt_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process heartbeat configuration response."""
+        # Convert string values to integers
+        for key in ['moving_heartbeat', 'stopped_heartbeat']:
+            if key in values and values[key]:
+                values[key] = int(values[key])
+        
+        return values
+
+    def _process_protocol_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process protocol selection response."""
+        if 'protocol_value' in values:
+            protocol_num = int(values['protocol_value'])
+            values['protocol'] = self.value_mappings['protocol'].get(protocol_num, f'Unknown ({protocol_num})')
+            values['protocol_value'] = protocol_num
+        
+        return values
+
+    def _process_tcp_ack_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process TCP ACK configuration response."""
+        if 'ack_value' in values:
+            ack_num = int(values['ack_value'])
+            values['tcp_ack'] = self.value_mappings['tcp_ack'].get(ack_num, f'Unknown ({ack_num})')
+            values['ack_value'] = ack_num
+        
+        return values
+
+    def _process_ignition_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process ignition configuration response."""
+        accline = values.get('accline', '0')
+        cfg_type = values.get('cfg_type', '0')
+        
+        # Determine ignition mode
+        mode_key = (accline, cfg_type)
+        values['ignition_mode'] = self.value_mappings['ignition_mode'].get(mode_key, 'Unknown')
+        
+        # Process voltage values if present
+        if 'on_voltage' in values:
+            values['on_voltage'] = int(values['on_voltage'])
+        if 'off_voltage' in values:
+            values['off_voltage'] = int(values['off_voltage'])
+        
+        return values
+
+    def _process_speed_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process speed alert configuration response."""
+        # Determine enabled status
+        values['enabled'] = (values.get('enabled_status') == 'ON')
+        
+        print(f"DEBUG: _process_speed_alert_response - raw values: enabled={values['enabled']}, {values['detection_time']}, values['speed_limit']")
+      
+
+        # Handle OFF case or if not enabled
+        if not values['enabled']:
+            values['detection_time'] = 0
+            values['speed_limit'] = 0
+            values['alert_type'] = 0
+            values['alert_type_text'] = 'Apenas GPRS'
+        else:
+            # Handle numeric format case when enabled
+            # Convert numeric values (skip None values from regex groups)
+            for key in ['detection_time', 'speed_limit', 'alert_type']:
+                if key in values and values[key] is not None:
+                    try:
+                        values[key] = int(values[key])
+                    except ValueError:
+                        self.logger.warning(f"Could not convert {key} to int: {values[key]!r}")
+                        values[key] = 0 # Default to 0 on conversion error
+                elif key not in values:
+                    values[key] = 0 # Ensure key exists with default if not found
+            
+            # Convert alert type to human-readable
+            if 'alert_type' in values and values['alert_type'] is not None:
+                alert_num = values['alert_type']
+                values['alert_type_text'] = self.value_mappings['alert_type'].get(alert_num, f'Unknown ({alert_num})')
+        
+        # Remove the enabled_status field as it's not needed anymore
+        if 'enabled_status' in values:
+            del values['enabled_status']
+        
+        return values
+
+    def _process_backup_battery_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process backup battery alert configuration response."""
+        # Handle OFF case
+        if 'full_match' in values and values['full_match'] == 'OFF':
+            values['enabled'] = False
+            values['mode'] = 0
+            del values['full_match']
+            return values
+        
+        # Handle numeric format case
+        if 'enabled' in values and values['enabled'] is not None:
+            values['enabled'] = bool(int(values['enabled']))
+        
+        if 'mode' in values and values['mode'] is not None:
+            values['mode'] = int(values['mode'])
+        
+        if 'full_match' in values:
+            del values['full_match']
+            
+        return values
+
+    def _process_acc_on_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process ACC ON alert configuration response."""
+        status = values.get('enabled') # 'ON' or 'OFF'
+        mode_str = values.get('mode')   # '0', '1', or None
+
+        if status == 'OFF':
+            values['ui_selection'] = 'Disabled'
+            values['enabled'] = False
+            values['mode'] = -1
+        elif status == 'ON':
+            values['enabled'] = True
+            if mode_str == '0':
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+            elif mode_str == '1':
+                values['ui_selection'] = 'Alerta Enviado por SMS+GPRS'
+                values['mode'] = 1
+            else:
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+        else:
+            values['ui_selection'] = 'Disabled'
+            values['enabled'] = False
+            values['mode'] = -1
+        return values
+
+    def _process_acc_off_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process ACC OFF alert configuration response."""
+        status = values.get('enabled') # 'ON' or 'OFF'
+        mode_str = values.get('mode')   # '0', '1', or None
+
+        if status == 'OFF':
+            values['ui_selection'] = 'Desabilitado'
+            values['enabled'] = False
+            values['mode'] = -1
+        elif status == 'ON':
+            values['enabled'] = True
+            if mode_str == '0':
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+            elif mode_str == '1':
+                values['ui_selection'] = 'Alerta Enviado por SMS+GPRS'
+                values['mode'] = 1
+            else:
+                values['ui_selection'] = 'Alerta Enviado Apenas GPRS'
+                values['mode'] = 0
+        else:
+            values['ui_selection'] = 'Desabilitado'
+            values['enabled'] = False
+            values['mode'] = -1
+        return values
+
+    def _process_boolean_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process boolean configuration responses."""
+        for key, value in values.items():
+            if key == 'enabled' or key.endswith('_enabled'):
+                values[key] = bool(int(value))
+        
+        return values
+
+    def _process_sleep_mode_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process sleep mode configuration response."""
+        if 'mode_value' in values:
+            mode_num = int(values['mode_value'])
+            values['sleep_mode'] = self.value_mappings['sleep_mode'].get(mode_num, f'Unknown ({mode_num})')
+            values['mode_value'] = mode_num
+        
+        return values
+
+    def _process_angle_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process angle report configuration response."""
+        # Convert to integers
+        for key in ['min_speed', 'angle_variation']:
+            if key in values:
+                values[key] = int(values[key])
+        
+        # Determine if angle reporting is enabled (non-zero values indicate enabled)
+        min_speed = values.get('min_speed', 0)
+        angle_var = values.get('angle_variation', 0)
+        values['enabled'] = min_speed > 0 and angle_var > 0
+        
+        return values
+
+    def _process_power_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process power alert configuration response."""
+        # Convert numeric values
+        for key in ['enabled', 'alert_type', 'detection_time', 'min_charge_time']:
+            if key in values:
+                values[key] = int(values[key])
+        
+        # Convert alert type to human-readable
+        if 'alert_type' in values:
+            alert_num = values['alert_type']
+            values['alert_type_text'] = self.value_mappings['alert_type'].get(alert_num, f'Unknown ({alert_num})')
+        
+        # Convert enabled to boolean
+        if 'enabled' in values:
+            values['enabled'] = bool(values['enabled'])
+        
+        return values
+
+    def _process_jammer_detection_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process jammer detection configuration response."""
+        # Handle ON/OFF or numeric format for enabled status
+        if 'enabled' in values:
+            status = values['enabled']
+            if status == 'ON':
+                values['enabled'] = True
+            elif status == 'OFF':
+                values['enabled'] = False
+            else:
+                # Numeric value - 1 means enabled, 0 means disabled
+                values['enabled'] = bool(int(status))
+        
+        # Handle optional mode parameter
+        if 'mode' in values:
+            mode = values['mode']
+            if mode is not None:
+                values['mode'] = int(mode)
+        
+        return values
+
+    def _process_jammer_relay_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process jammer relay action configuration response."""
+        # Convert numeric values
+        for key in ['enabled', 'output_operation', 'confirmation_time', 'speed_limit']:
+            if key in values:
+                values[key] = int(values[key])
+        
+        # Convert output operation to human-readable
+        if 'output_operation' in values:
+            op_num = values['output_operation']
+            values['output_operation_text'] = self.value_mappings['jammer_output_operation'].get(op_num, f'Unknown ({op_num})')
+        
+        # Convert enabled to boolean
+        if 'enabled' in values:
+            values['enabled'] = bool(values['enabled'])
+        
+        return values
+
+    def _process_moving_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process movement alert configuration response."""
+        # Debug log the incoming values
+        self.logger.debug(f"Processing moving alert response - raw values: {values}")
+        
+        # Handle OFF case
+        if 'full_match' in values and values['full_match'] == 'OFF':
+            result = {
+                'enabled': False,
+                'radius': 1000,  # Default to 1000m when disabled
+                'notification_mode': 0,
+                'alert_type': 'Apenas GPRS'  # Match the UI field name
+            }
+            self.logger.debug(f"Processed OFF case - result: {result}")
+            return result
+        
+        # Handle numeric format case
+        try:
+            # Convert radius to integer
+            radius = None
+            if 'radius' in values and values['radius'] is not None:
+                radius = int(values['radius'])
+            
+            # Convert notification mode to integer
+            notification_mode = 0
+            if 'notification_mode' in values and values['notification_mode'] is not None:
+                notification_mode = int(values['notification_mode'])
+            
+            # Build result with UI-matching field names
+            result = {
+                'enabled': True,
+                'radius': radius if radius is not None else 1000,  # Default to 1000m
+                'notification_mode': notification_mode,
+                'alert_type': 'SMS+GPRS' if notification_mode == 1 else 'Apenas GPRS'  # Match the UI field name
+            }
+            self.logger.debug(f"Processed ON case - result: {result}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process moving alert response: {e}")
+            # Return safe defaults on error
+            return {
+                'enabled': False,
+                'radius': 1000,
+                'notification_mode': 0,
+                'alert_type': 'Apenas GPRS'
+            }
+
+    def _process_status_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """Process device status response (complex multi-line format)."""
+        if 'status' in values:
+            status_text = values['status']
+            # Parse key:value pairs from status response
+            status_dict = {}
+            
+            # Split by common delimiters and extract key:value pairs
+            lines = status_text.replace(',', '\n').replace(';', '\n').split('\n')
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    status_dict[key.strip()] = value.strip()
+            
+            values['status_details'] = status_dict
+        
+        return values
+
+    def validate_response_format(self, parameter_name: str, response: str) -> bool:
+        """
+        Validate that a response matches the expected format for a parameter.
+        
+        Args:
+            parameter_name: Name of the parameter
+            response: Response string to validate
+            
+        Returns:
+            True if response format is valid, False otherwise
+        """
+        pattern_config = self.response_patterns.get(parameter_name)
+        if not pattern_config:
+            return False
+        
+        cleaned_response = self._clean_response(response)
+        
+        if 'patterns' in pattern_config:
+            # Multi-pattern validation
+            patterns = pattern_config['patterns']
+            return any(re.search(pattern, cleaned_response, re.IGNORECASE) for pattern in patterns.values())
+        else:
+            # Single pattern validation
+            pattern = pattern_config['pattern']
+            return bool(re.search(pattern, cleaned_response, re.IGNORECASE))
+
+    def get_response_pattern(self, parameter_name: str) -> Optional[str]:
+        """
+        Get the response pattern for a parameter.
+        
+        Args:
+            parameter_name: Name of the parameter
+            
+        Returns:
+            Response pattern string or None if not found
+        """
+        pattern_config = self.response_patterns.get(parameter_name)
+        if not pattern_config:
+            return None
+        
+        if 'patterns' in pattern_config:
+            # Return all patterns for multi-pattern parameters
+            return str(pattern_config['patterns'])
+        else:
+            return pattern_config['pattern']
+
+    def get_supported_parameters(self) -> List[str]:
+        """
+        Get list of all supported parameter names.
+        
+        Returns:
+            List of parameter names that can be parsed
+        """
+        return list(self.response_patterns.keys())
+
+    def create_parse_error(self, parameter_name: str, response: str, error_message: str) -> ParseError:
+        """
+        Create a detailed parse error object.
+        
+        Args:
+            parameter_name: Name of the parameter
+            response: Raw response that failed to parse
+            error_message: Description of the error
+            
+        Returns:
+            ParseError object with error details
+        """
+        expected_pattern = self.get_response_pattern(parameter_name) or "Unknown"
+        
+        return ParseError(
+            parameter_name=parameter_name,
+            raw_response=response,
+            expected_pattern=expected_pattern,
+            error_type="PARSE_ERROR",
+            error_message=error_message,
+            timestamp=datetime.now()
+        )
+
+    def batch_parse_responses(self, responses: Dict[str, str]) -> Dict[str, ParsedResponse]:
+        """
+        Parse multiple parameter responses in batch.
+        
+        Args:
+            responses: Dictionary mapping parameter names to response strings
+            
+        Returns:
+            Dictionary mapping parameter names to ParsedResponse objects
+        """
+        results = {}
+        
+        for parameter_name, response in responses.items():
+            results[parameter_name] = self.parse_response(parameter_name, response)
+        
+        return results
+
+    def get_parsing_statistics(self, parsed_responses: List[ParsedResponse]) -> Dict[str, Any]:
+        """
+        Generate statistics from a list of parsed responses.
+        
+        Args:
+            parsed_responses: List of ParsedResponse objects
+            
+        Returns:
+            Dictionary with parsing statistics
+        """
+        total_responses = len(parsed_responses)
+        successful_parses = sum(1 for r in parsed_responses if r.success)
+        failed_parses = total_responses - successful_parses
+        
+        # Group failures by error type
+        error_types = {}
+        for response in parsed_responses:
+            if not response.success and response.error_message:
+                error_type = response.error_message.split(':')[0]
+                error_types[error_type] = error_types.get(error_type, 0) + 1
+        
+        return {
+            'total_responses': total_responses,
+            'successful_parses': successful_parses,
+            'failed_parses': failed_parses,
+            'success_rate': (successful_parses / total_responses * 100) if total_responses > 0 else 0,
+            'error_types': error_types,
+            'parameters_parsed': [r.parameter_name for r in parsed_responses if r.success],
+            'parameters_failed': [r.parameter_name for r in parsed_responses if not r.success]
+        }
+def _process_acc_off_alert_response_v2(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+    """
+    Defensive post-processor for ACC OFF alert responses.
+
+    Ensures:
+    - mode is normalized to int when possible
+    - ui_selection is always present with a localized label
+    - a legacy flattened key 'acc_off_alert' is provided so older UI/reader code
+      that expects a single string value will consume a friendly label.
+    """
+    # Read raw inputs (may be 'ON'/'OFF', True/False, '0'/'1', etc.)
+    status = values.get('enabled')
+    mode_raw = values.get('mode')
+
+    # Normalize status to a comparable string
+    try:
+        if isinstance(status, bool):
+            status_str = 'ON' if status else 'OFF'
+        elif status is None:
+            status_str = ''
+        else:
+            status_str = str(status).upper()
+    except Exception:
+        status_str = str(status)
+
+    # Try to normalize mode to integer
+    mode_num = None
+    try:
+        if mode_raw is not None and mode_raw != '':
+            mode_num = int(mode_raw)
+    except Exception:
+        mode_num = None
+
+    # Default mappings / labels
+    LABEL_DISABLED = 'Desabilitado'
+    LABEL_GPRS = 'Alerta Enviado Apenas GPRS'
+    LABEL_SMS_GPRS = 'Alerta Enviado por SMS+GPRS'
+
+    # Apply normalized values and provide flattened legacy key
+    if status_str in ('OFF', '0', 'FALSE'):
+        values['ui_selection'] = LABEL_DISABLED
+        values['enabled'] = False
+        values['mode'] = -1
+        values['acc_off_alert'] = LABEL_DISABLED
+    elif status_str in ('ON', '1', 'TRUE'):
+        values['enabled'] = True
+        if mode_num == 0:
+            values['ui_selection'] = LABEL_GPRS
+            values['mode'] = 0
+            values['acc_off_alert'] = LABEL_GPRS
+        elif mode_num == 1:
+            values['ui_selection'] = LABEL_SMS_GPRS
+            values['mode'] = 1
+            values['acc_off_alert'] = LABEL_SMS_GPRS
+        else:
+            # Unknown or missing mode -> default to GPRS
+            values['ui_selection'] = LABEL_GPRS
+            values['mode'] = mode_num if mode_num is not None else 0
+            values['acc_off_alert'] = LABEL_GPRS
+    else:
+        # Conservative defaults for unexpected status
+        values['ui_selection'] = LABEL_DISABLED
+        values['enabled'] = False
+        values['mode'] = -1
+        values['acc_off_alert'] = LABEL_DISABLED
+
+    return values
+# Override the original implementation with a defensive delegator to ensure
+# legacy consumers receive a flattened localized label ('acc_off_alert').
+def _process_acc_off_alert_response(self, values: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+    return _process_acc_off_alert_response_v2(self, values, raw_response)
+</document_content>
+</document>
+<document index="56">
+<source>.\services\parameter_specification.py</source>
+<document_content>
+"""
+Parameter Specification Data Structure for LT32 PRO Configurator
+
+This module contains the comprehensive parameter specification dictionary that matches
+the Parameter UI List document exactly. It defines all parameter sections, UI element
+types, validation rules, command mappings, and conditional visibility rules.
+"""
+
+from typing import Dict, List, Optional, Any, Union
+from dataclasses import dataclass
+
+
+@dataclass
+class FieldConfig:
+    """Configuration for a parameter field"""
+    name: str
+    label: str
+    ui_element: str
+    validation: Optional[str] = None
+    unit: Optional[str] = None
+    options: Optional[List[str]] = None
+    visibility_condition: Optional[str] = None
+
+
+@dataclass
+class ParameterConfig:
+    """Configuration for a parameter"""
+    name: str
+    label: str
+    description: Optional[str] = None
+    ui_element: Optional[str] = None
+    fields: Optional[Dict[str, FieldConfig]] = None
+    options: Optional[List[str]] = None
+    validation: Optional[str] = None
+    unit: Optional[str] = None
+    commands: Optional[Dict[str, str]] = None
+
+
+@dataclass
+class SectionConfig:
+    """Configuration for a parameter section"""
+    name: str
+    label: str
+    parameters: Dict[str, ParameterConfig]
+    order: int
+
+
+# Complete Parameter Specification matching the Parameter UI List document
+PARAMETER_SPECIFICATION: Dict[str, SectionConfig] = {
+    'network_parameters': SectionConfig(
+        name='network_parameters',
+        label='Par├ómetros de Rede',
+        order=1,
+        parameters={
+            'apn_settings': ParameterConfig(
+                name='apn_settings',
+                label='Configura├º├úo APN',
+                description='Configures the APN, username, and password for the mobile network.',
+                fields={
+                    'apn': FieldConfig(
+                        name='apn',
+                        label='APN',
+                        ui_element='text_input',
+                        validation='Accepts a standard APN name, an IP address, or a URL.'
+                    ),
+                    'user': FieldConfig(
+                        name='user',
+                        label='Usu├írio',
+                        ui_element='text_input'
+                    ),
+                    'password': FieldConfig(
+                        name='password',
+                        label='Senha',
+                        ui_element='text_input'
+                    )
+                },
+                commands={
+                    'set': 'APN,<apn>,<user>,<password>#',
+                    'read': 'APN#'
+                }
+            ),
+            'server_settings': ParameterConfig(
+                name='server_settings',
+                label='Configura├º├úo de Servidor',
+                description='Configures the primary server IP/URL and port.',
+                fields={
+                    'address': FieldConfig(
+                        name='address',
+                        label='IP / URL',
+                        ui_element='text_input',
+                        validation='Should accept a valid IP address or a valid URL.'
+                    ),
+                    'port': FieldConfig(
+                        name='port',
+                        label='PORTA',
+                        ui_element='number_input',
+                        validation='1-65535',
+                    )
+                },
+                commands={
+                    'set': 'SERVER,<type>,<address>,<port>,0#',
+                    'read': 'SERVER#'
+                }
+            ),
+            'network_settings': ParameterConfig(
+                name='network_settings',
+                label='Sele├º├úo de Rede',
+                ui_element='dropdown',
+                options=['AUTO', '4G', '2G'],
+                commands={
+                    'set': 'NETSELECT=<value>',
+                    'read': 'NETSELECT#'
+                }
+            )
+        }
+    ),
+    
+    'time_parameters': SectionConfig(
+        name='time_parameters',
+        label='Par├ómetros de Tempo',
+        order=2,
+        parameters={
+            'report_intervals': ParameterConfig(
+                name='report_intervals',
+                label='Intervalos de Envio',
+                description='Defines the time intervals for sending position data based on ignition status.',
+                fields={
+                    'moving_time': FieldConfig(
+                        name='moving_time',
+                        label='Tempo em movimento (Igni├º├úo ligada)',
+                        ui_element='number_input',
+                        unit='segundos'
+                    ),
+                    'stopped_time': FieldConfig(
+                        name='stopped_time',
+                        label='Tempo parado (Igni├º├úo desligada)',
+                        ui_element='number_input',
+                        unit='segundos'
+                    )
+                },
+                commands={
+                    'set': 'TIMER,<moving_time>,<stopped_time>#',
+                    'read': 'TIMER#'
+                }
+            ),
+            'heartbeat_intervals': ParameterConfig(
+                name='heartbeat_intervals',
+                label='Intervalos de Heartbeat',
+                description='Defines the keep-alive signal interval based on ignition status.',
+                fields={
+                    'moving_heartbeat': FieldConfig(
+                        name='moving_heartbeat',
+                        label='Intervalo (Heartbeat) em movimento',
+                        ui_element='number_input',
+                        unit='segundos'
+                    ),
+                    'stopped_heartbeat': FieldConfig(
+                        name='stopped_heartbeat',
+                        label='Intervalo (Heartbeat) parado',
+                        ui_element='number_input',
+                        unit='segundos'
+                    )
+                },
+                commands={
+                    'set': 'HBT,<moving_heartbeat>,<stopped_heartbeat>#',
+                    'read': 'HBT#'
+                }
+            )
+        }
+    ),
+    
+    'service_parameters': SectionConfig(
+        name='service_parameters',
+        label='Par├ómetros de Servi├ºo',
+        order=3,
+        parameters={
+            'protocol': ParameterConfig(
+                name='protocol',
+                label='Tipo de protocolo',
+                ui_element='dropdown',
+                options=['GT06 (0x60)', 'CRX3 (0x22)', 'GT06 (0x12)'],
+                commands={
+                    'set': 'SZCS#GT06SEL=X',
+                    'read': 'CXCS#GT06SEL'
+                }
+            ),
+            'tcp_ack': ParameterConfig(
+                name='tcp_ack',
+                label='Habilitar confirma├º├úo TCP (ACK)',
+                ui_element='toggle_switch',
+                options=['Enabled', 'Disabled'],
+                commands={
+                    'set': 'SZCS#POSBYACK=A',
+                    'read': 'CXCS#POSBYACK'
+                }
+            )
+        }
+    ),
+    
+    'ignition': SectionConfig(
+        name='ignition',
+        label='Igni├º├úo',
+        order=4,
+        parameters={
+            'ignition_type': ParameterConfig(
+                name='ignition_type',
+                label='Tipo de igni├º├úo',
+                description='Configures the method for detecting ignition status.',
+                fields={
+                    'ignition_mode': FieldConfig(
+                        name='ignition_mode',
+                        label='Modo de Igni├º├úo',
+                        ui_element='dropdown',
+                        options=['F├¡sica (Fio Laranja)', 'Virtual por Aceler├┤metro', 'Virtual por Tens├úo da Bateria']
+                    ),
+                    'on_voltage': FieldConfig(
+                        name='on_voltage',
+                        label='Tens├úo para Ligar (ON)',
+                        ui_element='number_input',
+                        unit='0.1 volts',
+                        visibility_condition="ignition_mode == 'Virtual por Tens├úo da Bateria'"
+                    ),
+                    'off_voltage': FieldConfig(
+                        name='off_voltage',
+                        label='Tens├úo para Desligar (OFF)',
+                        ui_element='number_input',
+                        unit='0.1volts',
+                        visibility_condition="ignition_mode == 'Virtual por Tens├úo da Bateria'"
+                    )
+                },
+                commands={
+                    'set_physical': 'SZCS#ACCLINE=1#ACC_CFG=0-000-000',
+                    'set_accelerometer': 'SZCS#ACCLINE=0#ACC_CFG=0-000-000',
+                    'set_battery': 'SZCS#ACCLINE=1#ACC_CFG=1-<on_voltage>-<off_voltage>',
+                    'read': 'CXCS#ACCLINE#ACC_CFG'
+                }
+            )
+        }
+    ),
+    
+    'speed': SectionConfig(
+        name='speed',
+        label='Velocidade',
+        order=5,
+        parameters={
+            'speed_alert': ParameterConfig(
+                name='speed_alert',
+                label='Alerta de Velocidade',
+                description='Configures the over-speed alert.',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar Alerta de limite de velocidade',
+                        ui_element='toggle_switch'
+                    ),
+                    'detection_time': FieldConfig(
+                        name='detection_time',
+                        label='Tempo para detectar (s)',
+                        ui_element='number_input'
+                    ),
+                    'speed_limit': FieldConfig(
+                        name='speed_limit',
+                        label='Velocidade (km/h)',
+                        ui_element='number_input'
+                    ),
+                    'alert_type': FieldConfig(
+                        name='alert_type',
+                        label='Tipo de Alerta',
+                        ui_element='dropdown',
+                        options=['Apenas GPRS', 'GPRS+SMS']
+                    )
+                },
+                commands={
+                    'set': 'SPEED,<enabled>,<detection_time>,<speed_limit>,<alert_type>#',
+                    'read': 'SPEED#'
+                }
+            ),
+            'speed_buzzer': ParameterConfig(
+                name='speed_buzzer',
+                label='Ativar o buzzer no alerta de limite de velocidade',
+                ui_element='toggle_switch',
+                commands={
+                    'set': 'SZCS#SPD_LED_SHOW=A',
+                    'read': 'N/A'
+                }
+            ),
+            'blind_area_speed': ParameterConfig(
+                name='blind_area_speed',
+                label='Configurar velocidade para envio de posi├º├Áes em ├írea de sombra',
+                description='Configures the minimum speed for sending position data in blind areas.',
+                ui_element='number_input',
+                validation='0-20',
+                unit='km/h',
+                commands={
+                    'set': 'SZCS#BLINDSPD=X',
+                    'read': 'CXCS#BLINDSPD'
+                }
+            ),
+        }
+    ),
+    
+    'power_saving': SectionConfig(
+        name='power_saving',
+        label='Economia de Energia',
+        order=6,
+        parameters={
+            'sleep_mode': ParameterConfig(
+                name='sleep_mode',
+                label='Modo Sleep',
+                ui_element='dropdown',
+                options=['Desabilitado (Disabled)', 'Sleep (Habilitado)', 'Deep Sleep (Ultra-baixo)'],
+                commands={
+                    'set': 'SZCS#SLPDISCONNECT=A',
+                    'read': 'CXCS#SLPDISCONNECT'
+                }
+            ),
+            'sleep_time': ParameterConfig(
+                name='sleep_time',
+                label='Tempo para entrar em Sleep (minutos)',
+                ui_element='number_input',
+                unit='minutos',
+                commands={
+                    'set': 'SZCS#SLEEPT=X',
+                    'read': 'CXCS#SLEEPT'
+                }
+            )
+        }
+    ),
+    
+    'angle': SectionConfig(
+        name='angle',
+        label='├éngulo',
+        order=7,
+        parameters={
+            'angle_report': ParameterConfig(
+                name='angle_report',
+                label='Envio por ├éngulo',
+                description='Configures position reporting based on angle changes.',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar envio por ├óngulo',
+                        ui_element='toggle_switch'
+                    ),
+                    'min_speed': FieldConfig(
+                        name='min_speed',
+                        label='Velocidade m├¡nima (km/h)',
+                        ui_element='number_input',
+                        validation='1-20'
+                    ),
+                    'angle_variation': FieldConfig(
+                        name='angle_variation',
+                        label='Varia├º├úo do ├éngulo (┬░)',
+                        ui_element='number_input',
+                        validation='5-90'
+                    )
+                },
+                commands={
+                    'set': 'SZCS#ANGLEVALUE=<min_speed>-<angle_variation>',
+                    'read': 'CXCS#ANGLEVALUE'
+                }
+            )
+        }
+    ),
+    
+    'battery_alerts': SectionConfig(
+        name='battery_alerts',
+        label='Alertas de Bateria',
+        order=8,
+        parameters={
+            'backup_battery_alert': ParameterConfig(
+                name='backup_battery_alert',
+                label='Alerta de bateria backup baixa',
+                ui_element='toggle_switch',
+                commands={
+                    'set': 'BATALM,<state>,<mode>#',
+                    'read': 'BATALM#'
+                }
+            ),
+            'main_power_alert': ParameterConfig(
+                name='main_power_alert',
+                label='Alerta de Remo├º├úo de Bateria Principal',
+                description='Configures the main power removal alert.',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar alerta',
+                        ui_element='toggle_switch'
+                    ),
+                    'alert_type': FieldConfig(
+                        name='alert_type',
+                        label='Tipo de Alerta',
+                        ui_element='dropdown',
+                        options=['Apenas GPRS', 'GPRS+SMS']
+                    ),
+                    'detection_time': FieldConfig(
+                        name='detection_time',
+                        label='Tempo de detec├º├úo (s)',
+                        ui_element='number_input'
+                    ),
+                    'min_charge_time': FieldConfig(
+                        name='min_charge_time',
+                        label='Tempo m├¡nimo de carga (s)',
+                        ui_element='number_input'
+                    )
+                },
+                commands={
+                    'set': 'POWERALM,<enabled>,<alert_type>,<detection_time>,<min_charge_time>#',
+                    'read': 'POWERALM#'
+                }
+            ),
+            'backup_battery_protection_voltage': ParameterConfig(
+                name='backup_battery_protection_voltage',
+                label='Tens├úo de Prote├º├úo da Bateria Backup',
+                ui_element='number_input',
+                unit='mV',
+                commands={
+                    'set': 'SZCS#BATSLPVALUE=X',
+                    'read': 'CXCS#BATSLPVALUE'
+                }
+            )
+        }
+    ),
+    
+    'vibration_sensor': SectionConfig(
+        name='vibration_sensor',
+        label='Sensor de Vibra├º├úo',
+        order=9,
+        parameters={
+            'vibration_sensitivity': ParameterConfig(
+                name='vibration_sensitivity',
+                label='Sensibilidade ├á Vibra├º├úo',
+                fields={
+                    'level': FieldConfig(
+                        name='level',
+                        label='N├¡vel da sensibilidade (1=Baixa, 6=Alta)',
+                        ui_element='slider',
+                        validation='1-6'
+                    )
+                },
+                commands={
+                    'set_level': 'SZCS#VIBL=<level>',
+                    'read': 'CXCS#VIBL'
+                }
+            ),
+            'vibration_window': ParameterConfig(
+                name='vibration_window',
+                label='Janela de Vibra├º├úo',
+                fields={
+                    'window': FieldConfig(
+                        name='window',
+                        label='Janela de tempo (s)',
+                        ui_element='number_input',
+                        validation='1-60'
+                    ),
+                    'threshold': FieldConfig(
+                        name='threshold',
+                        label='Threshold',
+                        ui_element='number_input',
+                        validation='1-10'
+                    )
+                },
+                commands={
+                    'set': 'VIBCHK,<window>,<threshold>#',
+                    'read': 'VIBCHK#'
+                }
+            )
+        }
+    ),
+    
+    'jammer_detection': SectionConfig(
+        name='jammer_detection',
+        label='Detec├º├úo de Jammer',
+        order=10,
+        parameters={
+            'jammer_detection': ParameterConfig(
+                name='jammer_detection',
+                label='Detec├º├úo de Jammer',
+                ui_element='toggle_switch',
+                commands={
+                    'set': 'JAMMER,<state>,<mode>#',
+                    'read': 'JAMMER#'
+                }
+            ),
+            'jammer_relay_action': ParameterConfig(
+                name='jammer_relay_action',
+                label='A├º├úo da Sa├¡da por Jammer',
+                description='Configures the relay (output) behavior upon jammer detection.',
+                fields={
+                    'output_operation': FieldConfig(
+                        name='output_operation',
+                        label='Opera├º├úo da Sa├¡da',
+                        ui_element='dropdown',
+                        options=['Sem A├º├úo', 'Ativar e Manter', 'Ativar e Desativar com Jammer']
+                    ),
+                    'confirmation_time': FieldConfig(
+                        name='confirmation_time',
+                        label='Tempo para confirma├º├úo (s)',
+                        ui_element='number_input',
+                        validation='0-1800'
+                    ),
+                    'speed_limit': FieldConfig(
+                        name='speed_limit',
+                        label='Velocidade limite (km/h)',
+                        ui_element='number_input',
+                        validation='0-255'
+                    ),
+                    'param_d': FieldConfig(
+                        name='param_d',
+                        label='Tempo da sa├¡da ativada (s)',
+                        ui_element='number_input',
+                        validation='1-30'
+                    ),
+                    'param_e': FieldConfig(
+                        name='param_e',
+                        label='Tempo da sa├¡da desativada (s)',
+                        ui_element='number_input',
+                        validation='1-30'
+                    ),
+                    'param_f': FieldConfig(
+                        name='param_f',
+                        label='Quantidade de ciclos',
+                        ui_element='number_input',
+                        validation='1-255'
+                    ),
+                    'param_g': FieldConfig(
+                        name='param_g',
+                        label='Estado da sa├¡da ap├│s ciclos',
+                        ui_element='dropdown',
+                        options=['Manter ativada', 'Manter desativada']
+                    )
+                },
+                commands={
+                    'set': 'JAMRELAY,<op>,<time>,<speed>,<D>,<E>,<F>,<G>#',
+                    'read': 'JAMRELAY#'
+                }
+            )
+        }
+    ),
+    
+    'security': SectionConfig(
+        name='security',
+        label='Seguran├ºa',
+        order=11,
+        parameters={
+            'defense_settings': ParameterConfig(
+                name='defense_settings',
+                label='Defense Time (min):',
+                ui_element='number_input',
+                validation='0-60',
+                commands={
+                    'set': 'DEFENSE,<value>#',
+                    'read': 'DEFENSE#'
+                }
+            )
+        }
+    ),
+
+    'miscellaneous': SectionConfig(
+        name='miscellaneous',
+        label='Diversos',
+        order=12,
+        parameters={
+            'odometer': ParameterConfig(
+                name='odometer',
+                label='Ajustar Od├┤metro',
+                ui_element='number_input',
+                unit='metros',
+                commands={
+                    'set': 'MILEAGE=A#',
+                    'read': 'MILEAGE#'
+                }
+            ),
+            'hourmeter': ParameterConfig(
+                name='hourmeter',
+                label='Ajustar Hor├¡metro',
+                ui_element='number_input',
+                unit='minutos',
+                commands={
+                    'set': 'ACCONT,A#',
+                    'read': 'ACCONT#'
+                }
+            )
+        }
+    ),
+
+    'output_control': SectionConfig(
+        name='output_control',
+        label='Controle de Sa├¡da',
+        order=13,
+        parameters={
+            'source_off_type': ParameterConfig(
+                name='source_off_type',
+                label='Verificar FIX de GPS antes de ativar a sa├¡da',
+                ui_element='dropdown',
+                options=['Verifica FIX de GPS', 'N├úo verifica FIX de GPS'],
+                commands={
+                    'set': 'SZCS#SOURCE_OFF_TYPE=X',
+                    'read': 'CXCS#SOURCE_OFF_TYPE'
+                }
+            ),
+            'relay_control': ParameterConfig(
+                name='relay_control',
+                label='Ativar/Desativar a sa├¡da',
+                ui_element='dropdown',
+                options=['Desabilitada', 'Habilitada'],
+                commands={
+                    'set': 'RELAY,X#',
+                    'read': 'RELAY#'
+                }
+            )
+        }
+    ),
+
+    'gps_control': SectionConfig(
+        name='gps_control',
+        label='Controle de GPS',
+        order=14,
+        parameters={
+            'sends_control': ParameterConfig(
+                name='sends_control',
+                label='Tempo para manter o GPS ativo',
+                ui_element='number_input',
+                unit='minutos',
+                commands={
+                    'set': 'SENDS,X#',
+                    'read': 'SENDS#'
+                }
+            )
+        }
+    ),
+
+    'alerts': SectionConfig(
+        name='alerts',
+        label='Alertas',
+        order=15,
+        parameters={  # Removed duplicate movement alert from here - it's defined in movement_alerts section
+            'acc_on_alert': ParameterConfig(
+                name='acc_on_alert',
+                label='Habilitar alerta de Igni├º├úo ON',
+                ui_element='dropdown',
+                options=['Disabled', 'Alerta Enviado Apenas GPRS', 'Alerta Enviado por SMS+GPRS'],
+                commands={
+                    'set': 'ACCALM,ON,X#',
+                    'read': 'ACCALM#'
+                }
+            ),
+            'acc_off_alert': ParameterConfig(
+                name='acc_off_alert',
+                label='Habilitar alerta de Igni├º├úo OFF',
+                ui_element='dropdown',
+                options=['Desabilitado', 'Alerta Enviado Apenas GPRS', 'Alerta Enviado por SMS+GPRS'],
+                commands={
+                    'set': 'ACCOFFALM,ON,X#',
+                    'read': 'ACCOFFALM#'
+                }
+            )
+        }
+    ),
+
+    'movement_alerts': SectionConfig(
+        name='movement_alerts',
+        label='Alertas de Movimento',
+        order=16,
+        parameters={
+            'moving_alert': ParameterConfig(
+                name='moving_alert',
+                label='Habilitar alerta de movimento (por dist├óncia)',
+                description='Configures movement alert based on distance.',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar Alerta de movimento',
+                        ui_element='toggle_switch'
+                    ),
+                    'radius': FieldConfig(
+                        name='radius',
+                        label='Raio de movimenta├º├úo',
+                        ui_element='number_input',
+                        unit='meters',
+                        visibility_condition='enabled == true'
+                    ),
+                    'alert_type': FieldConfig(
+                        name='alert_type',
+                        label='Tipo de Alerta',
+                        ui_element='dropdown',
+                        options=['Apenas GPRS', 'GPRS+SMS'],
+                        visibility_condition='enabled == true'
+                    )
+                },
+                commands={
+                    'set': 'MOVING,<enabled>,<radius>,<alert_type>#',
+                    'read': 'MOVING#'
+                }
+            ),
+            'motion_sensor_alert': ParameterConfig(
+                name='motion_sensor_alert',
+                label='Habilitar alerta de movimento',
+                description='Configures movement alert based on motion sensor.',
+                fields={
+                    'enabled': FieldConfig(
+                        name='enabled',
+                        label='Habilitar Alerta de movimento',
+                        ui_element='toggle_switch'
+                    ),
+                    'alert_type': FieldConfig(
+                        name='alert_type',
+                        label='Tipo de Alerta',
+                        ui_element='dropdown',
+                        options=['Apenas GPRS', 'GPRS+SMS']
+                    )
+                },
+                commands={
+                    'set': 'SENALM,<enabled>,<alert_type>#',
+                    'read': 'SENALM#'
+                }
+            ),
+            'distance_movement_action': ParameterConfig(
+                name='distance_movement_action',
+                label='Configurar a├º├úo para movimento por dist├óncia',
+                ui_element='dropdown',
+                options=['Automaticamente ativado ap├│s entrar no modo DEFENSE (quando a igni├º├úo ├® desligada)', 'Envia um alerta - Apenas uma vez independente da IGN on ou off', 'Envia um alerta uma vez e bloqueia o ve├¡culo - Apenas uma vez independente da IGN on ou off'],
+                commands={
+                    'set': 'SZCS#MOVEALMFUN=X',
+                    'read': 'CXCS#MOVEALMFUN'
+                }
+            )
+        }
+    )
+}
+
+
+# Validation rules mapping for all parameters
+VALIDATION_RULES = {
+    'port': {
+        'type': 'numeric_range',
+        'min': 1,
+        'max': 65535,
+        'error_message': 'Port must be between 1 and 65535'
+    },
+    'apn': {
+        'type': 'format_validation',
+        'patterns': [
+            r'^[\w\.-]+$',  # Standard APN name
+            r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$',  # IP address
+            r'^https?://[\w\.-]+.*$'  # URL
+        ],
+        'error_message': 'APN must be a valid name, IP address, or URL'
+    },
+    'ip_url': {
+        'type': 'format_validation',
+        'patterns': [
+            r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$',  # IP address
+            r'^[\w\.-]+\.[a-zA-Z]{2,}$',  # Domain
+            r'^https?://[\w\.-]+.*$'  # URL
+        ],
+        'error_message': 'Must be a valid IP address or URL'
+    },
+    'speed_detection_time': {
+        'type': 'numeric_range',
+        'min': 5,
+        'max': 600,
+        'error_message': 'Detection time must be between 5 and 600 seconds'
+    },
+    'speed_limit': {
+        'type': 'numeric_range',
+        'min': 1,
+        'max': 255,
+        'error_message': 'Speed limit must be between 1 and 255 km/h'
+    },
+    'angle_min_speed': {
+        'type': 'numeric_range',
+        'min': 1,
+        'max': 20,
+        'error_message': 'Minimum speed must be between 1 and 20 km/h'
+    },
+    'angle_variation': {
+        'type': 'numeric_range',
+        'min': 5,
+        'max': 90,
+        'error_message': 'Angle variation must be between 5 and 90 degrees'
+    },
+    'power_detection_time': {
+        'type': 'numeric_range',
+        'min': 2,
+        'max': 60,
+        'error_message': 'Detection time must be between 2 and 60 seconds'
+    },
+    'min_charge_time': {
+        'type': 'numeric_range',
+        'min': 1,
+        'max': 3600,
+        'error_message': 'Minimum charge time must be between 1 and 3600 seconds'
+    },
+    'vibration_level': {
+        'type': 'numeric_range',
+        'min': 1,
+        'max': 6,
+        'error_message': 'Vibration level must be between 1 (low) and 6 (high)'
+    },
+    'jammer_confirmation_time': {
+        'type': 'numeric_range',
+        'min': 0,
+        'max': 1800,
+        'error_message': 'Confirmation time must be between 0 and 1800 seconds'
+    },
+    'jammer_speed_limit': {
+        'type': 'numeric_range',
+        'min': 0,
+        'max': 255,
+        'error_message': 'Speed limit must be between 0 and 255 km/h'
+    },
+    'blind_area_speed': {
+        'type': 'numeric_range',
+        'min': 0,
+        'max': 20,
+        'error_message': 'Blind area speed must be between 0 and 20 km/h'
+    }
+}
+
+
+# Command value mappings for dropdown and toggle options
+COMMAND_VALUE_MAPPINGS = {
+    'protocol': {
+        'GT06 (0x60)': 0,
+        'CRX3 (0x22)': 1,
+        'GT06 (0x12)': 2
+    },
+    'tcp_ack': {
+        'Enabled': 1,
+        'Disabled': 0
+    },
+    'sleep_mode': {
+        'Desabilitado (Disabled)': 0,
+        'Sleep (Habilitado)': 1,
+        'Deep Sleep (Ultra-baixo)': 2
+    },
+    'alert_type': {
+        '0 - Apenas GPRS': 0,
+        '1 - GPRS+SMS': 1,
+        'Apenas GPRS': 0,
+        'GPRS+SMS': 1,
+        'Alerta Enviado Apenas GPRS': 0,
+        'Alerta Enviado por GPRS+SMS': 1,
+        'Alerta Enviado por SMS+GPRS': 1
+    },
+    'jammer_output_operation': {
+        'Sem A├º├úo': 0,
+        'Ativar e Manter': 1,
+        'Ativar e Desativar com Jammer': 2
+    },
+    'acc_on_alert': {
+        'Disabled': 'OFF',
+        'Alerta Enviado Apenas GPRS': 0,
+        'Alerta Enviado por SMS+GPRS': 1
+    },
+    'acc_off_alert': {
+        'Desabilitado': 'OFF',
+        'Alerta Enviado Apenas GPRS': '0',
+        'Alerta Enviado por SMS+GPRS': '1'
+    },
+    'param_g': {
+        'Manter ativada': 0,
+        'Manter desativada': 1
+    },
+    'distance_movement_action': {
+        'Automaticamente ativado ap├│s entrar no modo DEFENSE (quando a igni├º├úo ├® desligada)': 0,
+        'Envia um alerta - Apenas uma vez independente da IGN on ou off': 1,
+        'Envia um alerta uma vez e bloqueia o ve├¡culo - Apenas uma vez independente da IGN on ou off': 2
+    },
+    'boolean_on_off': {
+        True: 'ON',
+        False: 'OFF'
+    },
+    'boolean_1_0': {
+        True: 1,
+        False: 0
+    }
+}
+
+
+# Conditional visibility rules
+CONDITIONAL_VISIBILITY_RULES = {
+    'angle_report.min_speed': {
+        'condition': 'enabled == true',
+        'trigger_field': 'angle_report.enabled'
+    },
+    'angle_report.angle_variation': {
+        'condition': 'enabled == true',
+        'trigger_field': 'angle_report.enabled'
+    }
+}
+
+
+def get_parameter_specification() -> Dict[str, SectionConfig]:
+    """
+    Returns the complete parameter specification dictionary.
+    
+    Returns:
+        Dict[str, SectionConfig]: The parameter specification
+    """
+    return PARAMETER_SPECIFICATION
+
+
+def get_section_by_name(section_name: str) -> Optional[SectionConfig]:
+    """
+    Get a specific section configuration by name.
+    
+    Args:
+        section_name: Name of the section to retrieve
+        
+    Returns:
+        SectionConfig or None if not found
+    """
+    return PARAMETER_SPECIFICATION.get(section_name)
+
+
+def get_parameter_by_name(section_name: str, parameter_name: str) -> Optional[ParameterConfig]:
+    """
+    Get a specific parameter configuration by section and parameter name.
+    
+    Args:
+        section_name: Name of the section
+        parameter_name: Name of the parameter
+        
+    Returns:
+        ParameterConfig or None if not found
+    """
+    section = get_section_by_name(section_name)
+    if section:
+        return section.parameters.get(parameter_name)
+    return None
+
+
+def get_validation_rule(rule_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Get validation rule by name.
+    
+    Args:
+        rule_name: Name of the validation rule
+        
+    Returns:
+        Dict with validation rule or None if not found
+    """
+    return VALIDATION_RULES.get(rule_name)
+
+
+def get_command_value_mapping(mapping_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Get command value mapping by name.
+    
+    Args:
+        mapping_name: Name of the mapping
+        
+    Returns:
+        Dict with value mappings or None if not found
+    """
+    return COMMAND_VALUE_MAPPINGS.get(mapping_name)
+
+
+def get_conditional_visibility_rule(field_name: str) -> Optional[Dict[str, str]]:
+    """
+    Get conditional visibility rule for a field.
+    
+    Args:
+        field_name: Full field name (section.parameter.field)
+        
+    Returns:
+        Dict with visibility rule or None if not found
+    """
+    return CONDITIONAL_VISIBILITY_RULES.get(field_name)
+
+
+def get_all_sections_ordered() -> List[SectionConfig]:
+    """
+    Get all sections ordered by their order attribute.
+    
+    Returns:
+        List of SectionConfig objects ordered by order attribute
+    """
+    return sorted(PARAMETER_SPECIFICATION.values(), key=lambda x: x.order)
+
+
+def get_all_ui_element_types() -> List[str]:
+    """
+    Get all unique UI element types used in the specification.
+    
+    Returns:
+        List of unique UI element type strings
+    """
+    element_types = set()
+    
+    for section in PARAMETER_SPECIFICATION.values():
+        for param in section.parameters.values():
+            if param.ui_element:
+                element_types.add(param.ui_element)
+            if param.fields:
+                for field in param.fields.values():
+                    element_types.add(field.ui_element)
+    
+    return sorted(list(element_types))
+
+
+def validate_specification_completeness() -> Dict[str, List[str]]:
+    """
+    Validate that the specification is complete and consistent.
+    
+    Returns:
+        Dict with validation results and any issues found
+    """
+    issues = {
+        'missing_commands': [],
+        'missing_labels': [],
+        'invalid_ui_elements': [],
+        'missing_validation': []
+    }
+    
+    valid_ui_elements = {
+        'text_input', 'number_input', 'dropdown', 'toggle_switch', 
+        'slider', 'password_input'
+    }
+    
+    for section_name, section in PARAMETER_SPECIFICATION.items():
+        for param_name, param in section.parameters.items():
+            # Check for missing commands
+            if not param.commands:
+                issues['missing_commands'].append(f"{section_name}.{param_name}")
+            
+            # Check for missing labels
+            if not param.label:
+                issues['missing_labels'].append(f"{section_name}.{param_name}")
+            
+            # Check UI elements
+            if param.ui_element and param.ui_element not in valid_ui_elements:
+                issues['invalid_ui_elements'].append(f"{section_name}.{param_name}")
+            
+            # Check fields if they exist
+            if param.fields:
+                for field_name, field in param.fields.items():
+                    if field.ui_element not in valid_ui_elements:
+                        issues['invalid_ui_elements'].append(f"{section_name}.{param_name}.{field_name}")
+                    
+                    if not field.label:
+                        issues['missing_labels'].append(f"{section_name}.{param_name}.{field_name}")
+    
+    return issues
+</document_content>
+</document>
+<document index="57">
+<source>.\services\parameter_specification_factory.py</source>
+<document_content>
+"""
+Parameter Specification Factory
+
+This module provides a factory class for creating parameter UI elements based on the
+parameter specification. It integrates with the ParameterUIElementFactory to generate
+all parameters from the specification data structure with proper validation rules
+and UI element types.
+"""
+
+import customtkinter as ctk
+from typing import Dict, List, Optional, Any, Callable, Tuple
+from dataclasses import dataclass
+from tkinter import messagebox
+from ui.custom_dialogs import show_error, show_info
+from services.parameter_specification import (
+    get_parameter_specification, 
+    get_all_sections_ordered,
+    get_validation_rule,
+    get_command_value_mapping,
+    get_conditional_visibility_rule,
+    SectionConfig,
+    ParameterConfig,
+    FieldConfig,
+    VALIDATION_RULES
+)
+from ui.parameter_ui_element_factory import ParameterUIElementFactory, UIElementConfig, BaseUIElement
+from services.conditional_field_manager import get_conditional_field_manager
+from ui.parameter_ui_element_factory import ToggleSwitchElement
+
+
+
+@dataclass
+class ParameterWidget:
+    """Container for a parameter widget and its metadata"""
+    name: str
+    config: ParameterConfig
+    widget_type: str  # 'simple' or 'complex'
+    ui_elements: Dict[str, BaseUIElement]  # field_name -> UI element
+    container_frame: ctk.CTkFrame
+    label_widget: Optional[ctk.CTkLabel] = None
+    title_widget: Optional[ctk.CTkLabel] = None
+    send_button: Optional[ctk.CTkButton] = None
+
+
+@dataclass
+class SectionWidget:
+    """Container for a section widget and its parameters"""
+    name: str
+    config: SectionConfig
+    container_frame: ctk.CTkFrame
+    title_widget: ctk.CTkLabel
+    parameters: Dict[str, ParameterWidget]
+
+
+class ParameterSpecificationFactory:
+    """Factory for creating parameter UI elements from specification"""
+    
+    def __init__(self, i18n_service, validation_service=None, serial_service=None):
+        self.i18n_service = i18n_service
+        self.validation_service = validation_service
+        self.serial_service = serial_service
+        self.ui_element_factory = ParameterUIElementFactory(i18n_service)
+        self.conditional_field_manager = get_conditional_field_manager()
+        self.field_element_mapping = {}  # field_name -> ui_element for conditional fields
+        
+    def create_all_sections(self, parent_widget) -> Dict[str, SectionWidget]:
+        """
+        Create all parameter sections from the specification.
+        
+        Args:
+            parent_widget: Parent widget to contain the sections
+            
+        Returns:
+            Dict mapping section names to SectionWidget objects
+        """
+        sections = {}
+        ordered_sections = get_all_sections_ordered()
+        
+        for i, section_config in enumerate(ordered_sections):
+            section_widget = self.create_section(parent_widget, section_config, i)
+            sections[section_config.name] = section_widget
+            
+        return sections
+    
+    def create_section(self, parent_widget, section_config: SectionConfig, row_index: int) -> SectionWidget:
+        """
+        Create a single parameter section.
+        
+        Args:
+            parent_widget: Parent widget to contain the section
+            section_config: Configuration for the section
+            row_index: Grid row index for the section
+            
+        Returns:
+            SectionWidget object
+        """
+        # Create section container frame
+        section_frame = ctk.CTkFrame(parent_widget)
+        section_frame.grid(row=row_index, column=0, padx=10, pady=10, sticky="ew")
+        section_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create section title
+        section_title = ctk.CTkLabel(
+            section_frame,
+            text=self.i18n_service.get(f"section_{section_config.name}", section_config.label),
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        section_title.grid(row=0, column=0, padx=15, pady=(15, 10), sticky="w")
+        
+        # Create parameters within the section
+        parameters = {}
+        param_row = 1
+        
+        for param_name, param_config in section_config.parameters.items():
+            param_widget = self.create_parameter(section_frame, param_config, param_row)
+            parameters[param_name] = param_widget
+            param_row += 1
+        
+        return SectionWidget(
+            name=section_config.name,
+            config=section_config,
+            container_frame=section_frame,
+            title_widget=section_title,
+            parameters=parameters
+        )
+    
+    def create_parameter(self, parent_widget, param_config: ParameterConfig, row_index: int) -> ParameterWidget:
+        """
+        Create a single parameter widget.
+        
+        Args:
+            parent_widget: Parent widget to contain the parameter
+            param_config: Configuration for the parameter
+            row_index: Grid row index for the parameter
+            
+        Returns:
+            ParameterWidget object
+        """
+        if param_config.fields:
+            return self._create_complex_parameter(parent_widget, param_config, row_index)
+        else:
+            return self._create_simple_parameter(parent_widget, param_config, row_index)
+    
+    def _create_simple_parameter(self, parent_widget, param_config: ParameterConfig, row_index: int) -> ParameterWidget:
+        """Create a simple parameter (single UI element)"""
+        # Create parameter container frame
+        param_frame = ctk.CTkFrame(parent_widget)
+        param_frame.grid(row=row_index, column=0, padx=15, pady=5, sticky="ew")
+        param_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create content frame to hold UI element and send button
+        content_frame = ctk.CTkFrame(param_frame)
+        content_frame.grid(row=0, column=0, padx=0, pady=0, sticky="ew")
+        content_frame.grid_columnconfigure(0, weight=1)
+        
+        # Get validation rules for this parameter
+        validation_rules = self._get_validation_rules_for_parameter(param_config)
+        
+        # Create UI element configuration
+        ui_config = UIElementConfig(
+            element_type=param_config.ui_element,
+            label=self.i18n_service.get(param_config.name, param_config.label),
+            validation_rules=validation_rules,
+            options=param_config.options,
+            range_config=self._get_range_config_for_parameter(param_config),
+            unit=param_config.unit,
+            translation_key=param_config.name
+        )
+        
+        # Create UI element
+        ui_element = self.ui_element_factory.create_element(
+            param_config.ui_element,
+            ui_config,
+            validation_callback=self._on_parameter_validation
+        )
+        
+        # Create the widget in the content frame
+        element_widget = ui_element.create_widget(content_frame)
+        element_widget.grid(row=0, column=0, padx=0, pady=0, sticky="ew")
+        
+        # Create send button
+        send_button = ctk.CTkButton(
+            content_frame,
+            text=self.i18n_service.get("send_button", "Enviar"),
+            width=80,
+            height=28,
+            command=lambda: self._send_parameter_command(param_config.name)
+        )
+        send_button.grid(row=0, column=1, padx=(10, 0), pady=0, sticky="e")
+        
+        return ParameterWidget(
+            name=param_config.name,
+            config=param_config,
+            widget_type='simple',
+            ui_elements={'main': ui_element},
+            container_frame=param_frame,
+            send_button=send_button
+        )
+    
+    def _create_complex_parameter(self, parent_widget, param_config: ParameterConfig, row_index: int) -> ParameterWidget:
+        """Create a complex parameter (multiple fields)"""
+        # Create parameter container frame
+        param_frame = ctk.CTkFrame(parent_widget)
+        param_frame.grid(row=row_index, column=0, padx=15, pady=5, sticky="ew")
+        param_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create title frame to hold title and send button
+        title_frame = ctk.CTkFrame(param_frame)
+        title_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+        title_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create parameter title
+        param_title = ctk.CTkLabel(
+            title_frame,
+            text=self.i18n_service.get(f"param_{param_config.name}", param_config.label),
+            font=ctk.CTkFont(weight="bold")
+        )
+        param_title.grid(row=0, column=0, padx=0, pady=0, sticky="w")
+        
+        # Create send button for this parameter
+        send_button = ctk.CTkButton(
+            title_frame,
+            text=self.i18n_service.get("send_button", "Enviar"),
+            width=80,
+            height=28,
+            command=lambda: self._send_parameter_command(param_config.name)
+        )
+        send_button.grid(row=0, column=1, padx=(10, 0), pady=0, sticky="e")
+        
+        # Create fields
+        ui_elements = {}
+        field_row = 1
+        
+        for field_name, field_config in param_config.fields.items():
+            # Get validation rules for this field
+            validation_rules = self._get_validation_rules_for_field(param_config.name, field_name, field_config)
+            
+            # Create UI element configuration
+            ui_config = UIElementConfig(
+                element_type=field_config.ui_element,
+                label=self.i18n_service.get(field_name, field_config.label),
+                validation_rules=validation_rules,
+                options=field_config.options,
+                range_config=self._get_range_config_for_field(field_config),
+                unit=field_config.unit,
+                visibility_condition=field_config.visibility_condition,
+                translation_key=field_name
+            )
+            
+            # Create UI element
+            ui_element = self.ui_element_factory.create_element(
+                field_config.ui_element,
+                ui_config,
+                validation_callback=self._on_field_validation
+            )
+            
+            # Create the widget in the parameter frame
+            element_widget = ui_element.create_widget(param_frame)
+            element_widget.grid(row=field_row, column=0, padx=10, pady=2, sticky="ew")
+            
+            ui_elements[field_name] = ui_element
+            
+            # Set value change callback for all fields to handle conditional logic
+            full_field_name = f"{param_config.name}.{field_name}"
+            ui_element.set_value_change_callback(lambda value, name=full_field_name: self._on_field_value_change(name, value))
+
+            # Handle conditional visibility registration
+            if field_config.visibility_condition:
+                self.conditional_field_manager.register_field_widget(full_field_name, element_widget)
+                self.field_element_mapping[full_field_name] = ui_element
+            
+            field_row += 1
+        
+        return ParameterWidget(
+            name=param_config.name,
+            config=param_config,
+            widget_type='complex',
+            ui_elements=ui_elements,
+            container_frame=param_frame,
+            title_widget=param_title,
+            send_button=send_button
+        )
+    
+    def _get_validation_rules_for_parameter(self, param_config: ParameterConfig) -> Optional[Dict[str, Any]]:
+        """Get validation rules for a simple parameter"""
+        if not param_config.validation:
+            return None
+        
+        # Map parameter validation to validation rules
+        validation_mapping = {
+            'port': 'port',
+            'apn': 'apn',
+            'ip_url': 'ip_url',
+            '5-600': 'speed_detection_time',
+            '1-255': 'speed_limit',
+            '1-20': 'angle_min_speed',
+            '5-90': 'angle_variation',
+            '2-60': 'power_detection_time',
+            '1-3600': 'min_charge_time',
+            '1-6': 'vibration_level',
+            '0-1800': 'jammer_confirmation_time',
+            '0-255': 'jammer_speed_limit'
+        }
+        
+        rule_name = validation_mapping.get(param_config.validation)
+        if rule_name:
+            return get_validation_rule(rule_name)
+        
+        # Handle range validation directly
+        if '-' in param_config.validation:
+            try:
+                min_val, max_val = param_config.validation.split('-')
+                return {
+                    'type': 'numeric_range',
+                    'min': int(min_val),
+                    'max': int(max_val),
+                    'error_message': f"Value must be between {min_val} and {max_val}"
+                }
+            except ValueError:
+                pass
+        
+        return None
+    
+    def _get_validation_rules_for_field(self, param_name: str, field_name: str, field_config: FieldConfig) -> Optional[Dict[str, Any]]:
+        """Get validation rules for a field in a complex parameter"""
+        if not field_config.validation:
+            return None
+        
+        # Use the same mapping as simple parameters
+        return self._get_validation_rules_for_parameter(field_config)
+    
+    def _get_range_config_for_parameter(self, param_config: ParameterConfig) -> Optional[Dict[str, Any]]:
+        """Get range configuration for sliders and number inputs"""
+        if param_config.ui_element == 'slider' and param_config.validation:
+            if '-' in param_config.validation:
+                try:
+                    min_val, max_val = param_config.validation.split('-')
+                    return {'min': int(min_val), 'max': int(max_val)}
+                except ValueError:
+                    pass
+        return None
+    
+    def _get_range_config_for_field(self, field_config: FieldConfig) -> Optional[Dict[str, Any]]:
+        """Get range configuration for a field"""
+        if field_config.ui_element == 'slider' and field_config.validation:
+            if '-' in field_config.validation:
+                try:
+                    min_val, max_val = field_config.validation.split('-')
+                    return {'min': int(min_val), 'max': int(max_val)}
+                except ValueError:
+                    pass
+        return None
+    
+    def _setup_conditional_visibility(self, param_name: str, field_name: str, condition: str, ui_element: BaseUIElement, element_widget):
+        """Setup conditional visibility for a field"""
+        full_field_name = f"{param_name}.{field_name}"
+        
+        # Register the widget with the conditional field manager
+        self.conditional_field_manager.register_field_widget(full_field_name, element_widget)
+        
+        # Store the mapping for value change callbacks
+        self.field_element_mapping[full_field_name] = ui_element
+        
+        # Set up value change callback to notify conditional field manager
+        ui_element.set_value_change_callback(lambda value: self._on_field_value_change(full_field_name, value))
+    
+    def _on_parameter_validation(self, ui_element: BaseUIElement):
+        """Handle parameter validation events"""
+        # Find the parameter name and notify conditional field manager
+        param_name = self._find_parameter_name_for_element(ui_element)
+        if param_name:
+            self.conditional_field_manager.update_current_value(param_name, ui_element.get_value())
+    
+    def _on_field_validation(self, ui_element: BaseUIElement):
+        """Handle field validation events"""
+        # Find the field name and notify conditional field manager
+        field_name = self._find_field_name_for_element(ui_element)
+        if field_name:
+            self.conditional_field_manager.update_current_value(field_name, ui_element.get_value())
+    
+    def _on_field_value_change(self, field_name: str, value: Any):
+        """Handle field value changes for conditional visibility"""
+        self.conditional_field_manager.update_current_value(field_name, value)
+    
+    def _find_parameter_name_for_element(self, ui_element: BaseUIElement) -> Optional[str]:
+        """Find parameter name for a UI element"""
+        # Search through field element mapping to find the field name
+        for field_name, element in self.field_element_mapping.items():
+            if element == ui_element:
+                return field_name
+        return None
+    
+    def _find_field_name_for_element(self, ui_element: BaseUIElement) -> Optional[str]:
+        """Find field name for a UI element"""
+        # Same as parameter name for fields
+        return self._find_parameter_name_for_element(ui_element)
+    
+    def get_parameter_value(self, section_name: str, param_name: str, section_widgets: Dict[str, SectionWidget]) -> Any:
+        """Get value from a parameter widget"""
+        print(f"DEBUG: get_parameter_value - START: {section_name}.{param_name}")
+        if section_name not in section_widgets:
+            print(f"DEBUG: get_parameter_value - Section {section_name} not found")
+            return None
+        
+        section_widget = section_widgets[section_name]
+        if param_name not in section_widget.parameters:
+            print(f"DEBUG: get_parameter_value - Parameter {param_name} not found in section {section_name}")
+            return None
+        
+        param_widget = section_widget.parameters[param_name]
+        print(f"DEBUG: get_parameter_value - Widget type: {param_widget.widget_type}")
+        
+        if param_widget.widget_type == 'simple':
+            print(f"DEBUG: get_parameter_value - Getting simple value for {param_name}")
+            value = param_widget.ui_elements['main'].get_value()
+            print(f"DEBUG: get_parameter_value - Got value: {value}")
+            return value
+        elif param_widget.widget_type == 'complex':
+            print(f"DEBUG: get_parameter_value - Getting complex values for {param_name}")
+            values = {}
+            for field_name, ui_element in param_widget.ui_elements.items():
+                print(f"DEBUG: get_parameter_value - Getting field {field_name}")
+                values[field_name] = ui_element.get_value()
+            print(f"DEBUG: get_parameter_value - Got complex values: {values}")
+            return values
+        
+        print(f"DEBUG: get_parameter_value - END: {section_name}.{param_name}")
+        return None
+    
+    def _clean_time_parameter_value(self, param_name: str, field_name: str, field_value: Any) -> Any:
+        """
+        Clean time parameter values to show only numeric values.
+        
+        Args:
+            param_name: Name of the parameter (e.g., 'report_intervals')
+            field_name: Name of the field (e.g., 'moving_time')
+            field_value: Raw field value (e.g., '60s' or 'ACC OFF:120s')
+            
+        Returns:
+            Cleaned value for time parameters, original value for others
+        """
+        # Define time parameters and their fields that need cleaning
+        time_parameters = {
+            'report_intervals': ['moving_time', 'stopped_time'],
+            'heartbeat_intervals': ['moving_heartbeat', 'stopped_heartbeat'],
+            'sleep_time': ['sleep_time'],
+            'speed_alert': ['detection_time'],
+            'power_detection': ['power_detection_time'],
+            'charge_settings': ['min_charge_time'],
+            'jammer_detection': ['jammer_confirmation_time']
+        }
+        
+        # Check if this is a time parameter field that needs cleaning
+        if param_name in time_parameters and field_name in time_parameters[param_name]:
+            if isinstance(field_value, str):
+                cleaned_value = self._extract_numeric_value_from_time_string(field_value)
+                print(f"DEBUG: Time parameter cleaning - {param_name}.{field_name}: '{field_value}' -> '{cleaned_value}'")
+                return cleaned_value
+        
+        return field_value
+    
+    def _extract_numeric_value_from_time_string(self, time_string: str) -> str:
+        """
+        Extract numeric value from time parameter strings.
+        
+        Examples:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "180" -> "180"
+        
+        Args:
+            time_string: Time string that may contain units and prefixes
+            
+        Returns:
+            str: Numeric value only
+        """
+        if not time_string:
+            return ""
+        
+        # Extract all digits from the string
+        import re
+        digits = re.findall(r'\d+', str(time_string))
+        
+        # Return the last number found (handles cases like "ACC OFF:120s")
+        return digits[-1] if digits else ""
+
+    def set_parameter_value(self, section_name: str, param_name: str, value: Any, section_widgets: Dict[str, SectionWidget]):
+        """Set value for a parameter widget"""
+        if section_name not in section_widgets:
+            return
+        
+        section_widget = section_widgets[section_name]
+        if param_name not in section_widget.parameters:
+            return
+        
+        param_widget = section_widget.parameters[param_name]
+        
+        if param_widget.widget_type == 'simple':
+            param_widget.ui_elements['main'].set_value(value)
+        elif param_widget.widget_type == 'complex' and isinstance(value, dict):
+            for field_name, field_value in value.items():
+                if field_name in param_widget.ui_elements:
+                    # Apply time parameter cleaning for time-related fields
+                    cleaned_value = self._clean_time_parameter_value(param_name, field_name, field_value)
+                    param_widget.ui_elements[field_name].set_value(cleaned_value)
+    
+    def get_all_parameter_values(self, section_widgets: Dict[str, SectionWidget]) -> Dict[str, Any]:
+        """Get all parameter values from all sections"""
+        print(f"DEBUG: get_all_parameter_values - START, {len(section_widgets)} sections")
+        all_values = {}
+        
+        for section_name, section_widget in section_widgets.items():
+            print(f"DEBUG: get_all_parameter_values - Processing section: {section_name}")
+            section_values = {}
+            for param_name in section_widget.parameters:
+                print(f"DEBUG: get_all_parameter_values - Getting value for {section_name}.{param_name}")
+                param_value = self.get_parameter_value(section_name, param_name, section_widgets)
+                if param_value is not None:
+                    section_values[param_name] = param_value
+            
+            if section_values:
+                all_values[section_name] = section_values
+        
+        print(f"DEBUG: get_all_parameter_values - END, returning {len(all_values)} sections")
+        return all_values
+    
+    def set_all_parameter_values(self, values: Dict[str, Any], section_widgets: Dict[str, SectionWidget]):
+        """Set all parameter values in all sections"""
+        for section_name, section_values in values.items():
+            if isinstance(section_values, dict):
+                for param_name, param_value in section_values.items():
+                    self.set_parameter_value(section_name, param_name, param_value, section_widgets)
+    
+    def validate_all_parameters(self, section_widgets: Dict[str, SectionWidget]) -> Tuple[bool, List[str]]:
+        """Validate all parameters and return validation status and error messages"""
+        all_valid = True
+        error_messages = []
+        
+        for section_name, section_widget in section_widgets.items():
+            for param_name, param_widget in section_widget.parameters.items():
+                for field_name, ui_element in param_widget.ui_elements.items():
+                    if not ui_element.validate():
+                        all_valid = False
+                        error_msg = ui_element.get_validation_error()
+                        if error_msg:
+                            error_messages.append(f"{section_name}.{param_name}.{field_name}: {error_msg}")
+        
+        return all_valid, error_messages
+    
+    def initialize_conditional_field_visibility(self, section_widgets: Dict[str, SectionWidget]):
+        """Initialize conditional field visibility based on current parameter values"""
+        # Get all current parameter values
+        current_values = self.get_all_parameter_values(section_widgets)
+        
+        # Flatten the values for the conditional field manager
+        flattened_values = {}
+        for section_name, section_values in current_values.items():
+            if isinstance(section_values, dict):
+                for param_name, param_value in section_values.items():
+                    if isinstance(param_value, dict):
+                        # Complex parameter with fields
+                        for field_name, field_value in param_value.items():
+                            full_field_name = f"{param_name}.{field_name}"
+                            flattened_values[full_field_name] = field_value
+                    else:
+                        # Simple parameter
+                        full_param_name = f"{section_name}.{param_name}"
+                        flattened_values[full_param_name] = param_value
+        
+        # Initialize conditional field manager with current values
+        self.conditional_field_manager.initialize_field_visibility(flattened_values)
+    
+    def update_language_display(self, section_widgets: Dict[str, SectionWidget]):
+        """Update language display for all sections and parameters"""
+        for section_name, section_widget in section_widgets.items():
+            # Update section title - safely check if configure method exists
+            if hasattr(section_widget.title_widget, 'configure'):
+                try:
+                    section_widget.title_widget.configure(
+                        text=self.i18n_service.get(section_name, section_widget.config.label)
+                    )
+                except Exception as e:
+                    print(f"WARNING: Failed to configure section title for {section_name}: {e}")
+            
+            # Update parameter labels and elements
+            for param_name, param_widget in section_widget.parameters.items():
+                if param_widget.title_widget and hasattr(param_widget.title_widget, 'configure'):
+                    try:
+                        param_widget.title_widget.configure(
+                            text=self.i18n_service.get(param_name, param_widget.config.label)
+                        )
+                    except Exception as e:
+                        print(f"WARNING: Failed to configure parameter title for {param_name}: {e}")
+                
+                # Update send button text - safely check if configure method exists
+                if param_widget.send_button and hasattr(param_widget.send_button, 'configure'):
+                    try:
+                        param_widget.send_button.configure(
+                            text=self.i18n_service.get("send_button", "Enviar")
+                        )
+                    except Exception as e:
+                        print(f"WARNING: Failed to configure send button for {param_name}: {e}")
+                
+                # Update UI elements - safely handle any configure calls
+                for field_name, ui_element in param_widget.ui_elements.items():
+                    try:
+                        if hasattr(ui_element, 'update_language_display'):
+                            ui_element.update_language_display(self.i18n_service)
+                    except Exception as e:
+                        print(f"WARNING: Failed to update language display for {param_name}.{field_name}: {e}")
+    
+    def _send_parameter_command(self, param_name: str):
+        print(f"Sending command for parameter: {param_name}")
+        """Send command for a specific parameter to the device"""
+        if not self.serial_service:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("no_serial_service", "Serial service not available")
+            )
+            return
+        
+        if not self.serial_service.is_connected:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("not_connected_error", "Device not connected")
+            )
+            return
+        
+        try:
+            # Import device command mapper here to avoid circular imports
+            from services.device_command_mapper import DeviceCommandMapper
+            
+            # Get parameter values from UI
+            param_values = self._get_current_parameter_values(param_name)
+            if not param_values:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("no_parameter_values", "No parameter values to send")
+                )
+                return
+            
+            # Create command mapper and generate command
+            command_mapper = DeviceCommandMapper()
+            
+            # Handle different parameter types
+            if param_name == 'apn_settings':
+                self._send_apn_command(param_values)
+            elif param_name == 'server_settings':
+                self._send_server_command(param_values)
+            elif param_name == 'report_intervals':
+                self._send_timer_command(param_values)
+            elif param_name == 'heartbeat_intervals':
+                self._send_heartbeat_command(param_values)
+            elif param_name == 'protocol':
+                self._send_protocol_command(param_values)
+            elif param_name == 'tcp_ack':
+                self._send_tcp_ack_command(param_values)
+            elif param_name == 'ignition_type':
+                self._send_ignition_command(param_values)
+            elif param_name == 'speed_alert':
+                self._send_speed_alert_command(param_values)
+            elif param_name == 'speed_buzzer':
+                self._send_speed_buzzer_command(param_values)
+            elif param_name == 'blind_area_speed':
+                self._send_blind_area_speed_command(param_values)
+            elif param_name == 'sleep_mode':
+                self._send_sleep_mode_command(param_values)
+            elif param_name == 'sleep_time':
+                self._send_sleep_time_command(param_values)
+            elif param_name == 'angle_report':
+                self._send_angle_report_command(param_values)
+            elif param_name == 'backup_battery_alert':
+                self._send_backup_battery_alert_command(param_values)
+            elif param_name == 'main_power_alert':
+                self._send_main_power_alert_command(param_values)
+            elif param_name == 'vibration_sensitivity':
+                self._send_vibration_sensitivity_command(param_values)
+            elif param_name == 'vibration_window':
+                self._send_vibration_window_command(param_values)
+            elif param_name == 'jammer_detection':
+                self._send_jammer_detection_command(param_values)
+            elif param_name == 'jammer_relay_action':
+                self._send_jammer_relay_action_command(param_values)
+            elif param_name == 'odometer':
+                self._send_odometer_command(param_values)
+            elif param_name == 'hourmeter':
+                self._send_hourmeter_command(param_values)
+            elif param_name == 'network_settings':
+                self._send_network_settings_command(param_values)
+            elif param_name == 'source_off_type':
+                self._send_source_off_type_command(param_values)
+            elif param_name == 'relay_control':
+                self._send_relay_control_command(param_values)
+            elif param_name == 'sends_control':
+                self._send_sends_control_command(param_values)
+            elif param_name in ['movement_alert', 'moving_alert', 'moving']:
+                print(f"DEBUG: Sending moving alert command with values: {param_values}")
+                # Format enabled correctly as boolean
+                enabled = bool(param_values.get('enabled', False))
+                radius = param_values.get('radius', 1000)
+                alert_type = param_values.get('alert_type', 'Apenas GPRS')
+                
+                # Format command
+                if not enabled:
+                    command = "ATSMS:MOVING,OFF#"
+                else:
+                    notification_mode = 1 if alert_type == 'SMS+GPRS' else 0
+                    command = f"ATSMS:MOVING,ON,{radius},{notification_mode}#"
+                
+                print(f"DEBUG: Sending command: {command}")
+                if self.serial_service:
+                    self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
+                else:
+                    print("ERROR: No serial service available to send command")
+            elif param_name == 'motion_sensor_alert':
+                self._send_motion_sensor_alert_command(param_values)
+            elif param_name == 'distance_movement_action':
+                self._send_distance_movement_action_command(param_values)
+            elif param_name == 'acc_on_alert':
+                self._send_acc_on_alert_command(param_values)
+            elif param_name == 'acc_off_alert':
+                self._send_acc_off_alert_command(param_values)
+            elif param_name == 'backup_battery_protection_voltage':
+                self._send_backup_battery_protection_voltage_command(param_values)
+            elif param_name == 'defense_settings':
+                self._send_defense_command(param_values)
+            else:
+                # Generic parameter sending
+                self._send_generic_parameter_command(param_name, param_values)
+                
+        except Exception as e:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                f"{self.i18n_service.get('send_command_error', 'Error sending command')}: {str(e)}"
+            )
+    
+    def _get_current_parameter_values(self, param_name: str) -> dict:
+        """Get current parameter values from UI for sending commands"""
+        if not hasattr(self, 'section_widgets') or not self.section_widgets:
+            return {}
+        
+        # First, try to find the parameter directly in section widgets
+        for section_name, section_widget in self.section_widgets.items():
+            if param_name in section_widget.parameters:
+                param_widget = section_widget.parameters[param_name]
+                values = {}
+                
+                # Extract values from UI elements.
+                # Prefer the UI element's display/raw string (get_display_value) when available
+                # so formatting like leading zeros is preserved for command construction.
+                for field_name, ui_element in param_widget.ui_elements.items():
+                    try:
+                        # Use raw/display value if element provides it and it's not empty
+                        display_value = None
+                        if hasattr(ui_element, 'get_display_value'):
+                            try:
+                                display_value = ui_element.get_display_value()
+                            except Exception:
+                                display_value = None
+                        
+                        if display_value is not None and str(display_value) != '':
+                            values[field_name] = display_value
+                        else:
+                            # Fallback to typed value
+                            value = ui_element.get_value()
+                            if value is None: # Convert None to empty string
+                                value = ""
+                            if isinstance(ui_element, ToggleSwitchElement):
+                                # For toggle switches, ensure boolean conversion
+                                values[field_name] = bool(value)
+                            else:
+                                values[field_name] = value
+                    except Exception as e:
+                        print(f"WARNING: Failed to get value for {param_name}.{field_name}: {e}")
+                        values[field_name] = None
+                
+                # Convert enabled to boolean if needed
+                if 'enabled' in values and not isinstance(values['enabled'], bool):
+                    values['enabled'] = bool(values['enabled'])
+                
+                # Debug: log the captured values and their types to help diagnose formatting issues
+                try:
+                    print(f"DEBUG: _get_current_parameter_values - captured values for '{param_name}': {values}")
+                    for k, v in values.items():
+                        try:
+                            print(f"DEBUG: _get_current_parameter_values - field '{k}' type: {type(v).__name__}, repr: {v!r}")
+                        except Exception:
+                            print(f"DEBUG: _get_current_parameter_values - field '{k}' value (unprintable)")
+                except Exception:
+                    pass
+                
+                return values
+        
+        # If not found directly, try to use the existing get_parameter_value method
+        # This handles the case where we need to get values from section.parameter structure
+        try:
+            # Map common parameter names to their section locations
+            section_mapping = {
+                'protocol': ('service_parameters', 'protocol'),
+                'tcp_ack': ('service_parameters', 'tcp_ack'),
+                'speed_buzzer': ('speed', 'speed_buzzer'),
+                'sleep_mode': ('power_saving', 'sleep_mode'),
+                'sleep_time': ('power_saving', 'sleep_time'),
+                'backup_battery_alert': ('battery_alerts', 'backup_battery_alert'),
+                'odometer': ('miscellaneous', 'odometer'),
+                'hourmeter': ('miscellaneous', 'hourmeter')
+            }
+            
+            if param_name in section_mapping:
+                section_name, param_key = section_mapping[param_name]
+                if hasattr(self, 'get_parameter_value'):
+                    value = self.get_parameter_value(section_name, param_key, self.section_widgets)
+                    if value is not None:
+                        # Return the value in the expected format
+                        return {param_name: value}
+        except Exception as e:
+            print(f"WARNING: Failed to get parameter value using section mapping for {param_name}: {e}")
+        
+        return {}
+    
+    def _get_parameter_values_for_command(self, param_name: str) -> dict:
+        """Get parameter values from UI for sending commands"""
+        # This method needs access to the section widgets to get current values
+        # Since we don't have direct access here, we'll need to modify the approach
+        # For now, return empty dict and handle this in the parameters frame
+        return {}
+    
+    def set_section_widgets_reference(self, section_widgets: Dict[str, SectionWidget]):
+        """Set reference to section widgets for getting parameter values"""
+        self.section_widgets = section_widgets
+    
+    def _send_apn_command(self, values: dict):
+        """Send APN configuration command"""
+        server = str(values.get('apn', '')).strip()
+        user = str(values.get('user', '')).strip()
+        password = str(values.get('password', '')).strip()
+        
+        command = f"ATSMS:APN,{server},{user},{password}#"
+        # This is a direct UI-initiated send; bypass pre-send validation to avoid
+        # blocking well-formed APN commands from the user's Send button.
+        self.serial_service.send_command(command, command_type='apn', bypass_validation=True)
+
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("apn_command_sent", "APN configuration sent to device")
+        )
+    
+    def _send_server_command(self, values: dict):
+        """Send server configuration command"""
+        address = str(values.get('address', '')).strip()
+        port = str(values.get('port', '')).strip()
+        
+        if not address or not port:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("server_address_port_required", "Server address and port are required")
+            )
+            return
+        
+        # Determine if address is IP (0) or domain (1)
+        import re
+        ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
+        server_type = '0' if re.match(ip_pattern, address) else '1'
+
+        command = f"ATSMS:SERVER,{server_type},{address},{port},0#"
+        # Bypass validation for UI-initiated server configuration sends
+        self.serial_service.send_command(command, command_type='server', bypass_validation=True)
+
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("server_command_sent", "Server configuration sent to device")
+        )
+    
+    def _send_timer_command(self, values: dict):
+        """Send timer intervals command"""
+        moving_time = str(values.get('moving_time', '')).strip()
+        stopped_time = str(values.get('stopped_time', '')).strip()
+        
+        if not moving_time or not stopped_time:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("timer_values_required", "Both moving and stopped times are required")
+            )
+            return
+        
+        command = f"ATSMS:TIMER,{moving_time},{stopped_time}#"
+        self.serial_service.send_command(command)
+        
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("timer_command_sent", "Timer configuration sent to device")
+        )
+    
+    def _send_heartbeat_command(self, values: dict):
+        """Send heartbeat intervals command"""
+        moving_heartbeat = str(values.get('moving_heartbeat', '')).strip()
+        stopped_heartbeat = str(values.get('stopped_heartbeat', '')).strip()
+        
+        if not moving_heartbeat or not stopped_heartbeat:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("heartbeat_values_required", "Both moving and stopped heartbeat values are required")
+            )
+            return
+        
+        command = f"ATSMS:HBT,{moving_heartbeat},{stopped_heartbeat}#"
+        self.serial_service.send_command(command)
+        
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("heartbeat_command_sent", "Heartbeat configuration sent to device")
+        )
+    
+    def _send_protocol_command(self, values: dict):
+        """Send protocol configuration command"""
+        protocol = str(values.get('main', '')).strip()
+        
+        if not protocol:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("protocol_required", "Protocol selection is required")
+            )
+            return
+        
+        # Map protocol names to values
+        protocol_mapping = {
+            'GT06 (0x60)': '0',
+            'CRX3 (0x22)': '1', 
+            'GT06 (0x12)': '2'
+        }
+        
+        protocol_value = protocol_mapping.get(protocol, '0')
+        command = f"ATSMS:SZCS#GT06SEL={protocol_value}"
+        self.serial_service.send_command(command)
+        
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("protocol_command_sent", "Protocol configuration sent to device")
+        )
+    
+    def _send_tcp_ack_command(self, values: dict):
+        """Send TCP ACK configuration command"""
+        tcp_ack = str(values.get('main', '')).strip()
+        
+        if not tcp_ack:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("tcp_ack_required", "TCP ACK setting is required")
+            )
+            return
+        
+        # Map boolean to command value
+        ack_value = '1' if tcp_ack.lower() in ['true', 'enabled', '1'] else '0'
+        command = f"ATSMS:SZCS#POSBYACK={ack_value}"
+        self.serial_service.send_command(command)
+        
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("tcp_ack_command_sent", "TCP ACK configuration sent to device")
+        )
+    
+    def _send_ignition_command(self, values: dict):
+        """Send ignition configuration command"""
+        ignition_mode = str(values.get('ignition_mode', '')).strip()
+        
+        if not ignition_mode:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("ignition_type_required", "Ignition type is required")
+            )
+            return
+
+        command = None
+        if ignition_mode == 'Virtual por Tens├úo da Bateria':
+            on_voltage = str(values.get('on_voltage', '')).strip()
+            off_voltage = str(values.get('off_voltage', '')).strip()
+            
+            if not on_voltage or not off_voltage:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("voltage_values_required", "ON and OFF voltage values are required for battery ignition")
+                )
+                return
+            
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage}-{off_voltage}"
+        elif ignition_mode == 'F├¡sica (Fio Laranja)':
+            command = "ATSMS:SZCS#ACCLINE=1#ACC_CFG=0-000-000"
+        elif ignition_mode == 'Virtual por Aceler├┤metro':
+            command = "ATSMS:SZCS#ACCLINE=0#ACC_CFG=0-000-000"
+        else:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("invalid_ignition_type", "Invalid ignition type")
+            )
+            return
+        
+        if command:
+            self.serial_service.send_command(command)
+        
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("ignition_command_sent", "Ignition configuration sent to device")
+        )
+    
+    def _send_speed_alert_command(self, values: dict):
+        """Send speed alert configuration command"""
+        enabled = values.get('enabled', False)
+        detection_time = str(values.get('detection_time', '')).strip()
+        speed_limit = str(values.get('speed_limit', '')).strip()
+        alert_type = str(values.get('alert_type', '')).strip()
+        
+        if enabled and (not detection_time or not speed_limit):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("speed_alert_values_required", "Detection time and speed limit are required when speed alert is enabled")
+            )
+            return
+        
+        # Map alert type to command value
+        alert_type_mapping = {
+            'Apenas GPRS': '0',
+            'GPRS+SMS': '1'
+        }
+        alert_value = alert_type_mapping.get(alert_type, '0')
+        
+        if enabled:
+            command = f"ATSMS:SPEED,ON,{detection_time},{speed_limit},{alert_value}#"
+        else:
+            command = "ATSMS:SPEED,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("speed_alert_sent", "Speed alert configuration sent to device")
+        )
+    
+    def _send_speed_buzzer_command(self, values: dict):
+        """Send speed buzzer configuration command"""
+        enabled = values.get('main', False)
+        value = '1' if enabled else '0'
+        
+        command = f"ATSMS:SZCS#SPD_LED_SHOW={value}"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("speed_buzzer_sent", "Speed buzzer configuration sent to device")
+        )
+    
+    def _send_sleep_mode_command(self, values: dict):
+        """Send sleep mode configuration command"""
+        sleep_mode = str(values.get('main', '')).strip()
+        
+        # Map sleep mode to command value
+        sleep_mode_mapping = {
+            'Desabilitado (Disabled)': '0',
+            'Sleep (Habilitado)': '1',
+            'Deep Sleep (Ultra-baixo)': '2'
+        }
+        
+        mode_value = sleep_mode_mapping.get(sleep_mode, '0')
+        command = f"ATSMS:SZCS#SLPDISCONNECT={mode_value}"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("sleep_mode_sent", "Sleep mode configuration sent to device")
+        )
+    
+    def _send_sleep_time_command(self, values: dict):
+        """Send sleep time configuration command"""
+        sleep_time = str(values.get('main', '')).strip()
+        
+        if not sleep_time:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("sleep_time_required", "Sleep time value is required")
+            )
+            return
+        
+        command = f"ATSMS:SZCS#SLEEPT={int(sleep_time)}"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("sleep_time_sent", "Sleep time configuration sent to device")
+        )
+    
+    def _send_angle_report_command(self, values: dict):
+        """Send angle report configuration command"""
+        enabled = values.get('enabled', False)
+        min_speed = str(values.get('min_speed', '')).strip()
+        angle_variation = str(values.get('angle_variation', '')).strip()
+        
+        # Debug logging to validate exact values and types coming from UI
+        try:
+            print(f"DEBUG: _send_angle_report_command - raw values: enabled={enabled!r}, min_speed={values.get('min_speed')!r}, angle_variation={values.get('angle_variation')!r}")
+            # Also print the types
+            print(f"DEBUG: _send_angle_report_command - types: enabled={type(enabled).__name__}, min_speed_type={type(values.get('min_speed')).__name__ if values.get('min_speed') is not None else 'None'}, angle_variation_type={type(values.get('angle_variation')).__name__ if values.get('angle_variation') is not None else 'None'}")
+        except Exception:
+            pass
+        
+        if enabled:
+            if not min_speed or not angle_variation:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("angle_values_required", "Minimum speed and angle variation are required when angle report is enabled")
+                )
+                return
+            # Use the exact strings (preserve leading zeros) that were captured from UI
+            min_speed_str = f"{int(min_speed):02d}"
+            angle_variation_str = f"{int(angle_variation):03d}"
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}"
+        else:
+            command = f"ATSMS:SZCS#ANGLEVALUE=00-000"
+        
+        # Log the final command for debugging
+        try:
+            print(f"DEBUG: _send_angle_report_command - sending command: {command}")
+        except Exception:
+            pass
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("angle_report_sent", "Angle report configuration sent to device")
+        )
+    
+    def _send_backup_battery_alert_command(self, values: dict):
+        """Send backup battery alert configuration command"""
+        enabled = values.get('main', False)
+        
+        if enabled:
+            command = "ATSMS:BATALM,ON,0#"
+        else:
+            command = "ATSMS:BATALM,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("backup_battery_sent", "Backup battery alert configuration sent to device")
+        )
+    
+    def _send_main_power_alert_command(self, values: dict):
+        """Send main power alert configuration command"""
+        enabled = values.get('enabled', False)
+        alert_type = str(values.get('alert_type', '')).strip()
+        detection_time = str(values.get('detection_time', '')).strip()
+        min_charge_time = str(values.get('min_charge_time', '')).strip()
+        
+        if enabled and (not detection_time or not min_charge_time):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("main_power_values_required", "Detection time and minimum charge time are required when main power alert is enabled")
+            )
+            return
+        
+        # Map alert type to command value
+        alert_type_mapping = {
+            'Apenas GPRS': '0',
+            'GPRS+SMS': '1'
+        }
+        alert_value = alert_type_mapping.get(alert_type, '0')
+        
+        if enabled:
+            command = f"ATSMS:POWERALM,ON,{alert_value},{detection_time},{min_charge_time}#"
+        else:
+            command = "ATSMS:POWERALM,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("main_power_sent", "Main power alert configuration sent to device")
+        )
+
+    def _send_network_settings_command(self, values: dict):
+        """Send network settings command"""
+        network_mode = str(values.get('main', '')).strip()
+        
+        if not network_mode:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("network_mode_required", "Network mode selection is required")
+            )
+            return
+        
+        # Map network mode to command value
+        network_mode_mapping = {
+            'AUTO': '0',
+            '4G': '1',
+            '2G': '2'
+        }
+        
+        mode_value = network_mode_mapping.get(network_mode, '0')
+        command = f"ATSMS:SZCS#NETSELECT={mode_value}"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("network_settings_sent", "Network settings sent to device")
+        )
+    
+    def _send_vibration_sensitivity_command(self, values: dict):
+        """Send vibration sensitivity configuration command"""
+        level = str(values.get('level', '1')).strip()
+        
+        try:
+            level_int = int(float(level)) # Convert to float first to handle "3.0" then to int
+        except ValueError:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("vibration_level_invalid", "Vibration sensitivity level must be an integer")
+            )
+            return
+        
+        command = f"ATSMS:SZCS#VIBL={level_int}"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("vibration_sent", "Vibration sensitivity configuration sent to device")
+        )
+    
+    def _send_jammer_detection_command(self, values: dict):
+        """Send jammer detection configuration command"""
+        enabled = values.get('main', False)
+        
+        if enabled:
+            command = "ATSMS:JAMMER,ON,0#"
+        else:
+            command = "ATSMS:JAMMER,OFF#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("jammer_detection_sent", "Jammer detection configuration sent to device")
+        )
+    
+    def _send_jammer_relay_action_command(self, values: dict):
+        """Send jammer relay action configuration command"""
+        output_operation = str(values.get('output_operation', '')).strip()
+        confirmation_time = str(values.get('confirmation_time', '0')).strip()
+        speed_limit = str(values.get('speed_limit', '0')).strip()
+        param_d = str(values.get('param_d', '0')).strip()
+        param_e = str(values.get('param_e', '0')).strip()
+        param_f = str(values.get('param_f', '0')).strip()
+        param_g_text = str(values.get('param_g', '')).strip()
+        
+        # Map output operation to command value
+        operation_mapping = {
+            'Sem A├º├úo': '0',
+            'Ativar e Manter': '1',
+            'Ativar e Desativar com Jammer': '2'
+        }
+        op_value = operation_mapping.get(output_operation, '0')
+
+        param_g_mapping = {
+            'Manter ativada': '0',
+            'Manter desativada': '1'
+        }
+        param_g_value = param_g_mapping.get(param_g_text, '0')
+        
+        command = f"ATSMS:JAMRELAY,{op_value},{confirmation_time},{speed_limit},{param_d},{param_e},{param_f},{param_g_value}#"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("jammer_relay_sent", "Jammer relay action configuration sent to device")
+        )
+    
+    def _send_odometer_command(self, values: dict):
+        """Send odometer configuration command"""
+        odometer_value = str(values.get('main', '')).strip()
+        
+        if not odometer_value:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("odometer_required", "Odometer value is required")
+            )
+            return
+        
+        # Ensure the odometer value is an integer (not a float)
+        try:
+            # Convert to float first, then to int to handle cases like "28.0"
+            odometer_int = int(float(odometer_value))
+            odometer_value = str(odometer_int)
+        except ValueError:
+            # If conversion fails, keep the original value but show a warning
+            pass
+        
+        command = f"ATSMS:MILEAGE={odometer_value}#"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("odometer_sent", "Odometer configuration sent to device")
+        )
+    
+    def _send_hourmeter_command(self, values: dict):
+        """Send hourmeter configuration command"""
+        hourmeter_value = str(values.get('main', '')).strip()
+        
+        if not hourmeter_value:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("hourmeter_required", "Hourmeter value is required")
+            )
+            return
+        
+        # Ensure the hourmeter value is an integer (not a float)
+        try:
+            # Convert to float first, then to int to handle cases like "28.0"
+            hourmeter_int = int(float(hourmeter_value))
+            hourmeter_value = str(hourmeter_int)
+        except ValueError:
+            # If conversion fails, keep the original value but show a warning
+            pass
+        
+        command = f"ATSMS:ACCONT,{hourmeter_value}#"
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("hourmeter_sent", "Hourmeter configuration sent to device")
+        )
+
+    def _send_source_off_type_command(self, values: dict):
+        """Send source off type configuration command"""
+        source_off_type = str(values.get('main', '')).strip()
+        
+        # Map source off type to command value
+        source_off_type_mapping = {
+            'Verifica FIX de GPS': '0',
+            'N├úo verifica FIX de GPS': '1'
+        }
+        
+        value = source_off_type_mapping.get(source_off_type, '0')
+        command = f"ATSMS:SZCS#SOURCE_OFF_TYPE={value}"
+        
+        self.serial_service.send_command(command, command_type='source_off_type')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("source_off_type_sent", "Source off type configuration sent to device")
+        )
+
+    def _send_relay_control_command(self, values: dict):
+        """Send relay control command"""
+        relay_control = str(values.get('main', '')).strip()
+        
+        # Map relay control to command value
+        relay_control_mapping = {
+            'Desabilitada': '0',
+            'Habilitada': '1'
+        }
+        
+        value = relay_control_mapping.get(relay_control, '0')
+        command = f"ATSMS:RELAY,{value}#"
+        
+        self.serial_service.send_command(command, command_type='relay_control')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("relay_control_sent", "Relay control configuration sent to device")
+        )
+
+    def _send_sends_control_command(self, values: dict):
+        """Send sends control command"""
+        sends_control = str(values.get('main', '')).strip()
+        
+        command = f"ATSMS:SENDS,{sends_control}#"
+        
+        self.serial_service.send_command(command, command_type='sends_control')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("sends_control_sent", "Sends control configuration sent to device")
+        )
+
+    def _send_motion_sensor_alert_command(self, values: dict):
+        """Send motion sensor alert command"""
+        enabled = values.get('enabled', False)
+        alert_type = str(values.get('alert_type', 'Apenas GPRS')).strip()
+        
+        if not enabled:
+            command = "ATSMS:SENALM,OFF#"
+        else:
+            # Map alert type to command value
+            alert_type_mapping = {
+                'Apenas GPRS': '0',
+                'GPRS+SMS': '1'
+            }
+            alert_value = alert_type_mapping.get(alert_type, '0')
+            command = f"ATSMS:SENALM,ON,{alert_value}#"
+
+        self.serial_service.send_command(command, command_type='motion_sensor_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("motion_sensor_alert_sent", "Motion sensor alert configuration sent to device")
+        )
+
+    def _send_distance_movement_action_command(self, values: dict):
+        """Send distance movement action configuration command"""
+        distance_movement_action = str(values.get('main', '')).strip()
+        
+        # Map distance movement action to command value
+        distance_movement_action_mapping = {
+            'Automaticamente ativado ap├│s entrar no modo DEFENSE (quando a igni├º├úo ├® desligada)': '0',
+            'Envia um alerta - Apenas uma vez independente da IGN on ou off': '1',
+            'Envia um alerta uma vez e bloqueia o ve├¡culo - Apenas uma vez independente da IGN on ou off': '2'
+        }
+        
+        value = distance_movement_action_mapping.get(distance_movement_action, '0')
+        command = f"ATSMS:SZCS#MOVEALMFUN={value}"
+        
+        self.serial_service.send_command(command, command_type='distance_movement_action')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("distance_movement_action_sent", "Distance movement action configuration sent to device")
+        )
+    def _send_acc_on_alert_command(self, values: dict):
+        """Send ACC ON alert configuration command"""
+        acc_on_alert = str(values.get('main', '')).strip()
+        
+        # Map ACC ON alert to command value
+        acc_on_alert_mapping = {
+            'Disabled': 'OFF',
+            'Alerta Enviado Apenas GPRS': '0',
+            'Alerta Enviado por SMS+GPRS': '1'
+        }
+        
+        value_code = acc_on_alert_mapping.get(acc_on_alert, 'OFF')
+        
+        # Handle disabled state
+        if value_code == 'OFF':
+            command = f"ATSMS:ACCALM,OFF#"
+        else:
+            command = f"ATSMS:ACCALM,ON,{value_code}#"
+        
+        self.serial_service.send_command(command, command_type='acc_on_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("acc_on_alert_sent", "ACC ON alert configuration sent to device")
+        )
+
+    def _send_acc_off_alert_command(self, values: dict):
+        """Send ACC OFF alert configuration command"""
+        acc_off_alert = str(values.get('main', '')).strip()
+        
+        if acc_off_alert == 'Desabilitado':
+            command = "ACCOFFALM,OFF#"
+        elif acc_off_alert == 'Alerta Enviado Apenas GPRS':
+            command = "ACCOFFALM,ON,0#"
+        elif acc_off_alert == 'Alerta Enviado por SMS+GPRS':
+            command = "ACCOFFALM,ON,1#"
+        else:
+            return
+
+        self.serial_service.send_command(command, command_type='acc_off_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("acc_off_alert_sent", "ACC OFF alert configuration sent to device")
+        )
+
+    def _send_movement_alert_command(self, values: dict):
+        """Send movement alert command"""
+        enabled = values.get('enabled', False)
+        alert_type = str(values.get('alert_type', '')).strip()
+
+        if enabled:
+            alert_type_mapping = {
+                'Apenas GPRS': '0',
+                'SMS+GPRS': '1'
+            }
+            alert_value = alert_type_mapping.get(alert_type, '0')
+            command = f"ATSMS:SENALM,ON,{alert_value}#"
+        else:
+            command = "ATSMS:SENALM,OFF#"
+
+        self.serial_service.send_command(command, command_type='movement_alert')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("movement_alert_sent", "Movement alert configuration sent to device")
+        )
+
+    def _send_backup_battery_protection_voltage_command(self, values: dict):
+        """Send backup battery protection voltage command"""
+        voltage = str(values.get('main', '')).strip()
+        
+        command = f"ATSMS:SZCS#BATSLPVALUE={voltage}"
+        
+        self.serial_service.send_command(command, command_type='backup_battery_protection_voltage')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("backup_battery_protection_voltage_sent", "Backup battery protection voltage configuration sent to device")
+        )
+
+    def _send_defense_command(self, values: dict):
+        """Send defense time configuration command"""
+        value = str(values.get('main', '')).strip()
+        
+        if not value:
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("defense_time_required", "Defense time value is required")
+            )
+            return
+        
+        command = f"ATSMS:DEFENSE,{value}#"
+        self.serial_service.send_command(command, command_type='defense_settings')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("defense_time_sent", "Defense time configuration sent to device")
+        )
+
+    def _send_generic_parameter_command(self, param_name: str, values: dict):
+        """Send generic parameter command"""
+        messagebox.showinfo(
+            self.i18n_service.get("info", "Info"),
+            f"{self.i18n_service.get('parameter_command_sent', 'Parameter command sent')}: {param_name}"
+        )
+
+    def _send_vibration_window_command(self, values: dict):
+        """Send vibration window configuration command"""
+        window = str(values.get('window', '10')).strip()
+        threshold = str(values.get('threshold', '3')).strip()
+        
+        command = f"ATSMS:SZCS#VIBCHK={window}:{threshold}"
+        
+        self.serial_service.send_command(command)
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("vibration_window_sent", "Vibration window configuration sent to device")
+        )
+    def _send_blind_area_speed_command(self, values: dict):
+        """Send blind area speed configuration command"""
+        blind_area_speed = values.get('main', 0)
+        
+        # Ensure value is within valid range (0-20)
+        try:
+            speed_value = int(blind_area_speed)
+            if speed_value < 0 or speed_value > 20:
+                messagebox.showerror(
+                    self.i18n_service.get("error", "Error"),
+                    self.i18n_service.get("blind_area_speed_range_error", "Blind area speed value must be between 0 and 20")
+                )
+                return
+        except (ValueError, TypeError):
+            messagebox.showerror(
+                self.i18n_service.get("error", "Error"),
+                self.i18n_service.get("blind_area_speed_invalid", "Invalid blind area speed value")
+            )
+            return
+        
+        command = f"ATSMS:SZCS#BLINDSPD={speed_value}"
+        
+        self.serial_service.send_command(command, command_type='blind_area_speed')
+        messagebox.showinfo(
+            self.i18n_service.get("success", "Success"),
+            self.i18n_service.get("blind_area_speed_sent", "Blind area speed configuration sent to device")
+        )
+</document_content>
+</document>
+<document index="58">
+<source>.\services\parameter_specification_parser.py</source>
+<document_content>
+"""
+Parameter Specification Parser for the LT32 PRO Universal Profile System.
+
+This module provides functionality to parse the Parameter UI List markdown file
+and extract parameter specifications, commands, and validation rules.
+"""
+
+import re
+from typing import Dict, List, Optional, Any
+from pathlib import Path
+
+from models.parameter_spec import ParameterSpec, ParameterField, ParameterCommands, UIElementType
+from models.validation_result import ValidationResult
+from utils.helpers import resource_path
+
+
+class ParameterSpecificationParser:
+    """
+    Parser for the Parameter UI List markdown file.
+    
+    This class parses the structured markdown format and extracts parameter
+    specifications including fields, commands, and validation rules.
+    """
+    
+    def __init__(self, parameter_ui_list_path: str):
+        """
+        Initialize the parser with the path to the Parameter UI List file.
+        
+        Args:
+            parameter_ui_list_path: Path to the Parameter UI List markdown file
+        """
+        # Use resource_path to handle PyInstaller bundled resources
+        resolved_path = resource_path(parameter_ui_list_path)
+        self.parameter_ui_list_path = Path(resolved_path)
+        self._specifications: Optional[Dict[str, ParameterSpec]] = None
+        self._sections: Optional[Dict[str, List[str]]] = None
+    
+    def parse_specifications(self) -> Dict[str, ParameterSpec]:
+        """
+        Parse all parameter specifications from the markdown file.
+        
+        Returns:
+            Dict[str, ParameterSpec]: Dictionary mapping parameter names to specifications
+            
+        Raises:
+            FileNotFoundError: If the parameter UI list file doesn't exist
+            ValueError: If the file format is invalid
+        """
+        if self._specifications is not None:
+            return self._specifications
+        
+        if not self.parameter_ui_list_path.exists():
+            raise FileNotFoundError(f"Parameter UI List file not found: {self.parameter_ui_list_path}")
+        
+        try:
+            with open(self.parameter_ui_list_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+        except Exception as e:
+            raise ValueError(f"Failed to read Parameter UI List file: {e}")
+        
+        self._specifications = {}
+        self._sections = {}
+        
+        # Parse sections and configurations
+        current_section = None
+        current_config = None
+        current_config_data = {}
+        
+        lines = content.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Skip empty lines and comments
+            if not line:
+                i += 1
+                continue
+                
+            if line.startswith('## Section:'):
+                # Save current config before switching sections
+                if current_config and current_config_data:
+                    spec = self._parse_config_data(current_config_data, current_section or "Unknown")
+                    if spec:
+                        self._specifications[spec.name] = spec
+                        if current_section:
+                            self._sections[current_section].append(spec.name)
+                    current_config = None
+                    current_config_data = {}
+                
+                current_section = line.replace('## Section:', '').strip()
+                if current_section not in self._sections:
+                    self._sections[current_section] = []
+                i += 1
+                continue
+            
+            # Parse configuration blocks
+            if line.startswith('### Config:'):
+                # Save previous config if exists
+                if current_config and current_config_data:
+                    spec = self._parse_config_data(current_config_data, current_section or "Unknown")
+                    if spec:
+                        self._specifications[spec.name] = spec
+                        if current_section:
+                            self._sections[current_section].append(spec.name)
+                
+                # Start new config
+                current_config = line.replace('### Config:', '').strip()
+                current_config_data = {'title': current_config}
+                i += 1
+                continue
+            
+            # Parse config content
+            if current_config:
+                i = self._parse_config_content(lines, i, current_config_data)
+            else:
+                i += 1
+        
+        # Don't forget the last config
+        if current_config and current_config_data:
+            spec = self._parse_config_data(current_config_data, current_section or "Unknown")
+            if spec:
+                self._specifications[spec.name] = spec
+                if current_section:
+                    self._sections[current_section].append(spec.name)
+        
+        return self._specifications
+    
+    def _parse_config_content(self, lines: List[str], start_index: int, config_data: Dict[str, Any]) -> int:
+        """
+        Parse the content of a configuration block.
+        
+        Args:
+            lines: All lines from the file
+            start_index: Starting index for parsing
+            config_data: Dictionary to store parsed data
+            
+        Returns:
+            int: Next index to continue parsing from
+        """
+        i = start_index
+        current_field = None
+        current_field_data = {}
+        in_fields_section = False
+        in_commands_section = False
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Stop at next section or config
+            if line.startswith('##') or line.startswith('### Config:'):
+                break
+            
+            # Skip empty lines
+            if not line:
+                i += 1
+                continue
+            

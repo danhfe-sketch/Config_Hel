@@ -1,0 +1,4328 @@
+            current_value=param_value,
+            errors=errors,
+            warnings=warnings,
+            suggested_value=suggested_value
+        )
+
+    def _validate_numeric_parameter(self, param_name: str, value: str, rules: Dict[str, Any], 
+                                  errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate numeric parameter values."""
+        try:
+            if rules.get('integer', False):
+                num_value = int(value)
+            else:
+                num_value = float(value)
+        except ValueError:
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.FORMAT_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Parameter '{param_name}' must be a number",
+                severity=ValidationSeverity.ERROR,
+                suggestion="Enter a valid number",
+                parameter_name=param_name,
+                current_value=value,
+                expected_format="number"
+            ))
+            return
+        
+        # Range validation
+        if 'min' in rules and num_value < rules['min']:
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.RANGE_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Parameter '{param_name}' value {num_value} is below minimum {rules['min']}",
+                severity=ValidationSeverity.ERROR,
+                suggestion=f"Use a value >= {rules['min']}",
+                parameter_name=param_name,
+                current_value=value
+            ))
+        
+        if 'max' in rules and num_value > rules['max']:
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.RANGE_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Parameter '{param_name}' value {num_value} is above maximum {rules['max']}",
+                severity=ValidationSeverity.ERROR,
+                suggestion=f"Use a value <= {rules['max']}",
+                parameter_name=param_name,
+                current_value=value
+            ))
+
+    def _validate_text_parameter(self, param_name: str, value: str, rules: Dict[str, Any],
+                               errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate text parameter values."""
+        # Length validation
+        if 'max_length' in rules and len(value) > rules['max_length']:
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.FORMAT_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Parameter '{param_name}' exceeds maximum length of {rules['max_length']}",
+                severity=ValidationSeverity.ERROR,
+                suggestion=f"Shorten to {rules['max_length']} characters or less",
+                parameter_name=param_name,
+                current_value=value
+            ))
+        
+        if 'min_length' in rules and len(value) < rules['min_length']:
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.FORMAT_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Parameter '{param_name}' is shorter than minimum length of {rules['min_length']}",
+                severity=ValidationSeverity.ERROR,
+                suggestion=f"Extend to at least {rules['min_length']} characters",
+                parameter_name=param_name,
+                current_value=value
+            ))
+        
+        # Pattern validation
+        if 'pattern' in rules:
+            try:
+                if not re.match(rules['pattern'], value):
+                    errors.append(ValidationError(
+                        error_type=ValidationErrorType.FORMAT_ERROR,
+                        location=f"Device_Parameters.{param_name}",
+                        message=f"Parameter '{param_name}' format is invalid",
+                        severity=ValidationSeverity.ERROR,
+                        suggestion="Check the format requirements",
+                        parameter_name=param_name,
+                        current_value=value,
+                        expected_format=rules.get('format_description', 'Valid format required')
+                    ))
+            except re.error:
+                # If pattern is invalid, skip pattern validation and log warning
+                warnings.append(ValidationWarning(
+                    location=f"Device_Parameters.{param_name}",
+                    message=f"Invalid regex pattern for parameter '{param_name}'",
+                    suggestion="Check parameter validation rules"
+                ))
+
+    def _validate_dropdown_parameter(self, param_name: str, value: str, rules: Dict[str, Any],
+                                   errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate dropdown parameter values."""
+        allowed_values = rules.get('allowed_values', [])
+        if value not in allowed_values:
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.INVALID_PARAMETER,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Parameter '{param_name}' has invalid value '{value}'",
+                severity=ValidationSeverity.ERROR,
+                suggestion=f"Use one of: {', '.join(allowed_values)}",
+                parameter_name=param_name,
+                current_value=value
+            ))
+
+    def _validate_radio_parameter(self, param_name: str, value: str, rules: Dict[str, Any],
+                                errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate radio button parameter values."""
+        # Radio parameters use the same validation as dropdown
+        self._validate_dropdown_parameter(param_name, value, rules, errors, warnings)
+
+    def _validate_apn_parameter(self, param_name: str, value: str, rules: Dict[str, Any],
+                              errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate APN-related parameter values."""
+        if param_name == 'apn':
+            # APN validation - domain, IP, URL, or simple name
+            patterns = [
+                r'^(?!.*\.\.+)(?!^\.)(?!.*\.$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$',  # Domain
+                r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$',  # IP
+                r'^https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:/.*)?$',  # URL
+                r'^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$'  # Simple name (allows underscores, single char)
+            ]
+            
+            if not any(re.match(pattern, value) for pattern in patterns):
+                errors.append(ValidationError(
+                    error_type=ValidationErrorType.FORMAT_ERROR,
+                    location=f"Device_Parameters.{param_name}",
+                    message=f"APN '{value}' has invalid format",
+                    severity=ValidationSeverity.ERROR,
+                    suggestion="Use a valid domain name, IP address, URL, or simple APN name",
+                    parameter_name=param_name,
+                    current_value=value,
+                    expected_format="domain.com, 192.168.1.1, http://example.com, or simple_name"
+                ))
+        else:
+            # APN credentials validation
+            if 'max_length' in rules and len(value) > rules['max_length']:
+                errors.append(ValidationError(
+                    error_type=ValidationErrorType.FORMAT_ERROR,
+                    location=f"Device_Parameters.{param_name}",
+                    message=f"APN credential exceeds maximum length of {rules['max_length']}",
+                    severity=ValidationSeverity.ERROR,
+                    suggestion=f"Shorten to {rules['max_length']} characters or less",
+                    parameter_name=param_name,
+                    current_value=value
+                ))
+
+    def _validate_phone_parameter(self, param_name: str, value: str, rules: Dict[str, Any],
+                                errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate phone number parameter values."""
+        # Basic phone number validation
+        phone_pattern = r'^\+?[\d\s\-\(\)]{7,15}$'
+        if not re.match(phone_pattern, value):
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.FORMAT_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Phone number '{value}' has invalid format",
+                severity=ValidationSeverity.ERROR,
+                suggestion="Use format: +1234567890 or (123) 456-7890",
+                parameter_name=param_name,
+                current_value=value,
+                expected_format="Valid phone number format"
+            ))
+
+    def _validate_domain_parameter(self, param_name: str, value: str, rules: Dict[str, Any],
+                                 errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate domain name parameter values."""
+        domain_pattern = r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+        if not re.match(domain_pattern, value):
+            errors.append(ValidationError(
+                error_type=ValidationErrorType.FORMAT_ERROR,
+                location=f"Device_Parameters.{param_name}",
+                message=f"Domain '{value}' has invalid format",
+                severity=ValidationSeverity.ERROR,
+                suggestion="Use format: example.com",
+                parameter_name=param_name,
+                current_value=value,
+                expected_format="Valid domain name"
+            ))
+
+    def _validate_profile_info_section(self, profile_info: configparser.SectionProxy,
+                                     errors: List[ValidationError], warnings: List[ValidationWarning]):
+        """Validate the Profile_Info section structure."""
+        # Check for required fields
+        for field_name, field_config in self.required_metadata_fields.items():
+            if field_name not in profile_info:
+                errors.append(ValidationError(
+                    error_type=ValidationErrorType.MISSING_SECTION,
+                    location=f"Profile_Info.{field_name}",
+                    message=f"Required field '{field_name}' is missing from Profile_Info",
+                    severity=ValidationSeverity.ERROR,
+                    suggestion=f"Add {field_name} = <value> to Profile_Info section",
+                    parameter_name=field_name,
+                    section_name="Profile_Info"
+                ))
+
+    def _parse_version(self, version_str: str) -> Dict[str, int]:
+        """Parse a version string into components."""
+        if not version_str:
+            raise ValueError("Version string is empty")
+        
+        # Remove 'v' prefix if present
+        version_str = version_str.lstrip('v')
+        
+        # Split by dots
+        parts = version_str.split('.')
+        if len(parts) < 2:
+            raise ValueError(f"Invalid version format: {version_str}")
+        
+        try:
+            return {
+                'major': int(parts[0]),
+                'minor': int(parts[1]),
+                'patch': int(parts[2]) if len(parts) > 2 else 0
+            }
+        except ValueError:
+            raise ValueError(f"Invalid version format: {version_str}")
+
+    def _check_version_specific_issues(self, profile_version: str) -> List[str]:
+        """Check for known compatibility issues with specific versions."""
+        issues = []
+        
+        # Add version-specific compatibility checks here
+        # This can be expanded as new versions are released
+        
+        return issues
+
+    def _init_parameter_validation_rules(self):
+        """Initialize parameter validation rules based on existing validation service."""
+        # This is a subset of the most common parameters for profile validation
+        # The full validation service has more comprehensive rules
+        self.parameter_validation_rules = {
+            # Network Parameters
+            'apn': {
+                'type': 'apn',
+                'max_length': 50,
+                'required': True
+            },
+            'apn_user': {
+                'type': 'apn_credential',
+                'max_length': 30,
+                'required': False
+            },
+            'apn_password': {
+                'type': 'apn_credential',
+                'max_length': 30,
+                'required': False
+            },
+            'server_address': {
+                'type': 'text',
+                'max_length': 100,
+                'required': True
+            },
+            'server_port': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65535,
+                'integer': True
+            },
+            
+            # Timer Parameters
+            'moving_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65535,
+                'integer': True
+            },
+            'stopped_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65535,
+                'integer': True
+            },
+            'moving_heartbeat': {
+                'type': 'numeric',
+                'min': 30,
+                'max': 86400,
+                'integer': True
+            },
+            'stopped_heartbeat': {
+                'type': 'numeric',
+                'min': 30,
+                'max': 86400,
+                'integer': True
+            },
+            
+            # Service Parameters
+            'protocol': {
+                'type': 'dropdown',
+                'allowed_values': ['GT06 (0x60)', 'CRX3 (0x22)', 'GT06 (0x12)']
+            },
+            'tcp_ack': {
+                'type': 'dropdown',
+                'allowed_values': ['Enabled', 'Disabled']
+            },
+            
+            # Ignition Parameters
+            'ignition_mode': {
+                'type': 'dropdown',
+                'allowed_values': ['F├¡sica (Physical)', 'Virtual por aceler├┤metro (Virtual by accelerometer)', 'Virtual por bateria (Virtual by battery)']
+            },
+            'on_voltage': {
+                'type': 'numeric',
+                'min': 6,
+                'max': 60,
+                'integer': True
+            },
+            'off_voltage': {
+                'type': 'numeric',
+                'min': 6,
+                'max': 60,
+                'integer': True
+            },
+            
+            # Speed Parameters
+            'speed_detection_time': {
+                'type': 'numeric',
+                'min': 5,
+                'max': 600,
+                'integer': True
+            },
+            'speed_limit': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 255,
+                'integer': True
+            },
+            
+            # Vibration Parameters
+            'vibration_level': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 6,
+                'integer': True
+            },
+            
+            # Legacy parameters for backward compatibility
+            'vibration': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 255,
+                'integer': True
+            },
+            'sensitivity': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 10,
+                'integer': True
+            },
+            'timer_ign_on': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65500,
+                'integer': True
+            },
+            'timer_ign_off': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65500,
+                'integer': True
+            },
+            'heartbeat_ign_on': {
+                'type': 'numeric',
+                'min': 60,
+                'max': 300,
+                'integer': True
+            },
+            'heartbeat_ign_off': {
+                'type': 'numeric',
+                'min': 60,
+                'max': 300,
+                'integer': True
+            },
+            
+            # Radio button parameters
+            'lock_type': {
+                'type': 'radio',
+                'allowed_values': ['PIN', 'Card']
+            },
+            'ignition_type': {
+                'type': 'radio',
+                'allowed_values': ['Digital', 'Analog']
+            },
+            'transmission_mode': {
+                'type': 'radio',
+                'allowed_values': ['TCP', 'UDP']
+            },
+            
+            # Phone parameters
+            'sos_phone1': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'sos_phone2': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'sos_phone3': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            
+            # Device identification
+            'imei': {
+                'type': 'text',
+                'min_length': 15,
+                'max_length': 15,
+                'required': False,
+                'pattern': r'^\d{15}$'
+            }
+        }
+
+    def _init_compatibility_rules(self):
+        """Initialize compatibility rules for different profile versions."""
+        self.compatibility_rules = {
+            '1.0': {
+                'supported_features': ['basic_parameters', 'apn_config', 'timer_settings'],
+                'deprecated_features': [],
+                'migration_path': None
+            },
+            '1.1': {
+                'supported_features': ['basic_parameters', 'apn_config', 'timer_settings', 'advanced_alerts'],
+                'deprecated_features': [],
+                'migration_path': '1.0'
+            },
+            '1.2': {
+                'supported_features': ['basic_parameters', 'apn_config', 'timer_settings', 'advanced_alerts', 'security_features'],
+                'deprecated_features': ['legacy_timer_format'],
+                'migration_path': '1.1'
+            }
+        }
+</document_content>
+</document>
+<document index="76">
+<source>.\services\serial_service.py</source>
+<document_content>
+import serial
+import serial.tools.list_ports
+import threading
+import time
+import re
+import queue
+from typing import Dict, Any, List, Optional, Callable
+import datetime
+from services.configuration_reader_service import ConfigurationReaderService
+
+class SerialService:
+    """Handles all serial communication in a separate thread."""
+
+    def __init__(self, app_instance):
+        self.app = app_instance
+        self.serial_port = None
+        self.is_connected = False
+        self.read_thread = None
+        self.stop_thread = False
+
+        # Device info
+        self.device_info = {
+            'imei': None,
+            'teriid': None,
+            'iccid': None,
+            'version': None
+        }
+        self.response_buffer = []
+        self.waiting_for_response = False
+        self.current_command_type = None
+
+        # Command queue for bulk operations
+        self.command_queue = queue.Queue()
+        self.queue_processing = False
+        self.pause_queue_processing = False # New flag
+        self.queue_thread = None
+        self.queue_delay = 0.5  # Delay between commands in seconds
+        self.queue_callback = None
+        self.queue_results = {}  # Store results from command queue execution
+        self._waiting_for_teriid_response = False
+        self._teriid_diagnostic_logged = False
+        # How long to wait for a device response between queued commands
+        self.queue_response_timeout = 20.0  # seconds
+        self.max_command_retries = 3 # Max retries for a single command in queue
+        
+        # Device reset tracking (for APN configuration)
+        self.waiting_for_device_reset = False
+        self.device_reset_port = None
+        self.device_reconnected = False
+
+        # Connection monitoring
+        self.last_activity_time = None
+        self.connection_monitor_thread = None
+        self.stop_monitor = False
+        self.connection_timeout = 3600  # seconds without activity before checking connection (1 hour)
+
+        # Configuration reader service
+        self.configuration_reader = None
+
+    def initialize_configuration_reader(self):
+        """Initialize the configuration reader service with i18n support."""
+        if hasattr(self.app, 'i18n') and self.configuration_reader is None:
+            self.configuration_reader = ConfigurationReaderService(self.app, self.app.i18n)
+
+    @staticmethod
+    def list_com_ports():
+        """Returns a list of available COM ports with descriptions."""
+        ports = serial.tools.list_ports.comports()
+        return [f"{port.device} - {port.description}" for port in ports] if ports else ["N/A"]
+
+    def connect(self, port, baudrate=115200):
+        """Connects to the specified serial port."""
+        if self.is_connected:
+            self.disconnect()
+
+        try:
+            # Extract port device name from "COMx - Description"
+            port_device = port.split(' - ')[0]
+            self.serial_port = serial.Serial(port_device, baudrate, timeout=1)
+            self.is_connected = True
+            self.stop_thread = False
+            
+            # Reset error history and consecutive failures on successful connection
+            if hasattr(self.app, 'error_handler') and hasattr(self.app.error_handler, 'parameter_error_handler'):
+                if self.app.error_handler.parameter_error_handler:
+                    self.app.error_handler.parameter_error_handler.clear_error_history()
+            
+            # Reset device info when connecting
+            self.device_info = {
+                'imei': None,
+                'teriid': None,
+                'iccid': None,
+                'version': None
+            }
+            
+            # Initialize connection monitoring
+            self.last_activity_time = datetime.datetime.now()
+            self.stop_monitor = False
+            
+            # Start read thread
+            self.read_thread = threading.Thread(target=self.read_from_port, daemon=True)
+            self.read_thread.start()
+            
+            # Connection monitoring disabled to prevent timeout issues
+            # self.connection_monitor_thread = threading.Thread(target=self.monitor_connection, daemon=True)
+            # self.connection_monitor_thread.start()
+            
+            # Log successful connection with detailed message
+            self.app.log_frame.log_message(f"INFO: Successfully connected to {port} at {baudrate} baud\n")
+            self.app.connection_frame.update_status(True)
+            
+            # Update connection status with visual indicator
+            if hasattr(self.app, 'connection_frame'):
+                self.app.connection_frame.update_connection_indicator(True)
+            
+            # If we were waiting for a device reset, mark that reconnection succeeded
+            if self.waiting_for_device_reset and port_device == self.device_reset_port:
+                self.device_reconnected = True
+                self.app.log_frame.log_message("INFO: Device reconnected successfully after reset\n")
+            
+            return True  # Return True on success
+                
+        except serial.SerialException as e:
+            # Use error handling service if available
+            if hasattr(self.app, 'error_handler'):
+                error_type, context = self.app.error_handler.parse_error_from_exception(e)
+                context['port'] = port
+                self.app.error_handler.handle_error(
+                    error_type, 
+                    self.app.error_handler.SEVERITY_ERROR, 
+                    context
+                )
+            else:
+                # Fallback to basic error logging
+                error_msg = str(e)
+                if "PermissionError" in error_msg:
+                    self.app.log_frame.log_message(f"ERROR: Access denied to port {port}. The port may be in use by another application.\n")
+                elif "FileNotFoundError" in error_msg:
+                    self.app.log_frame.log_message(f"ERROR: Port {port} not found. Please check your device connection.\n")
+                else:
+                    self.app.log_frame.log_message(f"ERROR: Failed to connect to {port}: {error_msg}\n")
+            
+            self.app.connection_frame.update_status(False)
+            
+            # Update connection status with visual indicator
+            if hasattr(self.app, 'connection_frame'):
+                self.app.connection_frame.update_connection_indicator(False)
+            
+            return False  # Return False on failure
+
+    def disconnect(self):
+        """Disconnects from the serial port."""
+        if self.is_connected and self.serial_port:
+            self.stop_thread = True
+            self.stop_monitor = True
+            
+            # If we're waiting for a device reset, mark that disconnect occurred
+            if self.waiting_for_device_reset:
+                self.app.log_frame.log_message("INFO: Device disconnected as expected for reset\n")
+            
+            # Stop any reconnection attempts if error handler exists
+            if hasattr(self.app, 'error_handler'):
+                self.app.error_handler.stop_reconnection()
+                
+            # Wait for threads to terminate
+            if self.read_thread and self.read_thread.is_alive():
+                self.read_thread.join(timeout=1)
+            # Connection monitoring disabled
+            # if self.connection_monitor_thread and self.connection_monitor_thread.is_alive():
+            #     self.connection_monitor_thread.join(timeout=1)
+                
+            # Close the port
+            self.serial_port.close()
+            self.is_connected = False
+            
+            # Log disconnection with clear message
+            self.app.log_frame.log_message("INFO: Device disconnected\n")
+            self.app.connection_frame.update_status(False)
+            
+            # Update connection status with visual indicator
+            if hasattr(self.app, 'connection_frame'):
+                self.app.connection_frame.update_connection_indicator(False)
+
+    def read_from_port(self):
+        """Reads data from the serial port and logs it to the UI."""
+        while not self.stop_thread and self.is_connected:
+            try:
+                if self.serial_port.in_waiting > 0:
+                    line = self.serial_port.readline().decode('latin-1').strip()
+                    if line:
+                        # Update last activity timestamp
+                        self.update_last_activity()
+                        
+                        # Safely update UI from a different thread
+                        self.app.after(0, self.app.log_frame.log_message, f"DEV: {line}\n")
+                        
+                        # Process device response for information extraction
+                        self.process_device_response(line)
+                        
+                        # Update connection indicator to show activity
+                        if hasattr(self.app, 'connection_frame'):
+                            self.app.after(0, self.app.connection_frame.flash_activity_indicator)
+            except (serial.SerialException, TypeError) as e:
+                # Use error handling service if available
+                if hasattr(self.app, 'error_handler'):
+                    error_type, context = self.app.error_handler.parse_error_from_exception(e)
+                    if hasattr(self.serial_port, 'port'):
+                        context['port'] = self.serial_port.port
+                    self.app.after(0, self.app.error_handler.handle_error,
+                                  error_type, 
+                                  self.app.error_handler.SEVERITY_ERROR, 
+                                  context)
+                else:
+                    # Fallback to basic error handling
+                    self.app.after(0, self.app.log_frame.log_message, 
+                                  f"ERROR: Serial communication error: {str(e)}\n")
+                
+                # Disconnect properly
+                self.app.after(0, self._handle_connection_lost)
+                break
+            time.sleep(0.1)
+
+    def send_command(self, command, command_type=None, bypass_validation=False):
+        """
+        Sends a command to the serial port with optional validation.
+        
+        Args:
+            command: The command string to send
+            command_type: Optional type of command for response processing
+            bypass_validation: If True, skip command validation (for debugging/testing)
+        """
+        # Check if we're in a cancellation state
+        if (hasattr(self, 'configuration_reader') and 
+            self.configuration_reader is not None and
+            hasattr(self.configuration_reader, 'cancel_requested') and 
+            self.configuration_reader.cancel_requested):
+            self.app.log_frame.log_message("INFO: Command not sent - operation was canceled\n")
+            return False
+
+        # Block new commands if a bulk operation is in progress, but allow
+        # the internal queue processing thread to send commands.
+        if self.queue_processing:
+            try:
+                current = threading.current_thread()
+                # If the call originates from the queue thread, allow it.
+                if hasattr(self, 'queue_thread') and current is self.queue_thread:
+                    pass
+                else:
+                    self.app.log_frame.log_message(f"INFO: Command '{command}' blocked - bulk operation in progress\n")
+                    return False
+            except Exception:
+                # On any error determining the thread, conservatively block external sends
+                self.app.log_frame.log_message(f"INFO: Command '{command}' blocked - bulk operation in progress\n")
+                return False
+                
+        if not self.is_connected or not self.serial_port:
+            self.app.log_frame.log_message("ERROR: Not connected to device\n")
+            return False
+        
+        # Validate command before sending (unless bypassed)
+        if not bypass_validation and hasattr(self.app, 'command_validation_gateway'):
+            from services.command_validation_gateway import ValidationContext
+            
+            # Create validation context
+            context = ValidationContext(
+                command_type=command_type or 'unknown',
+                source='serial_service',
+                timestamp=datetime.datetime.now()
+            )
+            
+            # Validate the command
+            validation_result = self.app.command_validation_gateway.validate_command_before_send(command, context)
+            
+            if not validation_result.is_valid:
+                # Command failed validation - block it
+                error_msg = f"Command blocked by validation: {validation_result.error_message}"
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+                # Log detailed information about the blocked command
+                self.app.command_validation_gateway.log_blocked_command(validation_result, context)
+                
+                # Show suggestions if available
+                if validation_result.suggestions:
+                    suggestions_text = "; ".join(validation_result.suggestions)
+                    self.app.log_frame.log_message(f"SUGGESTIONS: {suggestions_text}\n")
+                
+                return False
+            
+            # Log successful validation to console
+            if validation_result.extracted_parameters:
+                param_info = ", ".join([f"{k}={v}" for k, v in validation_result.extracted_parameters.items() if not k.startswith('_')])
+                if param_info:
+                    print(f"INFO: Command validated - Parameters: {param_info}")
+        
+        # Send the command
+        try:
+            # Ensure command has ATSMS: prefix for consistency across the codebase
+            send_command = command
+            if not isinstance(send_command, str):
+                send_command = str(send_command)
+            if not send_command.startswith("ATSMS:"):
+                # Preserve original command in logs but send a prefixed command to device
+                prefixed = f"ATSMS:{send_command}"
+            else:
+                prefixed = send_command
+    
+            encoded_command = f"{prefixed}\r\n".encode('utf-8')
+            # Log both what we intended to send and the final bytes for transparency
+            try:
+                self.app.log_frame.log_message(f"DEBUG: Sending command (original): {command}\n")
+                self.app.log_frame.log_message(f"DEBUG: Sending bytes: {encoded_command!r}\n")
+            except Exception:
+                print(f"DEBUG: Sending command (original): {command}")
+                print(f"DEBUG: Sending bytes: {encoded_command!r}")
+    
+            self.serial_port.write(encoded_command)
+            # Log the human-readable command that was sent to the device
+            try:
+                self.app.log_frame.log_message(f"APP: {prefixed}\n")
+            except Exception:
+                print(f"APP: {prefixed}")
+            
+            # Set the current command type for response processing
+            self.current_command_type = command_type
+            self.waiting_for_response = True
+            
+            return True
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to send command: {str(e)}\n")
+            return False
+            
+    def process_device_response(self, response):
+        """
+        Process device responses and extract relevant information.
+        
+        Args:
+            response: The response string from the device
+        """
+        # Add response to buffer for LT32ProDeviceReader and other components that need direct access
+        self.response_buffer.append(response)
+        
+        # Check for cancellation before forwarding response
+        config_reader_service = None
+        if hasattr(self, 'configuration_reader') and self.configuration_reader:
+            config_reader_service = self.configuration_reader
+        elif hasattr(self.app, 'configuration_reader_service'):
+            config_reader_service = self.app.configuration_reader_service
+            
+        # If we have a configuration reader service, check for cancellation
+        if config_reader_service and hasattr(config_reader_service, 'cancel_requested') and config_reader_service.cancel_requested:
+            self.app.log_frame.log_message(f"INFO: Ignoring response due to cancellation: '{response}'\n")
+            return
+        
+        # Always forward response to configuration_reader if set
+        if self.configuration_reader and hasattr(self.configuration_reader, 'capture_device_response'):
+            try:
+                self.configuration_reader.capture_device_response(response)
+            except Exception as e:
+                self.app.log_frame.log_message(f"WARNING: Failed to forward response to configuration reader: {str(e)}\n")
+        elif hasattr(self.app, 'configuration_reader_service'):
+            # Fallback: support legacy app attribute if present
+            try:
+                self.app.configuration_reader_service.capture_device_response(response)
+            except Exception as e:
+                self.app.log_frame.log_message(f"WARNING: Failed to forward response to app.configuration_reader_service: {str(e)}\n")
+        else:
+            self.app.log_frame.log_message("WARNING: No configuration reader available to capture device response\n")
+            
+        # Store the current command type for processing
+        command_type = self.current_command_type
+        
+        # Parse the response using the device command mapper if available
+        if hasattr(self.app, 'device_command_mapper') and command_type:
+            try:
+                parsed_data = self.app.device_command_mapper.parse_device_response(response, command_type)
+
+                # Store results for bulk operations
+                if self.queue_processing and parsed_data:
+                    # Merge with existing results
+                    self.queue_results.update(parsed_data)
+                    self.app.log_frame.log_message(f"INFO: Parsed data: {parsed_data}\n")
+
+                # Handle specific UI updates for IMEI, ICCID, and version
+                if 'imei' in parsed_data:
+                    self.device_info['imei'] = parsed_data['imei']
+                    self.app.after(0, self.update_device_info)
+                if 'teriid' in parsed_data:
+                    self.device_info['teriid'] = parsed_data['teriid']
+                    self.app.after(0, self.update_device_info)
+                if 'iccid' in parsed_data:
+                    self.device_info['iccid'] = parsed_data['iccid']
+                    self.app.after(0, self.update_device_info)
+                if 'version' in parsed_data:
+                    self.device_info['version'] = parsed_data['version']
+                    self.app.after(0, self.update_device_info)
+
+                # Update UI with parsed data
+                if parsed_data:
+                    self.app.after(0, self.app.update_ui_with_parsed_data, parsed_data)
+
+                # Update UI with parsed data
+                if parsed_data:
+                    self.app.after(0, self.app.update_ui_with_parsed_data, parsed_data)
+
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Failed to parse response: {str(e)}\n")
+        
+        # Reset command type after processing
+        self.current_command_type = None
+        self.waiting_for_response = False
+    
+    def update_device_info(self):
+        """Update the UI with device information."""
+        if not hasattr(self.app, 'connection_frame'):
+            return
+
+        imei = self.device_info.get('imei')
+        teriid = self.device_info.get('teriid')
+        iccid = self.device_info.get('iccid')
+        version = self.device_info.get('version')
+
+        if imei:
+            self.app.connection_frame.imei_value_var.set(imei)
+
+        if teriid:
+            self.app.connection_frame.teriid_value_var.set(teriid)
+        else:
+            self.app.connection_frame.teriid_value_var.set("N/A")
+
+        if iccid:
+            self.app.connection_frame.iccid_value_var.set(iccid)
+
+        if version:
+            self.app.connection_frame.version_value_var.set(version)
+    
+    def retrieve_device_info(self):
+        """
+        Send commands to retrieve device information (IMEI, ICCID).
+        Should be called after successful connection.
+        """
+        if not self.is_connected:
+            return
+            
+        # Get device command mapper from the app
+        if hasattr(self.app, 'device_command_mapper'):
+            # Send command to get IMEI
+            imei_cmd = self.app.device_command_mapper.get_command('get_imei', None)
+            self.send_command(imei_cmd, 'get_imei')
+            
+            # Schedule the TERIID command to run after a delay
+            self.app.after(500, self._send_teriid_command)
+        else:
+            self.app.log_frame.log_message("ERROR: Device command mapper not available\n")
+            
+    def _send_teriid_command(self):
+        """Helper method to send TERIID command after a delay."""
+        if self.is_connected and hasattr(self.app, 'device_command_mapper'):
+            teriid_cmd = self.app.device_command_mapper.get_command('get_teriid', None)
+            self._waiting_for_teriid_response = True
+            self._teriid_diagnostic_logged = False
+            try:
+                self.app.log_frame.log_message("DEBUG: Sending TERIID request to device\n")
+            except Exception:
+                print("DEBUG: Sending TERIID request to device")
+            self.send_command(teriid_cmd, 'get_teriid')
+            
+            # Schedule the ICCID command to run after TERIID
+            self.app.after(500, self._send_iccid_command)
+            
+    def _send_iccid_command(self):
+        """Helper method to send ICCID command after a delay."""
+        if self.is_connected and hasattr(self.app, 'device_command_mapper'):
+            iccid_cmd = self.app.device_command_mapper.get_command('get_iccid', None)
+            self.send_command(iccid_cmd, 'get_iccid')
+            
+            # Schedule the version command to run after ICCID
+            self.app.after(500, self._send_version_command)
+            
+    def _send_version_command(self):
+        """Helper method to send version command after ICCID."""
+        if self.is_connected and hasattr(self.app, 'device_command_mapper'):
+            version_cmd = self.app.device_command_mapper.get_command('get_version', None)
+            self.app.log_frame.log_message("DEBUG: Sending VERSION command...")
+            self.send_command(version_cmd, 'get_version')
+            
+            # Introduce a final delay after sending all commands
+            time.sleep(1)
+            
+    def _is_device_reset_command(self, command: str) -> bool:
+        """
+        Check if a command will trigger device reset.
+        
+        Args:
+            command: The command string to check
+            
+        Returns:
+            True if this command triggers a device reset
+        """
+        # Commands that trigger device reset:
+        # 1. APN configuration: ATSMS:APN,<server>,<user>,<password>#
+        # 2. Network selection: ATSMS:SZCS#NETSELECT=0
+        
+        command_upper = command.upper()
+        
+        # Remove common prefixes to get the core command
+        core_command = command_upper.replace('ATSMS:', '').strip()
+        
+        # Check if the command starts with 'APN,' or contains 'SZCS#NETSELECT'
+        return core_command.startswith('APN,') or 'SZCS#NETSELECT' in core_command
+    
+    def _wait_for_device_reset(self, timeout: float = 30.0) -> bool:
+        """
+        Wait for device to reset (disconnect and reconnect).
+        
+        Args:
+            timeout: Maximum time to wait for reset cycle in seconds
+            
+        Returns:
+            True if device successfully reset and reconnected, False otherwise
+        """
+        # self.app.log_frame.log_message("INFO: Waiting for device to reset...\n")
+        
+        # Store the current port for reconnection
+        if self.serial_port:
+            self.device_reset_port = self.serial_port.port
+        
+        # Set flags
+        self.waiting_for_device_reset = True
+        self.device_reconnected = False
+        
+        start_time = time.time()
+        disconnect_detected = False
+        
+        # First, wait a moment for the device to process and respond to the APN command
+        # The device sends a response first, then disconnects to reset
+        # self.app.log_frame.log_message("INFO: Waiting for device response and potential reset...\n")
+        # time.sleep(2.0)  # Give device time to respond
+        
+        # Wait for disconnect (up to 8 seconds after the initial wait)
+        disconnect_wait_start = time.time()
+        while (time.time() - disconnect_wait_start) < 20.0:
+            # Check both is_connected flag and actual serial port state
+            port_closed = False
+            if self.serial_port:
+                try:
+                    # Check if port is still open
+                    port_closed = not self.serial_port.is_open
+                except:
+                    port_closed = True
+            
+            if not self.is_connected or port_closed:
+                disconnect_detected = True
+                # self.app.log_frame.log_message("INFO: Device disconnect detected\n")
+                break
+            time.sleep(0.1)
+        
+        # if not disconnect_detected:
+        #     # Device didn't disconnect - this might be normal if APN didn't change
+        #     self.app.log_frame.log_message("INFO: Device did not reset (APN may already be configured)\n")
+        #     self.waiting_for_device_reset = False
+        #     # Return True to continue processing - this is not an error
+        #     return True
+        
+        # Wait a bit for device to fully reset
+        # self.app.log_frame.log_message("INFO: Waiting for device to complete reset...\n")
+        # time.sleep(10.0)
+        
+        # Try to reconnect (up to remaining timeout)
+        reconnect_start = time.time()
+        reconnect_timeout = timeout - (reconnect_start - start_time)
+        
+        while (time.time() - reconnect_start) < reconnect_timeout:
+            if self.device_reconnected:
+                self.app.log_frame.log_message("INFO: Device reset completed successfully\n")
+                self.waiting_for_device_reset = False
+                return True
+            
+            # Try to reconnect if not connected
+            if not self.is_connected and self.device_reset_port:
+                try:
+                    self.app.log_frame.log_message(f"INFO: Attempting to reconnect to {self.device_reset_port}...\n")
+                    # Use after to call connect on main thread
+                    self.app.after(0, self.connect, self.device_reset_port)
+                    time.sleep(2.0)  # Wait for connection attempt
+                except Exception as e:
+                    self.app.log_frame.log_message(f"WARNING: Reconnection attempt failed: {str(e)}\n")
+            
+            time.sleep(0.5)
+        
+        # Timeout occurred
+        # self.app.log_frame.log_message("ERROR: Device reset timeout - device did not reconnect\n")
+        self.waiting_for_device_reset = False
+        return False
+    
+    def queue_command(self, command: str, command_type: str = None, retry_count: int = 0) -> None:
+        """
+        Add a command to the queue for sequential processing.
+        
+        Args:
+            command: The command string to send
+            command_type: Optional type of command for response processing
+            retry_count: Current retry count for the command
+        """
+        self.command_queue.put((command, command_type, retry_count))
+        
+    def queue_commands(self, commands: List[str], command_types: List[str] = None, 
+                      callback: Callable = None, delay: float = 0.5,
+                      progress_dialog_id: str = None) -> None:
+        """
+        Queue multiple commands for sequential processing.
+        
+        Args:
+            commands: List of command strings to send
+            command_types: Optional list of command types for response processing
+            callback: Optional callback function to call when all commands are processed
+            delay: Delay between commands in seconds
+            progress_dialog_id: Optional ID of a progress dialog to update
+        """
+        # Clear any existing queue
+        while not self.command_queue.empty():
+            self.command_queue.get()
+            
+        self.queue_results = {}
+        self.queue_callback = callback
+        self.queue_delay = delay
+        
+        # Store progress dialog ID if provided
+        self.progress_dialog_id = progress_dialog_id
+        self.total_commands = len(commands)
+        self.processed_commands = 0
+        
+        # Add all commands to the queue
+        for i, cmd in enumerate(commands):
+            cmd_type = command_types[i] if command_types and i < len(command_types) else None
+            self.queue_command(cmd, cmd_type, 0)
+            
+        # Start processing the queue if not already processing
+        if not self.queue_processing:
+            self.start_queue_processing()
+            
+    def start_queue_processing(self) -> None:
+        """Start processing the command queue in a separate thread."""
+        if self.queue_processing:
+            return
+            
+        self.queue_processing = True
+        self.queue_thread = threading.Thread(target=self._process_command_queue, daemon=True)
+        self.queue_thread.start()
+        
+        # Log the start of bulk operation to console
+        print("INFO: Starting bulk command operation")
+        
+    def _process_command_queue(self) -> None:
+        """Process commands from the queue sequentially with delays."""
+        try:
+            self.processed_commands = 0
+            
+            while self.queue_processing and self.is_connected and not self.pause_queue_processing:
+                if self.command_queue.empty():
+                    # Queue is empty, we're done
+                    break
+                    
+                # Get the next command from the queue
+                command, command_type, retry_count = self.command_queue.get()
+                
+                # Check if this command will trigger a device reset
+                is_reset_command = self._is_device_reset_command(command)
+                
+                # if is_reset_command:
+                #     self.app.after(0, self.app.log_frame.log_message, 
+                #                   "INFO: Detected device reset command - device will reset\n")
+                
+                # Send the command
+                sent_ok = self.send_command(command, command_type)
+
+                # If send succeeded, wait for the device response or timeout
+                if sent_ok:
+                    # First, wait for the device response (applies to all commands)
+                    start_wait = time.time()
+                    waited = 0.0
+                    # Only wait while waiting_for_response is True and we haven't exceeded the timeout
+                    while self.waiting_for_response and (time.time() - start_wait) < self.queue_response_timeout:
+                        time.sleep(0.05)
+                        waited = time.time() - start_wait
+                    
+                    # After receiving response, check if this was a reset command
+                    if is_reset_command and not self.waiting_for_response:
+                        # Device responded - now wait for potential reset
+                        reset_success = self._wait_for_device_reset(timeout=30.0)
+                        # Reset succeeded or wasn't needed, continue with next command
+                        # Note: waiting_for_response is already False from the response wait above
+                    
+                    # If still waiting after timeout, log timeout notice
+                    if self.waiting_for_response:
+                        # Timeout occurred
+                        if retry_count < self.max_command_retries:
+                            self.app.after(0, self.app.log_frame.log_message, f"WARNING: Command '{command}' timed out. Retrying ({retry_count + 1}/{self.max_command_retries}).\n")
+                            self.command_queue.put((command, command_type, retry_count + 1)) # Re-queue for retry
+                        else:
+                            self.app.after(0, self.app.log_frame.log_message, f"ERROR: Command '{command}' timed out. Max retries reached. Skipping.\n")
+                            # Log this as a failed command for the overall operation
+                            self.failed_reads_count += 1 # Assuming this is a write operation, so it's a failed write
+                        self.waiting_for_response = False
+                else:
+                    # If send failed, check if connection was lost or it's a validation error
+                    if not self.is_connected:
+                        # Connection lost during send. Pause queue and wait for reconnection.
+                        self.app.after(0, self.app.log_frame.log_message, f"ERROR: Connection lost while sending command '{command}'. Pausing queue.\n")
+                        self.queue_processing = False # Stop processing
+                        # The reconnection logic in error_handling_service should handle resuming
+                    else:
+                        # Send failed for other reasons (e.g., validation error). Skip command.
+                        self.app.after(0, self.app.log_frame.log_message, f"WARNING: Failed to send queued command '{command}'. Skipping.\n")
+                        self.failed_reads_count += 1 # Log as failed
+                
+                # Increment processed commands counter (only if not retrying)
+                if not self.waiting_for_response or retry_count >= self.max_command_retries:
+                    self.processed_commands += 1
+                
+                # Update progress dialog if available
+                if hasattr(self.app, 'operation_confirmation_service') and hasattr(self, 'progress_dialog_id') and self.progress_dialog_id:
+                    # Calculate percentage for status text
+                    percentage = int((self.processed_commands / self.total_commands) * 100)
+                    status_text = f"Processing command {self.processed_commands} of {self.total_commands} ({percentage}%)"
+                    
+                    # Update the progress dialog
+                    self.app.after(0, self.app.operation_confirmation_service.update_progress,
+                                  self.progress_dialog_id, self.processed_commands, status_text)
+                
+                # Show progress in log
+                if hasattr(self.app, 'operation_confirmation_service'):
+                    self.app.after(0, self.app.operation_confirmation_service.show_operation_progress_in_log,
+                                  "Bulk Command Operation", self.processed_commands, self.total_commands)
+                
+                # Wait for the specified delay
+                time.sleep(self.queue_delay)
+                
+                # Mark the task as done
+                self.command_queue.task_done()
+                
+            # Log completion of bulk operation to console
+            print("INFO: Bulk command operation completed")
+            
+            # Call the callback if provided
+            if self.queue_callback:
+                self.app.after(0, self.queue_callback, self.queue_results)
+                
+        except Exception as e:
+            self.app.after(0, self.app.log_frame.log_message, f"ERROR: Bulk command operation failed: {str(e)}\n")
+            
+            # Close progress dialog if it exists with error
+            if hasattr(self.app, 'operation_confirmation_service') and hasattr(self, 'progress_dialog_id') and self.progress_dialog_id:
+                self.app.after(0, self.app.operation_confirmation_service.complete_progress,
+                              self.progress_dialog_id, False, f"Error: {str(e)}")
+        finally:
+            self.queue_processing = False
+            
+    def resume_queue_processing(self) -> None:
+        """Resume processing the command queue."""
+        self.pause_queue_processing = False
+        self.app.log_frame.log_message("INFO: Command queue processing resumed.\n")
+        # If the queue processing thread is stopped, restart it
+        if not self.queue_thread or not self.queue_thread.is_alive():
+            self.start_queue_processing()
+    def stop_queue_processing(self) -> None:
+        """Stop processing the command queue."""
+        self.queue_processing = False
+        if self.queue_thread and self.queue_thread.is_alive():
+            self.queue_thread.join(timeout=1)
+        
+        # Clear the queue
+        while not self.command_queue.empty():
+            self.command_queue.get()
+            self.command_queue.task_done()
+            
+        print("INFO: Bulk command operation stopped")
+        
+    def send_all_parameters(self) -> None:
+        """
+        Send all current UI parameters to the device in the correct sequence.
+        Implements the "Enviar todos os comandos" functionality.
+        """
+        if not self.is_connected:
+            self.app.log_frame.log_message("ERROR: Not connected to device\n")
+            return
+            
+        if not hasattr(self.app, 'device_command_mapper'):
+            self.app.log_frame.log_message("ERROR: Device command mapper not available\n")
+            return
+            
+        # Check if we have the operation confirmation service
+        if hasattr(self.app, 'operation_confirmation_service'):
+            # Ask for confirmation before sending all parameters
+            if not self.app.operation_confirmation_service.confirm_operation(
+                self.app.operation_confirmation_service.OPERATION_BULK_SEND
+            ):
+                # Move INFO message to console instead of UI log
+                print("INFO: Bulk send operation canceled by user")
+                return
+        
+        # Collect all parameters from UI
+        parameters = self._collect_parameters_from_ui()
+        
+        # Debug: Log the collected parameters structure
+        self.app.log_frame.log_message(f"DEBUG: Collected parameters structure: {type(parameters)}\n")
+        self.app.log_frame.log_message(f"DEBUG: Parameters keys: {list(parameters.keys()) if isinstance(parameters, dict) else 'Not a dict'}\n")
+        
+        # Flatten the hierarchical parameter structure for the device command mapper
+        flattened_parameters = self._flatten_parameters_for_device_mapper(parameters)
+        self.app.log_frame.log_message(f"DEBUG: Flattened parameters: {flattened_parameters}\n")
+        print(f"DEBUG: Flattened parameters: {flattened_parameters}")  # Also print to console
+        
+        # Get bulk commands in the correct sequence
+        progress_dialog_id = None
+        try:
+            self.app.log_frame.log_message("DEBUG: Calling device_command_mapper.get_bulk_commands()\n")
+            commands = self.app.device_command_mapper.get_bulk_commands(flattened_parameters)
+            self.app.log_frame.log_message(f"DEBUG: get_bulk_commands returned {len(commands) if commands else 0} commands\n")
+            
+            if not commands:
+                warning_msg = "WARNING: No parameters to send"
+                self.app.log_frame.log_message(f"{warning_msg}\n")
+                print(warning_msg)  # Also print to console
+                self.app.log_frame.log_message(f"DEBUG: Parameters passed to get_bulk_commands: {flattened_parameters}\n")
+                print(f"DEBUG: Parameters passed to get_bulk_commands: {flattened_parameters}")  # Also print to console
+                return
+            
+            # Create a progress dialog if we have the operation confirmation service
+            progress_dialog_id = None
+            if hasattr(self.app, 'operation_confirmation_service'):
+                # Use i18n for progress dialog text
+                sending_title = self.app.i18n.get("sending_parameters", "Sending Parameters")
+                bulk_send_title = self.app.i18n.get("bulk_parameter_send", "Bulk Parameter Send")
+                
+                progress_dialog_id = self.app.operation_confirmation_service.create_progress_dialog(
+                    sending_title,
+                    bulk_send_title,
+                    self.app.operation_confirmation_service.PROGRESS_TYPE_DETERMINATE,
+                    len(commands),
+                    True
+                )
+                
+                # Set cancel callback
+                self.app.operation_confirmation_service.set_cancel_callback(
+                    progress_dialog_id,
+                    self.stop_queue_processing
+                )
+            
+            # Define a callback that updates progress and shows completion
+            def on_complete(results):
+                if progress_dialog_id:
+                    # Use i18n for completion message
+                    success_msg = self.app.i18n.get("all_parameters_sent_successfully", "All parameters sent successfully")
+                    self.app.operation_confirmation_service.complete_progress(
+                        progress_dialog_id,
+                        True,
+                        success_msg
+                    )
+                else:
+                    # Move INFO message to console instead of UI log
+                    print("INFO: All parameters sent successfully")
+            
+            # Queue the commands for sequential processing
+            self.queue_commands(
+                commands, 
+                callback=on_complete,
+                delay=0.8,  # Slightly longer delay for parameter commands
+                progress_dialog_id=progress_dialog_id
+            )
+            
+            # Move INFO message to console instead of UI log
+            print(f"INFO: Queued {len(commands)} commands for sending")
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to prepare commands: {str(e)}\n")
+            
+            # Close progress dialog if it exists
+            if hasattr(self.app, 'operation_confirmation_service') and progress_dialog_id:
+                # Use i18n for error message
+                error_template = self.app.i18n.get("error_preparing_commands", "Error preparing commands: {error}")
+                error_msg = error_template.format(error=str(e))
+                self.app.operation_confirmation_service.complete_progress(
+                    progress_dialog_id,
+                    False,
+                    error_msg
+                )
+            
+    def check_device_configuration(self) -> None:
+        """
+        Retrieve and populate all device settings.
+        Implements the "Checar configura├º├úo" functionality.
+        """
+        if not self.is_connected:
+            self.app.log_frame.log_message("ERROR: Not connected to device\n")
+            return
+        
+        # Initialize configuration reader if not already done
+        if self.configuration_reader is None:
+            self.initialize_configuration_reader()
+        
+        if self.configuration_reader is None:
+            self.app.log_frame.log_message("ERROR: Configuration reader service not available\n")
+            return
+        
+        # Define completion callback
+        def on_completion(result, error_message):
+            # Check if operation was canceled
+            if (hasattr(self, 'configuration_reader') and 
+                self.configuration_reader is not None and 
+                hasattr(self.configuration_reader, 'cancel_requested') and 
+                self.configuration_reader.cancel_requested):
+                self.app.log_frame.log_message("INFO: Configuration reading was canceled by user\n")
+                return
+            
+            if result.success:
+                success_msg = f"Configuration reading completed successfully."
+                self.app.log_frame.log_message(f"INFO: {success_msg}\n")
+                
+                # Note: UI is already updated by the ConfigurationReaderService.read_all_configurations()
+                # No need to call _update_ui_from_device_configuration again as it would duplicate the process
+                
+                if hasattr(self.app, 'operation_confirmation_service'):
+                    self.app.operation_confirmation_service.show_success_notification(success_msg)
+            else:
+                error_msg = error_message or "Configuration reading failed"
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+        
+        # Start configuration reading with progress indication
+        try:
+            self.configuration_reader.read_all_configurations(
+                completion_callback=on_completion,
+                show_progress_dialog=True
+            )
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to start configuration reading: {str(e)}\n")
+            
+    def _collect_parameters_from_ui(self) -> Dict[str, Any]:
+        """
+        Collect all parameter values from the UI.
+        
+        Returns:
+            Dictionary of parameter names and values
+        """
+        print("DEBUG: _collect_parameters_from_ui - START")
+        parameters = {}
+        
+        # Check if parameters frame exists
+        if not hasattr(self.app, 'parameters_frame') and not hasattr(self.app, 'params_frame'):
+            self.app.log_frame.log_message("DEBUG: No parameters frame found\n")
+            print("DEBUG: _collect_parameters_from_ui - No parameters frame found")
+            return parameters
+        
+        # Get the parameters frame (try both possible names)
+        print("DEBUG: _collect_parameters_from_ui - Getting parameters frame")
+        params_frame = getattr(self.app, 'parameters_frame', None) or getattr(self.app, 'params_frame', None)
+        
+        if params_frame is None:
+            self.app.log_frame.log_message("DEBUG: Parameters frame is None\n")
+            print("DEBUG: _collect_parameters_from_ui - Parameters frame is None")
+            return parameters
+        print(f"DEBUG: _collect_parameters_from_ui - Parameters frame found: {type(params_frame)}")
+        
+        # Use the modern specification-based parameter collection method
+        print("DEBUG: _collect_parameters_from_ui - Checking for get_all_parameter_values method")
+        if hasattr(params_frame, 'get_all_parameter_values'):
+            try:
+                print("DEBUG: _collect_parameters_from_ui - Calling get_all_parameter_values()")
+                parameters = params_frame.get_all_parameter_values()
+                print(f"DEBUG: _collect_parameters_from_ui - get_all_parameter_values() returned {len(parameters)} parameters")
+                self.app.log_frame.log_message(f"DEBUG: Collected {len(parameters)} parameters using specification method\n")
+                
+                # Log the collected parameters for debugging
+                for param_name, value in parameters.items():
+                    self.app.log_frame.log_message(f"DEBUG: Parameter {param_name}: {value}\n")
+                    
+                return parameters
+            except Exception as e:
+                print(f"DEBUG: _collect_parameters_from_ui - Exception in get_all_parameter_values: {str(e)}")
+                self.app.log_frame.log_message(f"ERROR: Failed to collect parameters using specification method: {str(e)}\n")
+        
+        # Fallback to legacy parameter collection methods
+        self.app.log_frame.log_message("DEBUG: Using fallback parameter collection methods\n")
+        
+        # Try legacy parameter widgets
+        if hasattr(params_frame, 'parameter_widgets'):
+            for param_name, widget in params_frame.parameter_widgets.items():
+                try:
+                    if hasattr(widget, 'get_value'):
+                        parameters[param_name] = widget.get_value()
+                    elif hasattr(widget, 'get'):
+                        parameters[param_name] = widget.get()
+                except Exception as e:
+                    self.app.log_frame.log_message(f"WARNING: Failed to get value for parameter {param_name}: {str(e)}\n")
+        
+        # Try legacy APN entries
+        if hasattr(params_frame, 'apn_server_entry'):
+            try:
+                parameters['apn_server'] = params_frame.apn_server_entry.get()
+            except:
+                pass
+        if hasattr(params_frame, 'apn_user_entry'):
+            try:
+                parameters['apn_user'] = params_frame.apn_user_entry.get()
+            except:
+                pass
+        if hasattr(params_frame, 'apn_password_entry'):
+            try:
+                parameters['apn_password'] = params_frame.apn_password_entry.get()
+            except:
+                pass
+        
+        self.app.log_frame.log_message(f"DEBUG: Collected {len(parameters)} parameters using fallback methods\n")
+        print(f"DEBUG: _collect_parameters_from_ui - END, returning {len(parameters)} parameters")
+        return parameters
+    
+    def _flatten_parameters_for_device_mapper(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Flatten the hierarchical parameter structure to the format expected by device command mapper.
+        
+        Args:
+            parameters: Hierarchical parameter structure from UI
+            
+        Returns:
+            Flattened parameter dictionary
+        """
+        flattened = {}
+        for section_name, section_data in parameters.items():
+            if isinstance(section_data, dict):
+                for param_name, param_data in section_data.items():
+                    if isinstance(param_data, dict):
+                        for field_name, field_value in param_data.items():
+                            flattened[f"{param_name}.{field_name}"] = field_value
+                    else:
+                        flattened[param_name] = param_data
+        return flattened
+        
+    def _process_config_check_results(self, results: Dict[str, Any]) -> None:
+        """
+        Process the results of a configuration check and update the UI.
+        
+        Args:
+            results: Dictionary of results from the configuration check
+        """
+        self.app.log_frame.log_message("INFO: Processing configuration check results\n")
+        
+        # Check if parameters frame exists
+        if not hasattr(self.app, 'parameters_frame'):
+            return
+            
+        # Update APN parameters
+        if 'apn_server' in results and hasattr(self.app.params_frame, 'apn_server_entry'):
+            self.app.params_frame.apn_server_entry.delete(0, 'end')
+            self.app.params_frame.apn_server_entry.insert(0, results['apn_server'])
+            self.app.log_frame.log_message(f"INFO: Updated APN server to {results['apn_server']}\n")
+            
+        if 'apn_user' in results and hasattr(self.app.params_frame, 'apn_user_entry'):
+            self.app.params_frame.apn_user_entry.delete(0, 'end')
+            self.app.params_frame.apn_user_entry.insert(0, results['apn_user'])
+            self.app.log_frame.log_message(f"INFO: Updated APN user to {results['apn_user']}\n")
+            
+        if 'apn_password' in results and hasattr(self.app.params_frame, 'apn_password_entry'):
+            self.app.params_frame.apn_password_entry.delete(0, 'end')
+            self.app.params_frame.apn_password_entry.insert(0, results['apn_password'])
+            self.app.log_frame.log_message(f"INFO: Updated APN password\n")
+        
+        # Update transmission mode
+        if 'transmission_mode' in results and hasattr(self.app.parameters_frame, 'trans_mode_var'):
+            self.app.parameters_frame.trans_mode_var.set(results['transmission_mode'])
+            self.app.log_frame.log_message(f"INFO: Updated transmission mode to {results['transmission_mode']}\n")
+            
+        # Update all other parameters using the parameter widgets
+        if hasattr(self.app.parameters_frame, 'parameter_widgets'):
+            # Create a reverse mapping from values to keys for dropdowns/radios
+            reverse_mappings = {}
+            if hasattr(self.app, 'device_command_mapper'):
+                for param, mapping in self.app.device_command_mapper.value_mappings.items():
+                    reverse_mappings[param] = {v: k for k, v in mapping.items()}
+
+            for param_name, value in results.items():
+                if param_name in self.app.parameters_frame.parameter_widgets:
+                    try:
+                        # If a reverse mapping exists, use it to get the display value
+                        if param_name in reverse_mappings and value in reverse_mappings[param_name]:
+                            display_value = reverse_mappings[param_name][value]
+                        else:
+                            display_value = value
+
+                        self.app.parameters_frame.parameter_widgets[param_name].set_value(display_value)
+                        self.app.log_frame.log_message(f"INFO: Updated parameter {param_name} to {display_value}\n")
+                    except Exception as e:
+                        self.app.log_frame.log_message(f"ERROR: Failed to update parameter {param_name}: {str(e)}\n")
+        
+        self.app.log_frame.log_message("INFO: Configuration check complete - UI updated with device values\n")
+                    
+        self.app.log_frame.log_message("INFO: Device configuration loaded to UI\n")
+        
+    def monitor_connection(self) -> None:
+        """
+        Monitor the connection status and detect disconnections.
+        This runs in a separate thread and periodically checks if the connection is still active.
+        """
+        check_interval = 5  # Check every 5 seconds initially
+        consecutive_failures = 0
+        max_consecutive_failures = 3  # Number of consecutive failures before considering connection lost
+        
+        while not self.stop_monitor and self.is_connected:
+            try:
+                # Check if there has been activity recently
+                current_time = datetime.datetime.now()
+                time_since_activity = (current_time - self.last_activity_time).total_seconds()
+                
+                # If no activity for a while, check if the connection is still alive
+                if time_since_activity > self.connection_timeout:
+                    # Try to send a simple command to check connection
+                    if hasattr(self.app, 'device_command_mapper'):
+                        try:
+                            # Log that we're checking connection status
+                            self.app.after(0, self.app.log_frame.log_message, 
+                                          "DEBUG: Checking connection status...\n")
+                            
+                            # Send a status request to check if device is still connected
+                            self.serial_port.write(b"ATSMS:STATUS#\r\n")
+                            
+                            # Wait a short time for response
+                            time.sleep(0.5)
+                            
+                            # If no response and no data in buffer, connection might be lost
+                            if self.serial_port.in_waiting == 0:
+                                consecutive_failures += 1
+                                
+                                # Log the failure attempt
+                                self.app.after(0, self.app.log_frame.log_message, 
+                                              f"DEBUG: No response from device (attempt {consecutive_failures}/{max_consecutive_failures})\n")
+                                
+                                # Try one more time with a longer timeout
+                                self.serial_port.write(b"ATSMS:STATUS#\r\n")
+                                time.sleep(1)
+                                
+                                if self.serial_port.in_waiting == 0:
+                                    if consecutive_failures >= max_consecutive_failures:
+                                        # Connection appears to be lost after multiple failures
+                                        self.app.after(0, self.app.log_frame.log_message, 
+                                                      "WARNING: Device not responding to status checks\n")
+                                        self.app.after(0, self._handle_connection_lost)
+                                        break
+                                    
+                                    # Increase check interval after failures
+                                    check_interval = min(check_interval + 2, 15)  # Max 15 seconds
+                                else:
+                                    # Got a response on second try, reset failures but note it was slow
+                                    consecutive_failures = 0
+                                    self.app.after(0, self.app.log_frame.log_message, 
+                                                  "INFO: Device responded slowly to status check\n")
+                                    
+                                    # Update connection quality if error handler exists
+                                    if hasattr(self.app, 'error_handler'):
+                                        self.app.after(0, self.app.error_handler._update_connection_quality, -5)
+                            else:
+                                # Got a response, connection is good
+                                consecutive_failures = 0
+                                
+                                # Gradually decrease check interval back to normal
+                                check_interval = max(check_interval - 1, 5)  # Min 5 seconds
+                                
+                                # Update connection quality if error handler exists
+                                if hasattr(self.app, 'error_handler'):
+                                    self.app.after(0, self.app.error_handler._update_connection_quality, 1)
+                                    
+                                # Flash the connection indicator to show activity
+                                if hasattr(self.app, 'connection_frame'):
+                                    self.app.after(0, self.app.connection_frame.flash_activity_indicator)
+                        except serial.SerialException as se:
+                            # Serial exception indicates connection is definitely lost
+                            self.app.after(0, self.app.log_frame.log_message, 
+                                          f"ERROR: Serial exception during connection check: {str(se)}\n")
+                            self.app.after(0, self._handle_connection_lost)
+                            break
+                    
+                    # Update last activity time even if we just checked
+                    self.last_activity_time = current_time
+            
+            except Exception as e:
+                # Log any errors in the monitoring thread
+                self.app.after(0, self.app.log_frame.log_message, 
+                              f"ERROR: Exception in connection monitoring: {str(e)}\n")
+                
+            # Sleep for the current check interval
+            time.sleep(check_interval)
+            
+            # Sleep before next check
+            time.sleep(5)  # Check every 5 seconds
+    
+    def _handle_connection_lost(self) -> None:
+        """Handle a lost connection with appropriate error messages and reconnection attempts."""
+        if not self.is_connected:
+            return  # Already disconnected
+            
+        # Get the current port before disconnecting
+        current_port = self.serial_port.port if self.serial_port else None
+        
+        # Stop threads
+        self.stop_thread = True
+        self.stop_monitor = True
+        
+        # Log the disconnection with timestamp
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+            self.app.log_frame.log_message(f"ERROR: Connection lost unexpectedly at {timestamp}\n")
+        else:
+            print(f"ERROR: Connection lost unexpectedly at {timestamp}\n")
+        
+        # Update connection status
+        self.is_connected = False
+        self.waiting_for_response = False
+        
+        # Close the port
+        if self.serial_port:
+            try:
+                if self.serial_port.is_open:
+                    self.serial_port.close()
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Error closing port: {str(e)}\n")
+        
+        # Update UI to show disconnected state
+        if hasattr(self.app, 'connection_frame'):
+            self.app.connection_frame.update_status(False)
+        
+        # Use enhanced error handling service if available
+        if hasattr(self.app, 'error_handler') and current_port:
+            # Determine the likely cause of disconnection based on recent activity
+            error_type = self.app.error_handler.CONN_ERROR_DEVICE_DISCONNECTED
+            
+            # If we have last_activity_time, check how long since last activity
+            if hasattr(self, 'last_activity_time'):
+                time_since_activity = (datetime.datetime.now() - self.last_activity_time).total_seconds()
+                
+                # If it's been a long time since activity, it might be a timeout
+                if time_since_activity > self.connection_timeout:
+                    error_type = self.app.error_handler.CONN_ERROR_TIMEOUT
+                    self.app.log_frame.log_message(
+                        f"INFO: No activity detected for {int(time_since_activity)} seconds before disconnection\n"
+                    )
+            
+            # Create context with detailed information
+            context = {
+                'port': current_port,
+                'last_activity': self.last_activity_time.strftime("%H:%M:%S") if hasattr(self, 'last_activity_time') else "unknown",
+                'reconnect_enabled': self.app.connection_frame.auto_reconnect_var.get() if hasattr(self.app.connection_frame, 'auto_reconnect_var') else True
+            }
+            
+            # Handle the error with appropriate type and severity
+            self.app.error_handler.handle_error(
+                error_type,
+                self.app.error_handler.SEVERITY_ERROR,
+                context
+            )
+            
+            # Check if auto-reconnect is enabled in the UI
+            auto_reconnect_enabled = (hasattr(self.app.connection_frame, 'auto_reconnect_var') and 
+                                     self.app.connection_frame.auto_reconnect_var.get())
+            
+            # Attempt to reconnect if enabled
+            if auto_reconnect_enabled:
+                self.app.log_frame.log_message("INFO: Automatic reconnection enabled\n")
+                self.app.error_handler._attempt_reconnection(current_port)
+            else:
+                self.app.log_frame.log_message("INFO: Automatic reconnection disabled. Please reconnect manually.\n")
+        else:
+            # Basic reconnection message if no error handler
+            self.app.log_frame.log_message("INFO: Connection lost. Please check your device and reconnect manually.\n")
+    
+    def update_last_activity(self) -> None:
+        """Update the last activity timestamp to indicate the connection is active."""
+        self.last_activity_time = datetime.datetime.now()
+        
+        # Flash the connection indicator to show activity
+        if hasattr(self.app, 'connection_frame'):
+            self.app.after(0, self.app.connection_frame.flash_activity_indicator)
+            
+        # Slightly improve connection quality with successful activity
+        if hasattr(self.app, 'error_handler'):
+            # Small improvement for regular activity
+            self.app.after(0, self.app.error_handler._update_connection_quality, 1)
+    
+    def _update_ui_from_device_configuration(self) -> None:
+        """
+        Update UI with processed parameters from device configuration.
+        
+        This method uses the ConfigurationReaderService directly (same approach as 
+        check_device_configuration) to read all parameters from the device and 
+        update the UI with the correct values.
+        
+        Requirements: 3.1, 3.2, 3.3, 3.5 (Odometer parameter updates)
+        """
+        try:
+            # Check if configuration reader is available
+            if self.configuration_reader is None:
+                self.initialize_configuration_reader()
+            
+            if self.configuration_reader is None:
+                self.app.log_frame.log_message("ERROR: Configuration reader service not available\n")
+                return
+            
+            # Define completion callback to update UI with the read parameters
+            def on_completion(result, error_message):
+                if result.success:
+                    success_msg = f"Configuration reading completed successfully."
+                    self.app.log_frame.log_message(f"INFO: {success_msg}\n")
+                    
+                    # Check if operation was canceled before updating UI
+                    if hasattr(self.configuration_reader, 'cancel_requested') and self.configuration_reader.cancel_requested:
+                        self.app.log_frame.log_message("INFO: Configuration reading was canceled, skipping UI update\n")
+                        return
+                    
+                    # Update UI with the read parameters
+                    self._update_ui_with_parameters(result.parameters_read)
+                    
+                    if hasattr(self.app, 'operation_confirmation_service'):
+                        self.app.operation_confirmation_service.show_success_notification(success_msg)
+                else:
+                    error_msg = error_message or "Configuration reading failed"
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            
+            # Start configuration reading with progress indication (same as check_device_configuration)
+            try:
+                self.configuration_reader.read_all_configurations(
+                    completion_callback=on_completion,
+                    show_progress_dialog=True
+                )
+                
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Failed to start configuration reading: {str(e)}\n")
+                
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to start UI update from device configuration: {str(e)}\n")
+    
+    def _apply_ui_values_to_parameters_frame(self, ui_values: Dict[str, Any]) -> None:
+        """
+        Apply processed parameter values to the parameters frame UI.
+        
+        Args:
+            ui_values: Dictionary of parameter names to processed values
+        """
+        try:
+            # Update UI using the parameters frame update method
+            if hasattr(self.app, 'params_frame') and hasattr(self.app.params_frame, 'update_fields_from_dict'):
+                self.app.params_frame.update_fields_from_dict(ui_values)
+                self.app.log_frame.log_message("INFO: Parameters frame updated with processed device values\n")
+            elif hasattr(self.app, 'parameters_frame') and hasattr(self.app.parameters_frame, 'update_fields_from_dict'):
+                self.app.parameters_frame.update_fields_from_dict(ui_values)
+                self.app.log_frame.log_message("INFO: Parameters frame updated with processed device values\n")
+            else:
+                self.app.log_frame.log_message("WARNING: Parameters frame update method not available\n")
+                
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to apply UI values to parameters frame: {str(e)}\n")
+            
+    def _update_ui_with_parameters(self, parameters_read):
+        """
+        Update UI with parameters read from the device based on specification.
+        
+        Args:
+            parameters_read: List of parameter read results from ConfigurationReaderService
+        """
+        try:
+            self.app.log_frame.log_message("DEBUG: Updating UI with parameters read from device\n")
+            self.app.log_frame.log_message(f"DEBUG: Number of parameters to process: {len(parameters_read)}\n")
+            
+            # Debug: List all parameters
+            for result in parameters_read:
+                self.app.log_frame.log_message(f"DEBUG: Parameter {result.parameter_name}: success={result.success}, value={result.value}\n")
+            
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or self.app.parameters_frame is None:
+                self.app.log_frame.log_message("DEBUG: Parameters frame not available yet, cannot update UI\n")
+                return
+            else:
+                self.app.log_frame.log_message("DEBUG: Parameters frame found, proceeding with UI updates\n")
+            
+            # Create parsed_parameters dictionary
+            parsed_parameters = {}
+            for result in parameters_read:
+                if result.success and result.raw_response:
+                    parsed_response = self.configuration_reader.parse_device_response(
+                        result.parameter_name, 
+                        result.raw_response, 
+                        self.configuration_reader._get_command_type_for_parameter(result.parameter_name)
+                    )
+                    if parsed_response.success:
+                        parsed_parameters[result.parameter_name] = parsed_response.parsed_values
+
+            # Use the configuration reader's UI update method directly
+            self.configuration_reader._update_ui_fields_from_parsed_data(parsed_parameters)
+            # Log successful UI updates
+            updated_count = len([r for r in parameters_read if r.success])
+            self.app.log_frame.log_message(f"INFO: Successfully updated UI with {updated_count} parameters\n")
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to update UI with parameters: {str(e)}\n")
+</document_content>
+</document>
+<document index="77">
+<source>.\services\simple_profile_manager.py</source>
+<document_content>
+"""
+Simple Profile Manager - Simplified, reliable profile operations.
+
+This is a streamlined version that focuses on core functionality:
+1. Device to Profile: Read device config and save to file
+2. Profile to Device: Load profile file and send to device
+3. Simple progress tracking with parameter count
+"""
+
+import os
+import configparser
+from datetime import datetime
+from typing import Dict, Any, Optional, Callable
+import threading
+import time
+
+from ui.ultra_simple_progress_dialog import UltraSimpleProgressDialog, create_ultra_simple_progress_info
+
+
+class SimpleProfileManager:
+    """Simplified profile manager with reliable operations."""
+    
+    def __init__(self, app):
+        self.app = app
+        self.i18n = app.i18n_service
+        self.serial_service = app.serial_service
+        self.config_reader = app.configuration_reader_service
+        
+        # Progress tracking
+        self.progress_dialog = None
+        self.is_operation_running = False
+        self.cancel_requested = False
+        
+    def device_to_profile(self, profile_path: str, profile_name: str = None):
+        """
+        Read device configuration and save to profile file.
+        
+        Args:
+            profile_path: Path where to save the profile
+            profile_name: Name for the profile (optional)
+        """
+        if self.is_operation_running:
+            return False
+            
+        self.is_operation_running = True
+        self.cancel_requested = False
+        
+        # Create progress dialog
+        self.progress_dialog = UltraSimpleProgressDialog(self.app, 'device_to_profile')
+        self.progress_dialog.set_cancel_callback(self._cancel_operation)
+        self.progress_dialog.show()
+        
+        # Start operation in background thread
+        thread = threading.Thread(
+            target=self._device_to_profile_worker,
+            args=(profile_path, profile_name),
+            daemon=True
+        )
+        thread.start()
+        
+        return True
+        
+    def profile_to_device(self, profile_path: str):
+        """
+        Load profile file and send configuration to device.
+        
+        Args:
+            profile_path: Path to the profile file to load
+        """
+        if self.is_operation_running:
+            return False
+            
+        if not os.path.exists(profile_path):
+            self._show_error(f"Profile file not found: {profile_path}")
+            return False
+            
+        self.is_operation_running = True
+        self.cancel_requested = False
+        
+        # Create progress dialog
+        self.progress_dialog = UltraSimpleProgressDialog(self.app, 'profile_to_device')
+        self.progress_dialog.set_cancel_callback(self._cancel_operation)
+        self.progress_dialog.show()
+        
+        # Start operation in background thread
+        thread = threading.Thread(
+            target=self._profile_to_device_worker,
+            args=(profile_path,),
+            daemon=True
+        )
+        thread.start()
+        
+        return True
+        
+    def _device_to_profile_worker(self, profile_path: str, profile_name: str = None):
+        """Worker thread for device-to-profile operation."""
+        try:
+            # Step 1: Read device configuration
+            self._update_progress(0, 0, "Connecting to device...")
+            
+            if self.cancel_requested:
+                return
+                
+            # Read all parameters from device
+            device_params = self.config_reader.read_all_parameters()
+            
+            if not device_params:
+                self._show_error("Failed to read device configuration")
+                return
+                
+            # Step 2: Process each parameter with progress updates
+            total_params = len(device_params)
+            processed_params = {}
+            
+            for i, (param_name, param_value) in enumerate(device_params.items(), 1):
+                if self.cancel_requested:
+                    return
+                    
+                # Update progress for each parameter
+                self._update_progress(
+                    i, total_params, 
+                    f"Processing parameter: {param_name}"
+                )
+                
+                # Process parameter (validate, convert, etc.)
+                processed_params[param_name] = self._process_parameter(param_name, param_value)
+                
+                # Small delay to show progress
+                time.sleep(0.05)
+            
+            # Step 3: Create profile file
+            self._update_progress(total_params, total_params, "Creating profile file...")
+            
+            if self.cancel_requested:
+                return
+                
+            success = self._save_profile_file(profile_path, processed_params, profile_name)
+            
+            if success:
+                self._show_success("Profile saved successfully!")
+            else:
+                self._show_error("Failed to save profile file")
+                
+        except Exception as e:
+            self._show_error(f"Operation failed: {str(e)}")
+        finally:
+            self.is_operation_running = False
+            
+    def _profile_to_device_worker(self, profile_path: str):
+        """Worker thread for profile-to-device operation."""
+        try:
+            # Step 1: Load profile file
+            self._update_progress(0, 0, "Loading profile file...")
+            
+            if self.cancel_requested:
+                return
+                
+            profile_data = self._load_profile_file(profile_path)
+            
+            if not profile_data:
+                self._show_error("Failed to load profile file")
+                return
+                
+            # Step 2: Send each parameter to device with progress updates
+            total_params = len(profile_data)
+            
+            for i, (param_name, param_value) in enumerate(profile_data.items(), 1):
+                if self.cancel_requested:
+                    return
+                    
+                # Update progress for each parameter
+                self._update_progress(
+                    i, total_params,
+                    f"Sending parameter: {param_name}"
+                )
+                
+                # Send parameter to device
+                success = self._send_parameter_to_device(param_name, param_value)
+                
+                if not success:
+                    print(f"Warning: Failed to send parameter {param_name}")
+                
+                # Small delay to show progress
+                time.sleep(0.1)
+            
+            self._show_success("Profile loaded to device successfully!")
+                
+        except Exception as e:
+            self._show_error(f"Operation failed: {str(e)}")
+        finally:
+            self.is_operation_running = False
+            
+    def _update_progress(self, current: int, total: int, message: str):
+        """Update progress dialog."""
+        if self.progress_dialog and not self.cancel_requested:
+            progress_info = create_ultra_simple_progress_info(
+                current_param=current,
+                total_params=total,
+                status_message=message
+            )
+            self.progress_dialog.update_progress(progress_info)
+            
+    def _show_success(self, message: str):
+        """Show success message."""
+        if self.progress_dialog:
+            progress_info = create_ultra_simple_progress_info(
+                current_param=1,
+                total_params=1,
+                status_message=message
+            )
+            progress_info.is_complete = True
+            self.progress_dialog.update_progress(progress_info)
+            
+    def _show_error(self, message: str):
+        """Show error message."""
+        if self.progress_dialog:
+            progress_info = create_ultra_simple_progress_info(
+                current_param=0,
+                total_params=1,
+                status_message=message
+            )
+            progress_info.is_complete = True
+            progress_info.has_error = True
+            progress_info.error_message = message
+            self.progress_dialog.update_progress(progress_info)
+        else:
+            # Fallback to console
+            print(f"Error: {message}")
+            
+    def _cancel_operation(self):
+        """Cancel the current operation."""
+        self.cancel_requested = True
+        self.is_operation_running = False
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+            
+    def _process_parameter(self, param_name: str, param_value: Any) -> str:
+        """Process a parameter value for profile storage."""
+        if param_value is None:
+            return ""
+        return str(param_value)
+        
+    def _save_profile_file(self, profile_path: str, parameters: Dict[str, str], profile_name: str = None) -> bool:
+        """Save parameters to profile file."""
+        try:
+            config = configparser.ConfigParser()
+            
+            # Add profile metadata
+            config['Profile_Info'] = {
+                'profile_name': profile_name or 'Device Configuration',
+                'created_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'parameter_count': str(len(parameters)),
+                'app_version': '1.0.0',
+                'format_version': '1.0'
+            }
+            
+            # Add device parameters
+            config['Device_Parameters'] = parameters
+            
+            # Write to file
+            with open(profile_path, 'w', encoding='utf-8') as f:
+                config.write(f)
+                
+            return True
+            
+        except Exception as e:
+            print(f"Error saving profile: {e}")
+            return False
+            
+    def _load_profile_file(self, profile_path: str) -> Optional[Dict[str, str]]:
+        """Load parameters from profile file."""
+        try:
+            config = configparser.ConfigParser()
+            config.read(profile_path, encoding='utf-8')
+            
+            if 'Device_Parameters' not in config:
+                print("Error: No Device_Parameters section in profile")
+                return None
+                
+            # Convert to dictionary
+            parameters = dict(config['Device_Parameters'])
+            return parameters
+            
+        except Exception as e:
+            print(f"Error loading profile: {e}")
+            return None
+            
+    def _send_parameter_to_device(self, param_name: str, param_value: str) -> bool:
+        """Send a parameter to the device."""
+        try:
+            if not self.serial_service.is_connected:
+                print("Error: Device not connected")
+                return False
+                
+            # Create AT command for parameter
+            command = f"AT+{param_name.upper()}={param_value}"
+            
+            # Send command
+            response = self.serial_service.send_command(command)
+            
+            # Check if command was successful
+            return response and "OK" in response
+            
+        except Exception as e:
+            print(f"Error sending parameter {param_name}: {e}")
+            return False
+</document_content>
+</document>
+<document index="78">
+<source>.\services\simplified_profile_file_handler.py</source>
+<document_content>
+"""
+Simplified Profile File Handler
+
+This module provides a simplified profile file handler that focuses only on the
+[Device_Parameters] section, creating a universal format that works across all
+profile operations without unnecessary metadata sections.
+
+Requirements addressed:
+- 1.1: Exclude [profile info] sections from generated files
+- 1.2: Include only device parameter data in output files
+- 1.4: Ignore [profile info] sections when loading existing profiles
+- 1.5: Use universal format for all profile operations
+- 4.5: Maintain data integrity across all operations
+"""
+
+import configparser
+import os
+import re
+import logging
+import time
+from typing import Dict, Tuple, Optional, List, Set
+from datetime import datetime
+
+
+class ProfileValidationError(Exception):
+    """Custom exception for profile validation errors."""
+    pass
+
+
+class ProfileRecoveryError(Exception):
+    """Custom exception for profile recovery errors."""
+    pass
+
+
+class SimplifiedProfileFileHandler:
+    """
+    Simplified profile file handler that works with universal format.
+    
+    This handler creates and reads profile files containing only the
+    [Device_Parameters] section, providing a clean, universal format
+    that works for all profile operations with robust validation and error recovery.
+    """
+    
+    # Define expected parameter patterns for validation
+    PARAMETER_PATTERNS = {
+        'apn_server': r'^[a-zA-Z0-9\.\-_]+$',
+        'apn_user': r'^[a-zA-Z0-9\.\-_@]*$',
+        'apn_password': r'^.*$',  # Allow any characters for password
+        'server_ip': r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$',
+        'server_port': r'^\d{1,5}$',
+        'vibration': r'^\d{1,3}$',
+        'sensitivity': r'^\d{1,2}$',
+        'protocol': r'^(TCP|UDP)$',
+        'transmission_mode': r'^(GPRS|SMS)$',
+        'ignition_type': r'^(Digital|Analog|DIGITAL|ANALOG)$'
+    }
+    
+    # Define parameter value ranges for validation
+    PARAMETER_RANGES = {
+        'server_port': (1, 65535),
+        'vibration': (0, 255),
+        'sensitivity': (1, 10)
+    }
+    
+    # Define required parameters that must be present
+    REQUIRED_PARAMETERS = {
+        'apn_server', 'server_ip', 'server_port'
+    }
+    
+    def __init__(self):
+        """Initialize the simplified profile file handler."""
+        self.logger = logging.getLogger(__name__)
+        self._validation_errors = []
+        self._recovery_actions = []
+    
+    def validate_device_parameters_section(self, file_path: str) -> Tuple[bool, str]:
+        """
+        Validate that a profile file contains the required [Device_Parameters] section.
+        
+        Args:
+            file_path: Path to the profile file to validate
+            
+        Returns:
+            Tuple of (is_valid boolean, error message or empty string)
+        """
+        try:
+            if not os.path.exists(file_path):
+                return False, f"Profile file does not exist: {file_path}"
+            
+            if not os.access(file_path, os.R_OK):
+                return False, f"Profile file is not readable: {file_path}"
+            
+            # Check file size (empty files are invalid)
+            if os.path.getsize(file_path) == 0:
+                return False, "Profile file is empty"
+            
+            config = configparser.ConfigParser()
+            try:
+                config.read(file_path, encoding='utf-8')
+            except UnicodeDecodeError:
+                # Try with different encodings
+                for encoding in ['latin-1', 'cp1252']:
+                    try:
+                        config.read(file_path, encoding=encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    return False, "Profile file has unsupported encoding"
+            
+            # Check if Device_Parameters section exists
+            if not config.has_section('Device_Parameters'):
+                return False, "Profile file missing required [Device_Parameters] section"
+            
+            # Check if section has any parameters
+            if len(config['Device_Parameters']) == 0:
+                return False, "[Device_Parameters] section is empty"
+            
+            return True, ""
+            
+        except configparser.Error as e:
+            return False, f"Profile file format error: {str(e)}"
+        except Exception as e:
+            return False, f"Profile validation error: {str(e)}"
+    
+    def validate_parameter_values(self, parameters: Dict[str, str]) -> Tuple[bool, List[str]]:
+        """
+        Validate parameter values against expected patterns and ranges.
+        
+        Args:
+            parameters: Dictionary of parameters to validate
+            
+        Returns:
+            Tuple of (all_valid boolean, list of validation error messages)
+        """
+        validation_errors = []
+        
+        # Check required parameters
+        missing_required = self.REQUIRED_PARAMETERS - set(parameters.keys())
+        if missing_required:
+            validation_errors.append(f"Missing required parameters: {', '.join(missing_required)}")
+        
+        # Validate each parameter
+        for param_name, param_value in parameters.items():
+            if not param_value:  # Skip empty values
+                continue
+                
+            # Check pattern validation
+            if param_name in self.PARAMETER_PATTERNS:
+                pattern = self.PARAMETER_PATTERNS[param_name]
+                if not re.match(pattern, param_value):
+                    validation_errors.append(f"Invalid format for {param_name}: '{param_value}'")
+            
+            # Check range validation
+            if param_name in self.PARAMETER_RANGES:
+                try:
+                    value = int(param_value)
+                    min_val, max_val = self.PARAMETER_RANGES[param_name]
+                    if not (min_val <= value <= max_val):
+                        validation_errors.append(f"{param_name} value {value} out of range [{min_val}-{max_val}]")
+                except ValueError:
+                    validation_errors.append(f"{param_name} must be a number, got: '{param_value}'")
+        
+        return len(validation_errors) == 0, validation_errors
+    
+    def recover_corrupted_profile(self, file_path: str) -> Tuple[Dict[str, str], List[str]]:
+        """
+        Attempt to recover parameters from a corrupted or incomplete profile file.
+        
+        Args:
+            file_path: Path to the corrupted profile file
+            
+        Returns:
+            Tuple of (recovered parameters dict, list of recovery actions taken)
+        """
+        recovery_actions = []
+        recovered_parameters = {}
+        
+        try:
+            # Try to read the file with different approaches
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            # If file is completely corrupted, try line-by-line recovery
+            if not content.strip():
+                recovery_actions.append("File was empty, no recovery possible")
+                return recovered_parameters, recovery_actions
+            
+            # Try to find Device_Parameters section manually
+            lines = content.split('\n')
+            in_device_params = False
+            
+            for line_num, line in enumerate(lines, 1):
+                line = line.strip()
+                
+                # Skip empty lines and comments
+                if not line or line.startswith('#') or line.startswith(';'):
+                    continue
+                
+                # Check for section headers
+                if line.startswith('[') and line.endswith(']'):
+                    section_name = line[1:-1].strip()
+                    in_device_params = (section_name == 'Device_Parameters')
+                    if in_device_params:
+                        recovery_actions.append(f"Found [Device_Parameters] section at line {line_num}")
+                    continue
+                
+                # If we're in Device_Parameters section, try to parse parameters
+                if in_device_params and '=' in line:
+                    try:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        
+                        # Remove quotes if present
+                        if value.startswith('"') and value.endswith('"'):
+                            value = value[1:-1]
+                        elif value.startswith("'") and value.endswith("'"):
+                            value = value[1:-1]
+                        
+                        recovered_parameters[key] = value
+                        recovery_actions.append(f"Recovered parameter: {key} = {value}")
+                        
+                    except Exception as e:
+                        recovery_actions.append(f"Failed to parse line {line_num}: {line} ({str(e)})")
+            
+            # If no Device_Parameters section found, try to recover from other sections
+            if not recovered_parameters:
+                recovery_actions.append("No [Device_Parameters] section found, attempting recovery from other sections")
+                recovered_parameters = self._recover_from_legacy_sections(content, recovery_actions)
+            
+            # Apply default values for missing required parameters
+            self._apply_default_values(recovered_parameters, recovery_actions)
+            
+        except Exception as e:
+            recovery_actions.append(f"Recovery failed with error: {str(e)}")
+        
+        return recovered_parameters, recovery_actions
+    
+    def _recover_from_legacy_sections(self, content: str, recovery_actions: List[str]) -> Dict[str, str]:
+        """
+        Attempt to recover parameters from legacy profile sections.
+        
+        Args:
+            content: File content as string
+            recovery_actions: List to append recovery actions to
+            
+        Returns:
+            Dictionary of recovered parameters
+        """
+        recovered = {}
+        
+        # Try to parse as INI file and extract from known sections
+        try:
+            config = configparser.ConfigParser()
+            config.read_string(content)
+            
+            # Map legacy sections to device parameters
+            section_mappings = {
+                'APN_Configuration': ['apn_server', 'apn_user', 'apn_password'],
+                'Server_Configuration': ['server_ip', 'server_port', 'protocol'],
+                'Device_Settings': ['vibration', 'sensitivity', 'transmission_mode', 'ignition_type']
+            }
+            
+            for section_name, param_names in section_mappings.items():
+                if config.has_section(section_name):
+                    recovery_actions.append(f"Found legacy section: [{section_name}]")
+                    for param_name in param_names:
+                        if config.has_option(section_name, param_name):
+                            value = config.get(section_name, param_name)
+                            recovered[param_name] = value
+                            recovery_actions.append(f"Recovered from [{section_name}]: {param_name} = {value}")
+        
+        except Exception as e:
+            recovery_actions.append(f"Legacy section recovery failed: {str(e)}")
+        
+        return recovered
+    
+    def _apply_default_values(self, parameters: Dict[str, str], recovery_actions: List[str]) -> None:
+        """
+        Apply default values for missing required parameters.
+        
+        Args:
+            parameters: Parameters dictionary to update
+            recovery_actions: List to append recovery actions to
+        """
+        defaults = {
+            'apn_server': 'internet.provider.com',
+            'server_ip': '192.168.1.100',
+            'server_port': '8080',
+            'protocol': 'TCP',
+            'transmission_mode': 'GPRS',
+            'vibration': '128',
+            'sensitivity': '5'
+        }
+        
+        for param_name in self.REQUIRED_PARAMETERS:
+            if param_name not in parameters or not parameters[param_name]:
+                if param_name in defaults:
+                    parameters[param_name] = defaults[param_name]
+                    recovery_actions.append(f"Applied default value for {param_name}: {defaults[param_name]}")
+    
+    def sanitize_parameter_values(self, parameters: Dict[str, str]) -> Tuple[Dict[str, str], List[str]]:
+        """
+        Sanitize parameter values to ensure they meet validation requirements.
+        
+        Args:
+            parameters: Dictionary of parameters to sanitize
+            
+        Returns:
+            Tuple of (sanitized parameters dict, list of sanitization actions)
+        """
+        sanitized = parameters.copy()
+        sanitization_actions = []
+        
+        for param_name, param_value in parameters.items():
+            if not param_value:
+                continue
+            
+            original_value = param_value
+            
+            # Sanitize based on parameter type
+            if param_name == 'server_ip':
+                # Ensure IP format
+                if not re.match(self.PARAMETER_PATTERNS['server_ip'], param_value):
+                    # Try to extract IP-like pattern or use default
+                    ip_match = re.search(r'(\d{1,3}\.){3}\d{1,3}', param_value)
+                    if ip_match:
+                        # Validate extracted IP components
+                        ip_parts = ip_match.group().split('.')
+                        valid_ip_parts = []
+                        for part in ip_parts:
+                            part_num = int(part)
+                            if part_num > 255:
+                                part_num = 255
+                            valid_ip_parts.append(str(part_num))
+                        sanitized[param_name] = '.'.join(valid_ip_parts)
+                        sanitization_actions.append(f"Sanitized IP {param_name}: {original_value} -> {sanitized[param_name]}")
+                    else:
+                        # Use default IP if no valid pattern found
+                        sanitized[param_name] = '192.168.1.100'
+                        sanitization_actions.append(f"Applied default IP for {param_name}: {original_value} -> {sanitized[param_name]}")
+            
+            elif param_name == 'server_port':
+                # Ensure port is numeric and in valid range
+                port_match = re.search(r'\d+', param_value)
+                if port_match:
+                    port = int(port_match.group())
+                    if port < 1:
+                        port = 8080
+                    elif port > 65535:
+                        port = 8080
+                    sanitized[param_name] = str(port)
+                    if sanitized[param_name] != original_value:
+                        sanitization_actions.append(f"Sanitized {param_name}: {original_value} -> {sanitized[param_name]}")
+            
+            elif param_name in ['vibration', 'sensitivity']:
+                # Ensure numeric values in range
+                num_match = re.search(r'\d+', param_value)
+                if num_match:
+                    value = int(num_match.group())
+                    if param_name == 'vibration':
+                        value = max(0, min(255, value))
+                    elif param_name == 'sensitivity':
+                        value = max(1, min(10, value))
+                    sanitized[param_name] = str(value)
+                    if sanitized[param_name] != original_value:
+                        sanitization_actions.append(f"Sanitized {param_name}: {original_value} -> {sanitized[param_name]}")
+                else:
+                    # No numeric value found, use defaults
+                    if param_name == 'vibration':
+                        sanitized[param_name] = '128'
+                    elif param_name == 'sensitivity':
+                        sanitized[param_name] = '5'
+                    sanitization_actions.append(f"Applied default for {param_name}: {original_value} -> {sanitized[param_name]}")
+            
+            elif param_name in ['protocol', 'transmission_mode', 'ignition_type']:
+                # Ensure valid enum values
+                if param_name == 'protocol':
+                    value = param_value.upper()
+                    if value not in ['TCP', 'UDP']:
+                        value = 'TCP'
+                elif param_name == 'transmission_mode':
+                    value = param_value.upper()
+                    if value not in ['GPRS', 'SMS']:
+                        value = 'GPRS'
+                elif param_name == 'ignition_type':
+                    value = param_value.capitalize()  # Digital, Analog
+                    if value not in ['Digital', 'Analog']:
+                        value = 'Digital'
+                
+                sanitized[param_name] = value
+                if sanitized[param_name] != original_value:
+                    sanitization_actions.append(f"Sanitized {param_name}: {original_value} -> {sanitized[param_name]}")
+        
+        return sanitized, sanitization_actions
+
+    def write_universal_profile(self, file_path: str, parameters: Dict[str, str]) -> Tuple[bool, str]:
+        """
+        Write a profile file in universal format with only [Device_Parameters] section.
+        Includes validation and sanitization of parameters before writing with performance optimization.
+        
+        Args:
+            file_path: Path where to write the profile file
+            parameters: Dictionary of device parameters to write
+            
+        Returns:
+            Tuple of (success boolean, error message or empty string)
+        """
+        write_start_time = time.time()
+        
+        try:
+            # Fast validation check - only validate if parameters seem problematic
+            needs_validation = any(
+                not isinstance(v, str) or len(str(v)) > 1000 or '\n' in str(v)
+                for v in parameters.values()
+            )
+            
+            if needs_validation:
+                # Validate parameters before writing
+                is_valid, validation_errors = self.validate_parameter_values(parameters)
+                if not is_valid:
+                    self.logger.warning(f"Parameter validation issues: {'; '.join(validation_errors)}")
+                    # Sanitize parameters to fix validation issues
+                    sanitized_params, sanitization_actions = self.sanitize_parameter_values(parameters)
+                    if sanitization_actions:
+                        self.logger.info(f"Applied sanitization: {'; '.join(sanitization_actions)}")
+                    parameters = sanitized_params
+            
+            # Ensure directory exists (optimized check)
+            directory = os.path.dirname(file_path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+            
+            # Optimized file writing - build content in memory first
+            lines = ['[Device_Parameters]\n']
+            
+            # Sort parameters for consistent output and better performance
+            sorted_params = sorted(parameters.items())
+            
+            for param_name, param_value in sorted_params:
+                # Convert all values to strings and handle None values
+                if param_value is None:
+                    param_value = ""
+                # Escape special characters for INI format
+                param_value_str = str(param_value).replace('\n', '\\n').replace('\r', '\\r')
+                lines.append(f"{param_name} = {param_value_str}\n")
+            
+            # Write all content at once for better performance
+            with open(file_path, 'w', encoding='utf-8', buffering=8192) as config_file:
+                config_file.writelines(lines)
+            
+            # Quick validation of written file (only check if file exists and has content)
+            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                return False, "Written file is empty or does not exist"
+            
+            write_duration = time.time() - write_start_time
+            self.logger.debug(f"Profile write completed in {write_duration:.3f}s for {len(parameters)} parameters")
+            
+            return True, ""
+            
+        except PermissionError:
+            return False, f"Permission denied writing to: {file_path}"
+        except OSError as e:
+            return False, f"OS error writing file: {str(e)}"
+        except Exception as e:
+            return False, f"Error writing profile file: {str(e)}"
+    
+    def read_universal_profile(self, file_path: str) -> Tuple[Dict[str, str], str]:
+        """
+        Read a profile file focusing only on [Device_Parameters] section with performance optimization.
+        Includes validation and error recovery for corrupted or incomplete files.
+        
+        This method ignores all other sections (like [Profile_Info]) and only
+        extracts parameters from the [Device_Parameters] section, providing
+        backward compatibility with existing profile formats.
+        
+        Args:
+            file_path: Path to the profile file to read
+            
+        Returns:
+            Tuple of (parameters dictionary, error message or empty string)
+        """
+        read_start_time = time.time()
+        
+        try:
+            # Quick file existence and readability check
+            if not os.path.exists(file_path):
+                return {}, f"Profile file does not exist: {file_path}"
+            
+            if not os.access(file_path, os.R_OK):
+                return {}, f"Profile file is not readable: {file_path}"
+            
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                return {}, "Profile file is empty"
+            
+            # For small files, skip detailed validation and try direct reading
+            skip_validation = file_size < 10240  # 10KB threshold
+            
+            if not skip_validation:
+                # Validate the file structure for larger files
+                is_valid, validation_error = self.validate_device_parameters_section(file_path)
+                
+                if not is_valid:
+                    self.logger.warning(f"Profile validation failed: {validation_error}")
+                    # Attempt recovery
+                    recovered_params, recovery_actions = self.recover_corrupted_profile(file_path)
+                    
+                    if recovered_params:
+                        self.logger.info(f"Profile recovery successful: {'; '.join(recovery_actions)}")
+                        return recovered_params, f"Recovered from corrupted file"
+                    else:
+                        return {}, f"Profile validation failed and recovery unsuccessful: {validation_error}"
+            
+            # Optimized file reading - read entire file at once for better performance
+            try:
+                with open(file_path, 'r', encoding='utf-8', buffering=8192) as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                # Try with different encodings
+                for encoding in ['latin-1', 'cp1252']:
+                    try:
+                        with open(file_path, 'r', encoding=encoding, buffering=8192) as f:
+                            content = f.read()
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    return {}, "Profile file has unsupported encoding"
+            
+            # Fast parsing - look for Device_Parameters section directly
+            parameters = {}
+            lines = content.split('\n')
+            in_device_params = False
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Skip empty lines and comments
+                if not line or line.startswith('#') or line.startswith(';'):
+                    continue
+                
+                # Check for section headers
+                if line.startswith('[') and line.endswith(']'):
+                    section_name = line[1:-1].strip()
+                    in_device_params = (section_name == 'Device_Parameters')
+                    continue
+                
+                # If we're in Device_Parameters section, parse parameters
+                if in_device_params and '=' in line:
+                    try:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        
+                        # Remove quotes if present
+                        if value.startswith('"') and value.endswith('"'):
+                            value = value[1:-1]
+                        elif value.startswith("'") and value.endswith("'"):
+                            value = value[1:-1]
+                        
+                        # Unescape special characters
+                        value = value.replace('\\n', '\n').replace('\\r', '\r')
+                        
+                        parameters[key] = value
+                        
+                    except Exception:
+                        # Skip malformed lines
+                        continue
+            
+            if not parameters:
+                return {}, "No [Device_Parameters] section found or no parameters in file"
+            
+            # Skip parameter validation for performance unless parameters look suspicious
+            needs_validation = any(
+                len(str(v)) > 1000 or '\n' in str(v) or not isinstance(v, str)
+                for v in parameters.values()
+            )
+            
+            if needs_validation:
+                # Validate the read parameters
+                is_params_valid, param_errors = self.validate_parameter_values(parameters)
+                if not is_params_valid:
+                    self.logger.warning(f"Read parameters have validation issues: {'; '.join(param_errors)}")
+                    # Sanitize parameters
+                    sanitized_params, sanitization_actions = self.sanitize_parameter_values(parameters)
+                    if sanitization_actions:
+                        self.logger.info(f"Applied sanitization to read parameters: {'; '.join(sanitization_actions)}")
+                    parameters = sanitized_params
+            
+            read_duration = time.time() - read_start_time
+            self.logger.debug(f"Profile read completed in {read_duration:.3f}s for {len(parameters)} parameters")
+            
+            return parameters, ""
+            
+        except Exception as e:
+            self.logger.error(f"Error reading profile file: {str(e)}")
+            # Attempt recovery for any other errors
+            recovered_params, recovery_actions = self.recover_corrupted_profile(file_path)
+            if recovered_params:
+                self.logger.info(f"Recovered from general error: {'; '.join(recovery_actions)}")
+                return recovered_params, f"Recovered from error"
+            return {}, f"Error reading profile file: {str(e)}"
+    
+    def convert_legacy_profile(self, file_path: str) -> Dict[str, str]:
+        """
+        Convert a legacy profile file to universal format by extracting
+        only the [Device_Parameters] section.
+        
+        This method provides compatibility with existing profile files that
+        may contain multiple sections like [Profile_Info], [APN_Configuration], etc.
+        
+        Args:
+            file_path: Path to the legacy profile file
+            
+        Returns:
+            Dictionary containing only device parameters
+        """
+        parameters, error = self.read_universal_profile(file_path)
+        if error:
+            # If reading failed, return empty dict
+            return {}
+        return parameters
+    
+    def validate_universal_profile(self, file_path: str) -> Tuple[bool, str]:
+        """
+        Comprehensive validation of a profile file including structure and parameter values.
+        
+        Args:
+            file_path: Path to the profile file to validate
+            
+        Returns:
+            Tuple of (is_valid boolean, error message or empty string)
+        """
+        try:
+            # First validate file structure
+            structure_valid, structure_error = self.validate_device_parameters_section(file_path)
+            if not structure_valid:
+                return False, f"Structure validation failed: {structure_error}"
+            
+            # Then validate parameter values
+            parameters, read_error = self.read_universal_profile(file_path)
+            if read_error and not parameters:
+                return False, f"Read validation failed: {read_error}"
+            
+            # Validate parameter values
+            values_valid, value_errors = self.validate_parameter_values(parameters)
+            if not values_valid:
+                return False, f"Parameter validation failed: {'; '.join(value_errors)}"
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, f"Validation error: {str(e)}"
+    
+    def get_parameter_count(self, file_path: str) -> int:
+        """
+        Get the number of parameters in a profile file.
+        
+        Args:
+            file_path: Path to the profile file
+            
+        Returns:
+            Number of parameters in the file, or 0 if error
+        """
+        parameters, error = self.read_universal_profile(file_path)
+        if error:
+            return 0
+        return len(parameters)
+    
+    def file_exists_and_readable(self, file_path: str) -> bool:
+        """
+        Check if a file exists and is readable.
+        
+        Args:
+            file_path: Path to the file to check
+            
+        Returns:
+            True if file exists and is readable, False otherwise
+        """
+        try:
+            return os.path.exists(file_path) and os.access(file_path, os.R_OK)
+        except Exception:
+            return False
+    
+    def create_sample_universal_profile(self, file_path: str, sample_parameters: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
+        """
+        Create a sample universal profile file for testing purposes.
+        
+        Args:
+            file_path: Path where to create the sample file
+            sample_parameters: Optional parameters to include, uses defaults if None
+            
+        Returns:
+            Tuple of (success boolean, error message or empty string)
+        """
+        if sample_parameters is None:
+            sample_parameters = {
+                'apn_server': 'internet.provider.com',
+                'apn_user': 'username',
+                'apn_password': 'password',
+                'server_ip': '192.168.1.100',
+                'server_port': '8080',
+                'vibration': '128',
+                'sensitivity': '5'
+            }
+        
+        return self.write_universal_profile(file_path, sample_parameters)
+    
+    def get_validation_report(self, file_path: str) -> Dict[str, any]:
+        """
+        Get a comprehensive validation report for a profile file.
+        
+        Args:
+            file_path: Path to the profile file to analyze
+            
+        Returns:
+            Dictionary containing validation results and recovery information
+        """
+        report = {
+            'file_path': file_path,
+            'file_exists': os.path.exists(file_path),
+            'file_readable': False,
+            'structure_valid': False,
+            'structure_errors': [],
+            'parameters_valid': False,
+            'parameter_errors': [],
+            'parameters_count': 0,
+            'recovery_possible': False,
+            'recovery_actions': [],
+            'sanitization_needed': False,
+            'sanitization_actions': []
+        }
+        
+        if not report['file_exists']:
+            report['structure_errors'].append('File does not exist')
+            return report
+        
+        report['file_readable'] = os.access(file_path, os.R_OK)
+        if not report['file_readable']:
+            report['structure_errors'].append('File is not readable')
+            return report
+        
+        # Validate structure
+        structure_valid, structure_error = self.validate_device_parameters_section(file_path)
+        report['structure_valid'] = structure_valid
+        if not structure_valid:
+            report['structure_errors'].append(structure_error)
+            
+            # Try recovery
+            recovered_params, recovery_actions = self.recover_corrupted_profile(file_path)
+            report['recovery_possible'] = len(recovered_params) > 0
+            report['recovery_actions'] = recovery_actions
+            
+            if report['recovery_possible']:
+                # Validate recovered parameters
+                params_valid, param_errors = self.validate_parameter_values(recovered_params)
+                report['parameters_valid'] = params_valid
+                report['parameter_errors'] = param_errors
+                report['parameters_count'] = len(recovered_params)
+                
+                if not params_valid:
+                    # Check if sanitization would help
+                    sanitized_params, sanitization_actions = self.sanitize_parameter_values(recovered_params)
+                    sanitized_valid, sanitized_errors = self.validate_parameter_values(sanitized_params)
+                    report['sanitization_needed'] = not sanitized_valid
+                    report['sanitization_actions'] = sanitization_actions
+        else:
+            # Read parameters without automatic sanitization for validation report
+            try:
+                config = configparser.ConfigParser()
+                config.read(file_path, encoding='utf-8')
+                
+                raw_parameters = {}
+                if config.has_section('Device_Parameters'):
+                    for param_name, param_value in config['Device_Parameters'].items():
+                        raw_parameters[param_name] = param_value
+                
+                report['parameters_count'] = len(raw_parameters)
+                
+                if raw_parameters:
+                    params_valid, param_errors = self.validate_parameter_values(raw_parameters)
+                    report['parameters_valid'] = params_valid
+                    report['parameter_errors'] = param_errors
+                    
+                    if not params_valid:
+                        # Check if sanitization would help
+                        sanitized_params, sanitization_actions = self.sanitize_parameter_values(raw_parameters)
+                        sanitized_valid, sanitized_errors = self.validate_parameter_values(sanitized_params)
+                        report['sanitization_needed'] = len(sanitized_errors) < len(param_errors)
+                        report['sanitization_actions'] = sanitization_actions
+            except Exception as e:
+                report['parameter_errors'].append(f"Error reading parameters: {str(e)}")
+        
+        return report
+    
+    def repair_profile_file(self, file_path: str, backup_original: bool = True) -> Tuple[bool, str]:
+        """
+        Attempt to repair a corrupted profile file by applying recovery and sanitization.
+        
+        Args:
+            file_path: Path to the profile file to repair
+            backup_original: Whether to create a backup of the original file
+            
+        Returns:
+            Tuple of (success boolean, status message)
+        """
+        try:
+            if backup_original and os.path.exists(file_path):
+                backup_path = f"{file_path}.backup"
+                import shutil
+                shutil.copy2(file_path, backup_path)
+            
+            # Get validation report
+            report = self.get_validation_report(file_path)
+            
+            if report['structure_valid'] and report['parameters_valid']:
+                return True, "Profile file is already valid, no repair needed"
+            
+            # If structure is valid but parameters need sanitization, try that first
+            if report['structure_valid'] and not report['parameters_valid']:
+                # Read parameters and apply sanitization
+                parameters, read_error = self.read_universal_profile(file_path)
+                if parameters:
+                    # Write back with sanitization (write method handles this)
+                    success, write_error = self.write_universal_profile(file_path, parameters)
+                    if success:
+                        return True, f"Profile file repaired with parameter sanitization"
+                    else:
+                        return False, f"Failed to write sanitized parameters: {write_error}"
+            
+            # Attempt recovery for structural issues
+            if not report['recovery_possible']:
+                return False, "Profile file cannot be recovered"
+            
+            # Read with recovery
+            parameters, read_error = self.read_universal_profile(file_path)
+            if not parameters:
+                return False, f"Recovery failed: {read_error}"
+            
+            # Write repaired file
+            success, write_error = self.write_universal_profile(file_path, parameters)
+            if not success:
+                return False, f"Failed to write repaired file: {write_error}"
+            
+            # Verify repair
+            final_valid, final_error = self.validate_universal_profile(file_path)
+            if not final_valid:
+                return False, f"Repair verification failed: {final_error}"
+            
+            return True, f"Profile file repaired successfully. Recovery actions: {'; '.join(report['recovery_actions'])}"
+            
+        except Exception as e:
+            return False, f"Repair failed with error: {str(e)}"
+</document_content>
+</document>
+<document index="79">
+<source>.\services\test_validator.py</source>
+<document_content>
+ ■p r i n t ( " t e s t " ) 
+ 
+ 
+</document_content>
+</document>
+<document index="80">
+<source>.\services\theme_service.py</source>
+<document_content>
+import json
+import os
+import customtkinter as ctk
+from utils.helpers import resource_path
+from services.app_config_service import AppConfigService
+
+class ThemeService:
+    """Handles application theme management with persistence."""
+    
+    THEME_OPTIONS = ["Light", "Dark", "System"]
+    
+    def __init__(self, app_instance):
+        """Initialize the ThemeService with reference to the main app."""
+        self.app = app_instance
+        self.current_theme = "System"  # Default theme
+        
+        # Use the centralized app config service
+        self.app_config = AppConfigService()
+        
+        # Log initialization
+        print("Theme service initialized")
+        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+            self.app.log_frame.log_message("Theme service initialized\n")
+        
+        # Load saved theme preference on initialization
+        self.load_saved_theme()
+    
+    def set_theme(self, theme: str) -> None:
+        """
+        Set the application theme and apply it immediately.
+        
+        Args:
+            theme (str): Theme name - must be one of THEME_OPTIONS
+        """
+        if theme not in self.THEME_OPTIONS:
+            raise ValueError(f"Invalid theme '{theme}'. Must be one of: {self.THEME_OPTIONS}")
+        
+        self.current_theme = theme
+        
+        # Apply theme to CustomTkinter
+        ctk.set_appearance_mode(theme)
+        
+        # Save theme preference for persistence
+        self.save_theme_preference(theme)
+        
+        # Log the theme change
+        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+            self.app.log_frame.log_message(f"Theme changed to: {theme}\n")
+    
+    def get_current_theme(self) -> str:
+        """
+        Get the currently active theme.
+        
+        Returns:
+            str: Current theme name
+        """
+        return self.current_theme
+    
+    def get_available_themes(self) -> list:
+        """
+        Get list of available theme options.
+        
+        Returns:
+            list: Available theme names
+        """
+        return self.THEME_OPTIONS.copy()
+    
+    def load_saved_theme(self) -> None:
+        """Load theme preference from centralized app config and apply it."""
+        try:
+            # Get theme from app config service
+            saved_theme = self.app_config.get_theme()
+            
+            # Validate saved theme
+            if saved_theme in self.THEME_OPTIONS:
+                self.current_theme = saved_theme
+                ctk.set_appearance_mode(saved_theme)
+            else:
+                # Invalid theme in config, use default
+                self.current_theme = "System"
+                ctk.set_appearance_mode("System")
+            
+            # Log the loaded theme
+            print(f"Loaded theme: {self.current_theme}")
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"Loaded theme: {self.current_theme}\n")
+                
+        except Exception as e:
+            # Error loading config, use default theme
+            print(f"Error loading theme config: {e}")
+            self.current_theme = "System"
+            ctk.set_appearance_mode("System")
+    
+    def save_theme_preference(self, theme: str) -> None:
+        """
+        Save theme preference to centralized app config.
+        
+        Args:
+            theme (str): Theme name to save
+        """
+        try:
+            # Save theme using app config service
+            self.app_config.set_theme(theme)
+            
+            # Log the save
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"Theme preference saved: {theme}\n")
+                
+        except Exception as e:
+            error_msg = f"Error saving theme preference: {e}"
+            print(error_msg)
+            # Log error if log frame is available
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+    
+    def _get_current_timestamp(self) -> str:
+        """Get current timestamp in ISO format."""
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
+    def reset_to_default(self) -> None:
+        """Reset theme to default (System) and save preference."""
+        self.set_theme("System")
+    
+    def is_dark_mode_active(self) -> bool:
+        """
+        Check if dark mode is currently active.
+        
+        Returns:
+            bool: True if dark mode is active, False otherwise
+        """
+        if self.current_theme == "Dark":
+            return True
+        elif self.current_theme == "Light":
+            return False
+        else:  # System theme
+            # For system theme, we can check the current appearance mode
+            return ctk.get_appearance_mode() == "Dark"
+</document_content>
+</document>
+<document index="81">
+<source>.\services\ui_error_handler.py</source>
+<document_content>
+"""
+UI Error Handler for Parameter Updates
+
+This service provides safe UI update methods with comprehensive error handling
+to prevent crashes when parameter updates fail in the UI.
+"""
+
+import logging
+from typing import Dict, Any, Optional, Callable, List
+from dataclasses import dataclass
+
+from services.parameter_error_feedback_service import ParameterErrorFeedbackService, UserFeedback
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class UIUpdateResult:
+    """Result of a UI update operation."""
+    parameter_name: str
+    success: bool
+    error_message: Optional[str] = None
+    original_value: Optional[str] = None
+    attempted_value: Optional[str] = None
+
+
+class UIErrorHandler:
+    """
+    Handles UI update errors with comprehensive error handling and user feedback.
+    
+    This class provides safe methods for updating UI parameters that prevent
+    application crashes when individual parameter updates fail.
+    """
+    
+    def __init__(self, feedback_service: Optional[ParameterErrorFeedbackService] = None):
+        """
+        Initialize the UI error handler.
+        
+        Args:
+            feedback_service: Optional feedback service for user notifications
+        """
+        self.feedback_service = feedback_service or ParameterErrorFeedbackService()
+        self.failed_updates = []
+        self.successful_updates = []
+        self.update_warnings = []
+    
+    def safe_update_parameter_ui(self, 
+                                parameter_name: str, 
+                                parameter_value: str, 
+                                ui_update_function: Callable[[str, str], None],
+                                original_value: Optional[str] = None) -> UIUpdateResult:
+        """
+        Safely update a parameter in the UI with error handling.
+        
+        Args:
+            parameter_name: Name of the parameter being updated
+            parameter_value: New value for the parameter
+            ui_update_function: Function to call for UI update
+            original_value: Original parameter value for fallback
+            
+        Returns:
+            UIUpdateResult with success status and error information
+            
+        Requirements: 5.3 - Prevent crashes and log UI update errors
+        """
+        try:
+            # Attempt the UI update
+            ui_update_function(parameter_name, parameter_value)
+            
+            # Record successful update
+            result = UIUpdateResult(
+                parameter_name=parameter_name,
+                success=True,
+                original_value=original_value,
+                attempted_value=parameter_value
+            )
+            
+            self.successful_updates.append(result)
+            logger.debug(f"Successfully updated UI for parameter: {parameter_name}")
+            
+            return result
+            
+        except Exception as e:
+            # Handle UI update failure
+            error_msg = f"UI update failed: {str(e)}"
+            logger.error(f"Failed to update UI for parameter {parameter_name}: {error_msg}")
+            
+            # Create failure result
+            result = UIUpdateResult(
+                parameter_name=parameter_name,
+                success=False,
+                error_message=error_msg,
+                original_value=original_value,
+                attempted_value=parameter_value
+            )
+            
+            self.failed_updates.append(result)
+            
+            # Generate user feedback
+            try:
+                feedback = self.feedback_service.generate_ui_update_error_feedback(
+                    parameter_name, 
+                    error_msg
+                )
+                logger.info(f"Generated user feedback for UI update failure: {feedback.title}")
+            except Exception as feedback_error:
+                logger.error(f"Failed to generate feedback for UI update error: {feedback_error}")
+            
+            return result
+    
+    def safe_batch_update_parameters_ui(self, 
+                                       parameters: Dict[str, str], 
+                                       ui_update_function: Callable[[str, str], None],
+                                       original_parameters: Optional[Dict[str, str]] = None) -> List[UIUpdateResult]:
+        """
+        Safely update multiple parameters in the UI with error handling.
+        
+        Args:
+            parameters: Dictionary of parameter names to values
+            ui_update_function: Function to call for each UI update
+            original_parameters: Original parameter values for fallback
+            
+        Returns:
+            List of UIUpdateResult for each parameter update attempt
+            
+        Requirements: 5.2, 5.3 - Continue processing other parameters, prevent crashes
+        """
+        results = []
+        
+        for param_name, param_value in parameters.items():
+            original_value = original_parameters.get(param_name) if original_parameters else None
+            
+            result = self.safe_update_parameter_ui(
+                param_name, 
+                param_value, 
+                ui_update_function, 
+                original_value
+            )
+            
+            results.append(result)
+        
+        # Generate summary feedback if there were failures
+        failed_count = sum(1 for r in results if not r.success)
+        if failed_count > 0:
+            self._generate_batch_update_feedback(results)
+        
+        return results
+    
+    def _generate_batch_update_feedback(self, results: List[UIUpdateResult]):
+        """
+        Generate summary feedback for batch UI updates.
+        
+        Args:
+            results: List of UIUpdateResult from batch update
+        """
+        failed_results = [r for r in results if not r.success]
+        successful_results = [r for r in results if r.success]
+        
+        if not failed_results:
+            return
+        
+        try:
+            # Create summary message
+            total_count = len(results)
+            failed_count = len(failed_results)
+            success_count = len(successful_results)
+            
+            if failed_count == total_count:
+                # All updates failed
+                summary_msg = f"All {total_count} parameter UI updates failed. Parameters were processed successfully but are not visible in the interface."
+            else:
+                # Partial failure
+                summary_msg = f"{failed_count} of {total_count} parameter UI updates failed. {success_count} parameters are visible, {failed_count} may require interface refresh."
+            
+            # Log the summary
+            logger.warning(summary_msg)
+            
+            # Add to warnings for user visibility
+            self.update_warnings.append(summary_msg)
+            
+            # Log details of failed updates
+            for result in failed_results[:5]:  # Log first 5 failures
+                logger.warning(f"UI update failed for {result.parameter_name}: {result.error_message}")
+                
+        except Exception as e:
+            logger.error(f"Failed to generate batch update feedback: {e}")
+    
+    def safe_update_with_fallback(self, 
+                                 parameter_name: str, 
+                                 parameter_value: str, 
+                                 ui_update_function: Callable[[str, str], None],
+                                 fallback_function: Optional[Callable[[str, str], None]] = None,
+                                 original_value: Optional[str] = None) -> UIUpdateResult:
+        """
+        Safely update parameter UI with fallback mechanism.
+        
+        Args:
+            parameter_name: Name of the parameter being updated
+            parameter_value: New value for the parameter
+            ui_update_function: Primary function to call for UI update
+            fallback_function: Optional fallback function if primary fails
+            original_value: Original parameter value
+            
+        Returns:
+            UIUpdateResult with success status and error information
+        """
+        # Try primary update function
+        result = self.safe_update_parameter_ui(
+            parameter_name, 
+            parameter_value, 
+            ui_update_function, 
+            original_value
+        )
+        
+        # If primary failed and fallback is available, try fallback
+        if not result.success and fallback_function:
+            logger.info(f"Attempting fallback UI update for parameter: {parameter_name}")
+            
+            try:
+                fallback_function(parameter_name, parameter_value)
+                
+                # Update result to reflect successful fallback
+                result.success = True
+                result.error_message = None
+                
+                logger.info(f"Fallback UI update successful for parameter: {parameter_name}")
+                
+            except Exception as fallback_error:
+                # Fallback also failed
+                fallback_msg = f"Fallback UI update also failed: {str(fallback_error)}"
+                result.error_message = f"{result.error_message}; {fallback_msg}"
+                logger.error(f"Fallback failed for parameter {parameter_name}: {fallback_msg}")
+        
+        return result
+    
+    def get_update_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of UI update operations.
+        
+        Returns:
+            Dictionary with update statistics and error information
+        """
+        total_updates = len(self.successful_updates) + len(self.failed_updates)
+        
+        return {
+            'total_updates': total_updates,
+            'successful_updates': len(self.successful_updates),
+            'failed_updates': len(self.failed_updates),
+            'success_rate': (len(self.successful_updates) / total_updates * 100) if total_updates > 0 else 0,
+            'failed_parameter_names': [r.parameter_name for r in self.failed_updates],
+            'update_warnings': self.update_warnings.copy(),
+            'recent_failures': [
+                {
+                    'parameter': r.parameter_name,
+                    'error': r.error_message,
+                    'attempted_value': r.attempted_value
+                }
+                for r in self.failed_updates[-5:]  # Last 5 failures
+            ]
+        }
+    
+    def clear_update_history(self):
+        """Clear the update history and reset counters."""
+        self.failed_updates.clear()
+        self.successful_updates.clear()
+        self.update_warnings.clear()
+        logger.debug("Cleared UI update history")
+    
+    def has_update_failures(self) -> bool:
+        """Check if there have been any UI update failures."""
+        return len(self.failed_updates) > 0
+    
+    def get_failed_parameters(self) -> List[str]:
+        """Get list of parameter names that failed to update in UI."""
+        return [result.parameter_name for result in self.failed_updates]
+</document_content>
+</document>
+<document index="82">
+<source>.\services\ui_responsiveness_service.py</source>
+<document_content>
+"""
+UI Responsiveness Service for ensuring consistent UI updates within 100ms.
+
+This service provides batch UI updates, visual feedback during parameter processing,
+and performance monitoring to meet the UI responsiveness requirements.
+"""
+
+import time
+import threading
+from typing import Dict, Any, List, Callable, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class UpdatePriority(Enum):
+    """Priority levels for UI updates."""
+    HIGH = "high"      # Critical parameters that need immediate update
+    NORMAL = "normal"  # Standard parameters
+    LOW = "low"        # Non-critical parameters that can be batched
+
+
+@dataclass
+class UIUpdateRequest:
+    """Request for UI parameter update."""
+    param_name: str
+    value: Any
+    priority: UpdatePriority = UpdatePriority.NORMAL
+    highlight: bool = True
+    timestamp: float = None
+    
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = time.time()
+
+
+@dataclass
+class BatchUpdateResult:
+    """Result of batch UI update operation."""
+    total_updates: int
+    successful_updates: int
+    failed_updates: int
+    update_duration_ms: float
+    errors: List[str]
+    warnings: List[str]
+
+
+class UIResponsivenessService:
+    """
+    Service for ensuring consistent UI responsiveness with batch updates and visual feedback.
+    
+    This service manages UI parameter updates to ensure they complete within 100ms,
+    provides visual feedback during processing, and handles large parameter sets efficiently.
+    
+    Requirements: 7.1, 7.2, 7.3, 7.4, 7.5
+    """
+    
+    def __init__(self, parameters_frame=None):
+        """
+        Initialize the UI responsiveness service.
+        
+        Args:
+            parameters_frame: Reference to the parameters frame for UI updates
+        """
+        self.parameters_frame = parameters_frame
+        self.update_queue = []
+        self.batch_size = 10  # Maximum updates per batch
+        self.max_update_time_ms = 100  # Maximum time for updates (Requirement 7.1)
+        self.update_lock = threading.Lock()
+        self.is_processing = False
+        self.performance_metrics = []
+        
+        # Visual feedback state
+        self.processing_indicators = {}
+        self.update_highlights = {}
+        
+    def queue_parameter_update(self, param_name: str, value: Any, 
+                             priority: UpdatePriority = UpdatePriority.NORMAL,
+                             highlight: bool = True) -> None:
+        """
+        Queue a parameter update for batch processing.
+        
+        Args:
+            param_name: Name of the parameter to update
+            value: New value for the parameter
+            priority: Update priority level
+            highlight: Whether to highlight the updated parameter
+            
+        Requirements: 7.2
+        """
+        with self.update_lock:
+            update_request = UIUpdateRequest(
+                param_name=param_name,
+                value=value,
+                priority=priority,
+                highlight=highlight
+            )
+            
+            # Insert based on priority
+            if priority == UpdatePriority.HIGH:
+                self.update_queue.insert(0, update_request)
+            else:
+                self.update_queue.append(update_request)
+            
+            logger.debug(f"Queued parameter update: {param_name} = {value} (priority: {priority.value})")
+    
+    def queue_multiple_parameter_updates(self, parameters: Dict[str, Any], 
+                                       priority: UpdatePriority = UpdatePriority.NORMAL,
+                                       highlight: bool = True) -> None:
+        """
+        Queue multiple parameter updates for batch processing.
+        
+        Args:
+            parameters: Dictionary of parameter names to values
+            priority: Update priority level for all parameters
+            highlight: Whether to highlight updated parameters
+            
+        Requirements: 7.2
+        """
+        with self.update_lock:
+            for param_name, value in parameters.items():
+                self.queue_parameter_update(param_name, value, priority, highlight)
+            
+            logger.info(f"Queued {len(parameters)} parameter updates for batch processing")
+    
+    def process_update_queue(self, force_immediate: bool = False) -> BatchUpdateResult:
+        """
+        Process queued parameter updates in batches with time constraints.
+        
+        Args:
+            force_immediate: Whether to process all updates immediately
+            
+        Returns:
+            BatchUpdateResult: Results of the batch update operation
+            
+        Requirements: 7.1, 7.2, 7.4
+        """
+        if self.is_processing and not force_immediate:
+            logger.debug("Update processing already in progress, skipping")
+            return BatchUpdateResult(0, 0, 0, 0.0, [], [])
+        
+        start_time = time.time()
+        self.is_processing = True
+        
+        try:
+            with self.update_lock:
+                if not self.update_queue:
+                    return BatchUpdateResult(0, 0, 0, 0.0, [], [])
+                
+                # Determine batch size based on time constraints
+                batch_size = self._calculate_optimal_batch_size()
+                updates_to_process = self.update_queue[:batch_size]
+                self.update_queue = self.update_queue[batch_size:]
+            
+            # Show visual feedback for processing
+            self._show_processing_feedback(len(updates_to_process))
+            
+            # Process updates in batch
+            result = self._execute_batch_updates(updates_to_process)
+            
+            # Record performance metrics
+            total_duration_ms = (time.time() - start_time) * 1000
+            self._record_performance_metrics(result, total_duration_ms)
+            
+            # Hide processing feedback
+            self._hide_processing_feedback()
+            
+            # Log performance
+            if total_duration_ms > self.max_update_time_ms:
+                logger.warning(f"Batch update took {total_duration_ms:.1f}ms, exceeding {self.max_update_time_ms}ms target")
+            else:
+                logger.debug(f"Batch update completed in {total_duration_ms:.1f}ms")
+            
+            return result
+            
+        finally:
+            self.is_processing = False
+    
+    def _calculate_optimal_batch_size(self) -> int:
+        """
+        Calculate optimal batch size based on recent performance metrics.
+        
+        Returns:
+            int: Optimal batch size for current conditions
+        """
+        if not self.update_queue:
+            return 0
+            
+        if not self.performance_metrics:
+            return min(self.batch_size, len(self.update_queue))
+        
+        # Use recent metrics to estimate processing time per update
+        recent_metrics = self.performance_metrics[-5:]  # Last 5 batches
+        avg_time_per_update = sum(m['duration_ms'] / max(1, m['total_updates']) 
+                                for m in recent_metrics) / len(recent_metrics)
+        
+        # Calculate batch size to stay within time limit
+        if avg_time_per_update > 0:
+            optimal_size = int(self.max_update_time_ms / avg_time_per_update)
+            return max(1, min(optimal_size, len(self.update_queue)))
+        
+        return min(self.batch_size, len(self.update_queue))
+    
+    def _execute_batch_updates(self, updates: List[UIUpdateRequest]) -> BatchUpdateResult:
+        """
+        Execute a batch of UI updates with error handling.
+        
+        Args:
+            updates: List of update requests to process
+            
+        Returns:
+            BatchUpdateResult: Results of the batch operation
+        """
+        start_time = time.time()
+        successful_updates = 0
+        failed_updates = 0
+        errors = []
+        warnings = []
+        
+        # Group updates by priority for processing order
+        high_priority = [u for u in updates if u.priority == UpdatePriority.HIGH]
+        normal_priority = [u for u in updates if u.priority == UpdatePriority.NORMAL]
+        low_priority = [u for u in updates if u.priority == UpdatePriority.LOW]
+        
+        # Process in priority order
+        for update_group in [high_priority, normal_priority, low_priority]:
+            for update in update_group:
+                try:
+                    # Check if we're approaching time limit
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    if elapsed_ms > self.max_update_time_ms * 0.9:  # 90% of time limit
+                        warnings.append(f"Approaching time limit, deferring {len(updates) - successful_updates - failed_updates} updates")
+                        # Re-queue remaining updates
+                        remaining_updates = update_group[update_group.index(update):]
+                        with self.update_lock:
+                            self.update_queue = remaining_updates + self.update_queue
+                        break
+                    
+                    # Execute the update
+                    success = self._execute_single_update(update)
+                    
+                    if success:
+                        successful_updates += 1
+                        
+                        # Apply highlighting if requested
+                        if update.highlight:
+                            self._apply_parameter_highlight(update.param_name, True)
+                    else:
+                        failed_updates += 1
+                        errors.append(f"Failed to update parameter: {update.param_name}")
+                        
+                except Exception as e:
+                    failed_updates += 1
+                    error_msg = f"Error updating {update.param_name}: {str(e)}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
+        
+        duration_ms = (time.time() - start_time) * 1000
+        
+        return BatchUpdateResult(
+            total_updates=len(updates),
+            successful_updates=successful_updates,
+            failed_updates=failed_updates,
+            update_duration_ms=duration_ms,
+            errors=errors,
+            warnings=warnings
+        )
+    
+    def _execute_single_update(self, update: UIUpdateRequest) -> bool:
+        """
+        Execute a single parameter update.
+        
+        Args:
+            update: Update request to execute
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.parameters_frame:
+                logger.warning("No parameters frame available for UI updates")
+                return False
+            
+            # Update the parameter value in the UI
+            self.parameters_frame.update_parameter_value(update.param_name, update.value)
+            
+            logger.debug(f"Successfully updated parameter: {update.param_name} = {update.value}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to execute update for {update.param_name}: {str(e)}")
+            return False
+    
+    def _show_processing_feedback(self, update_count: int) -> None:
+        """
+        Show visual feedback during parameter processing.
+        
+        Args:
+            update_count: Number of updates being processed
+            
+        Requirements: 7.3
+        """
+        try:
+            if self.parameters_frame and hasattr(self.parameters_frame, 'master'):
+                # Schedule UI feedback on main thread
+                self.parameters_frame.after_idle(
+                    self._do_show_processing_feedback, update_count
+                )
+        except Exception as e:
+            logger.debug(f"Could not show processing feedback: {str(e)}")
+    
+    def _do_show_processing_feedback(self, update_count: int) -> None:
+        """
+        Execute visual feedback display on main thread.
+        
+        Args:
+            update_count: Number of updates being processed
+        """
+        try:
+            # Change cursor to indicate processing
+            if self.parameters_frame and hasattr(self.parameters_frame, 'configure'):
+                self.parameters_frame.configure(cursor="watch")
+            
+            # Store processing state
+            self.processing_indicators['active'] = True
+            self.processing_indicators['count'] = update_count
+            self.processing_indicators['start_time'] = time.time()
+            
+        except Exception as e:
+            logger.debug(f"Error showing processing feedback: {str(e)}")
+    
+    def _hide_processing_feedback(self) -> None:
+        """
+        Hide visual feedback after processing completion.
+        
+        Requirements: 7.3
+        """
+        try:
+            if self.parameters_frame and hasattr(self.parameters_frame, 'master'):
+                # Schedule UI feedback removal on main thread
+                self.parameters_frame.after_idle(self._do_hide_processing_feedback)
+        except Exception as e:
+            logger.debug(f"Could not hide processing feedback: {str(e)}")
+    
+    def _do_hide_processing_feedback(self) -> None:
+        """
+        Execute visual feedback removal on main thread.
+        """
+        try:
+            # Reset cursor
+            if self.parameters_frame and hasattr(self.parameters_frame, 'configure'):
+                self.parameters_frame.configure(cursor="")
+            
+            # Clear processing state
+            self.processing_indicators.clear()
+            
+        except Exception as e:
+            logger.debug(f"Error hiding processing feedback: {str(e)}")
+    
+    def _apply_parameter_highlight(self, param_name: str, value_changed: bool) -> None:
+        """
+        Apply highlighting to updated parameter.
+        
+        Args:
+            param_name: Name of the parameter to highlight
+            value_changed: Whether the value actually changed
+        """
+        try:
+            if self.parameters_frame and hasattr(self.parameters_frame, 'highlight_updated_parameter'):
+                # Schedule highlighting on main thread
+                self.parameters_frame.after_idle(
+                    self.parameters_frame.highlight_updated_parameter,
+                    param_name, value_changed
+                )
+                
+                # Track highlight for cleanup
+                self.update_highlights[param_name] = {
+                    'timestamp': time.time(),
+                    'value_changed': value_changed
+                }
+                
+        except Exception as e:
+            logger.debug(f"Could not apply parameter highlight: {str(e)}")
+    
+    def _record_performance_metrics(self, result: BatchUpdateResult, total_duration_ms: float) -> None:
+        """
+        Record performance metrics for optimization.
+        
+        Args:
+            result: Batch update result
+            total_duration_ms: Total duration of the operation
+        """
+        metric = {
+            'timestamp': time.time(),
+            'total_updates': result.total_updates,
+            'successful_updates': result.successful_updates,
+            'failed_updates': result.failed_updates,
+            'duration_ms': total_duration_ms,
+            'updates_per_second': result.successful_updates / (total_duration_ms / 1000) if total_duration_ms > 0 else 0
+        }
+        
+        self.performance_metrics.append(metric)
+        
+        # Keep only recent metrics (last 20 batches)
+        if len(self.performance_metrics) > 20:
+            self.performance_metrics = self.performance_metrics[-20:]
+    
+    def process_large_parameter_set(self, parameters: Dict[str, Any], 
+                                  progress_callback: Optional[Callable[[int, int], None]] = None) -> BatchUpdateResult:
+        """
+        Process large parameter sets with progress tracking and time management.
+        
+        Args:
+            parameters: Large set of parameters to update
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            BatchUpdateResult: Combined results of all batch operations
+            
+        Requirements: 7.4, 7.5
+        """
+        if not parameters:
+            return BatchUpdateResult(0, 0, 0, 0.0, [], [])
+        
+        logger.info(f"Processing large parameter set with {len(parameters)} parameters")
+        
+        # Queue all parameters for batch processing
+        self.queue_multiple_parameter_updates(parameters, UpdatePriority.NORMAL, True)
+        
+        # Process in batches with progress tracking
+        total_processed = 0
+        total_successful = 0
+        total_failed = 0
+        total_duration = 0.0
+        all_errors = []
+        all_warnings = []
+        
+        total_parameters = len(parameters)
+        
+        max_iterations = 100  # Safety limit to prevent infinite loops
+        iteration_count = 0
+        
+        while self.update_queue and iteration_count < max_iterations:
+            iteration_count += 1
+            
+            # Process next batch
+            batch_result = self.process_update_queue()
+            
+            # If no updates were processed, break to prevent infinite loop
+            if batch_result.total_updates == 0:
+                logger.warning("No updates processed in batch, breaking to prevent infinite loop")
+                break
+            
+            # Accumulate results
+            total_processed += batch_result.total_updates
+            total_successful += batch_result.successful_updates
+            total_failed += batch_result.failed_updates
+            total_duration += batch_result.update_duration_ms
+            all_errors.extend(batch_result.errors)
+            all_warnings.extend(batch_result.warnings)
+            
+            # Report progress
+            if progress_callback:
+                try:
+                    progress_callback(total_processed, total_parameters)
+                except Exception as e:
+                    logger.debug(f"Progress callback error: {str(e)}")
+            
+            # Small delay between batches to prevent UI blocking
+            if self.update_queue:  # More batches to process
+                time.sleep(0.001)  # 1ms delay
+        
+        # Check if we hit the safety limit
+        if iteration_count >= max_iterations:
+            logger.warning(f"Hit maximum iteration limit ({max_iterations}) in process_large_parameter_set")
+            all_warnings.append(f"Processing stopped at iteration limit ({max_iterations})")
+        
+        # Create combined result
+        combined_result = BatchUpdateResult(
+            total_updates=total_processed,
+            successful_updates=total_successful,
+            failed_updates=total_failed,
+            update_duration_ms=total_duration,
+            errors=all_errors,
+            warnings=all_warnings
+        )
+        
+        logger.info(f"Large parameter set processing completed: {total_successful}/{total_processed} successful in {total_duration:.1f}ms")
+        
+        return combined_result
+    
+    def get_performance_summary(self) -> Dict[str, Any]:
+        """
+        Get performance summary for monitoring and optimization.
+        
+        Returns:
+            Dict[str, Any]: Performance metrics summary
+        """
+        if not self.performance_metrics:
+            return {
+                'total_batches': 0,
+                'avg_duration_ms': 0.0,
+                'avg_updates_per_batch': 0.0,
+                'avg_updates_per_second': 0.0,
+                'max_duration_ms': 0.0,
+                'min_duration_ms': 0.0
+            }
+        
+        durations = [m['duration_ms'] for m in self.performance_metrics]
+        update_counts = [m['total_updates'] for m in self.performance_metrics]
+        update_rates = [m['updates_per_second'] for m in self.performance_metrics]
+        
+        return {
+            'total_batches': len(self.performance_metrics),
+            'avg_duration_ms': sum(durations) / len(durations),
+            'avg_updates_per_batch': sum(update_counts) / len(update_counts),
+            'avg_updates_per_second': sum(update_rates) / len(update_rates),
+            'max_duration_ms': max(durations),
+            'min_duration_ms': min(durations),
+            'queue_size': len(self.update_queue),
+            'is_processing': self.is_processing
+        }
+    
+    def clear_update_queue(self) -> int:
+        """
+        Clear all pending updates from the queue.
+        
+        Returns:
+            int: Number of updates that were cleared
+        """
+        with self.update_lock:
+            cleared_count = len(self.update_queue)
+            self.update_queue.clear()
+            
+        logger.info(f"Cleared {cleared_count} pending updates from queue")
+        return cleared_count
+    
+    def set_parameters_frame(self, parameters_frame) -> None:
+        """
+        Set the parameters frame reference for UI updates.
+        
+        Args:
+            parameters_frame: Reference to the parameters frame
+        """
+        self.parameters_frame = parameters_frame
+        logger.debug("Parameters frame reference updated")
+</document_content>
+</document>
+<document index="83">
+<source>.\services\ultra_simple_profile_manager.py</source>
+<document_content>
+"""
+Ultra Simple Profile Manager
+
+This is an extremely simplified profile manager that eliminates all potential sources
+of multiple dialogs, callback loops, and hanging operations.
+
+Key principles:
+1. Single execution path - no complex callback chains
+2. Single dialog per operation - no multiple dialogs
+3. Simple state management - clear operation states
+4. Immediate error handling - no delayed callbacks
+5. Direct UI updates - no wrapper functions
+
+Updated to use LT32Pro components:
+- LT32ProDeviceReader for device reading
+- LT32ProDeviceWriter for device writing
+- EnhancedParameterExtractor for parameter extraction
+- LT32ProErrorHandler for improved error handling
+"""
+
+import os
+import time
+import threading
+import logging
+from datetime import datetime
+from typing import Dict, Any, List, Optional, Callable
+from dataclasses import dataclass
+
+# Import only essential components
+from services.simplified_profile_file_handler import SimplifiedProfileFileHandler
+from services.core_profile_manager import CoreProfileManager
+
+# Import new LT32Pro components
+from services.lt32pro_device_reader import LT32ProDeviceReader
+from services.lt32pro_device_writer import LT32ProDeviceWriter
+from services.enhanced_parameter_extractor import EnhancedParameterExtractor
+from services.lt32pro_error_handler import LT32ProErrorHandler
+
+
+@dataclass
+class SimpleOperationResult:
+    """Simple result of a profile operation."""
+    success: bool
+    operation_type: str  # 'device_to_profile' or 'profile_to_device'
+    profile_path: str
+    parameters_processed: int
+    failed_parameters: List[str]
+    error_message: Optional[str]
+    operation_duration: float
+    timestamp: datetime
+
+
+class UltraSimpleProfileManager:
+    """
+    Ultra simple profile manager that eliminates all complexity.
+    
+    This version:
+    - Uses NO progress dialogs (eliminates dialog issues)
+    - Uses direct callbacks only (no wrapper functions)
+    - Has simple state management (no complex state)
+    - Provides immediate feedback (no delayed operations)
+    """
+    
+    def __init__(self, app_instance):
+        """Initialize the ultra simple profile manager."""
+        self.app = app_instance
+        self.i18n = getattr(app_instance, 'i18n_service', None) or getattr(app_instance, 'i18n', None)
+        
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize only essential components
+        self.file_handler = SimplifiedProfileFileHandler()
+        self.core_manager = CoreProfileManager(app_instance)
+        
+        # Initialize new LT32Pro components
+        self.device_reader = None  # Will be initialized when needed
+        self.device_writer = None  # Will be initialized when needed
+        self.parameter_extractor = EnhancedParameterExtractor()
+        self.error_handler = LT32ProErrorHandler()
+        
+        # Simple state management
+        self.is_busy = False
+        
+        self.logger.info("UltraSimpleProfileManager initialized with LT32Pro components")
+    
+    def _initialize_lt32pro_components(self):
+        """Initialize LT32Pro components when needed."""
+        try:
+            if not self.device_reader and hasattr(self.app, 'serial_service'):
+                self.device_reader = LT32ProDeviceReader(self.app.serial_service)
+                self.logger.debug("LT32ProDeviceReader initialized")
+            
+            if not self.device_writer and hasattr(self.app, 'serial_service'):
+                self.device_writer = LT32ProDeviceWriter(self.app.serial_service)
+                self.logger.debug("LT32ProDeviceWriter initialized")
+                
+        except Exception as e:
+            self.logger.error(f"Error initializing LT32Pro components: {e}")
+            raise
+    
+    def _validate_connection(self):
+        """Validate device connection - simple version."""
+        try:
+            if not hasattr(self.app, 'serial_service') or not self.app.serial_service:
+                return False, "Serial service not available"
+            
+            if not getattr(self.app.serial_service, 'is_connected', False):
+                return False, "Device not connected"
+            
+            if not hasattr(self.app, 'configuration_reader_service') or not self.app.configuration_reader_service:
+                return False, "Configuration reader service not available"
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, f"Connection validation failed: {str(e)}"
+    
+    
+    def _validate_connection_comprehensive(self):
+        """Comprehensive connection validation with detailed error reporting."""
+        try:
+            # Check if app has serial service
+            if not hasattr(self.app, 'serial_service') or not self.app.serial_service:
+                return False, "Serial service not available. Please restart the application."
+            
+            serial_service = self.app.serial_service
+            
+            # Check if connected
+            if not getattr(serial_service, 'is_connected', False):
+                return False, "Device not connected. Please connect to the device first."
+            
+            # Check if configuration reader is available
+            if not hasattr(self.app, 'configuration_reader_service') or not self.app.configuration_reader_service:
+                return False, "Configuration reader service not available. Please restart the application."
+            
+            config_reader = self.app.configuration_reader_service
+            
+            # Try a simple communication test
+            try:
+                # Test if we can send a simple command (without timeout parameter)
+                test_response = serial_service.send_command("ATSMS:STATUS#", bypass_validation=True)
+                if test_response is None or test_response is False:
+                    return False, "Device is not responding to commands. Please check: 1) Device is powered on, 2) Correct COM port selected, 3) Device is in configuration mode"
+            except Exception as e:
+                return False, f"Device communication test failed: {str(e)}"
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, f"Connection validation failed: {str(e)}"
+
+
+    
+    def _read_device_configuration_sync(self, progress_callback: Optional[Callable] = None):
+        """
+        Read device configuration using LT32ProDeviceReader.
+        
+        This method uses the new LT32Pro components for improved device communication
+        with proper command formatting and enhanced parameter extraction.
+        """
+        try:
+            # Initialize LT32Pro components
+            self._initialize_lt32pro_components()
+            
+            if not self.device_reader:
+                raise Exception("Failed to initialize LT32Pro device reader")
+            
+            self.logger.info("Starting device configuration read with LT32Pro components...")
+            
+            # Create progress wrapper for LT32Pro reader
+            def lt32pro_progress_callback(current_step, total_steps, step_description, success=True):
+                """Progress callback for LT32Pro device reader."""
+                if progress_callback:
+                    try:
+                        # Convert to the expected format
+                        progress_callback(current_step, total_steps, step_description)
+                    except Exception as e:
+                        self.logger.debug(f"Progress callback failed (non-critical): {e}")
+            
+            # Read device configuration using LT32Pro reader
+            device_responses = self.device_reader.read_device_configuration(
+                progress_callback=lt32pro_progress_callback
+            )
+            
+            if not device_responses:
+                raise Exception("No responses received from device")
+            
+            self.logger.info(f"Received {len(device_responses)} responses from device")
+            
+            # Extract parameters using enhanced parameter extractor
+            extracted_parameters = self.parameter_extractor.extract_parameters_from_responses(device_responses)
+            
+            if not extracted_parameters:
+                raise Exception("No parameters extracted from device responses")
+            
+            self.logger.info(f"Extracted {len(extracted_parameters)} parameters from device responses")
+            return extracted_parameters
+            
+        except Exception as e:
+            # Use error handler for better error messages
+            try:
+                error_category = self.error_handler.categorize_error(e)
+                suggestions = self.error_handler.get_recovery_suggestions(error_category, e)
+                
+                # Create user-friendly error message
+                error_message = f"Device configuration read failed: {str(e)}"
+                if suggestions:
+                    error_message += f"\n\nTroubleshooting suggestions:\n" + "\n".join(f"ÔÇó {s}" for s in suggestions[:3])
+                
+                self.logger.error(error_message)
+                raise Exception(error_message)
+            except Exception as handler_error:
+                # Fallback to original error
+                self.logger.error(f"Device configuration read failed: {e}")
+                raise
+    
+    def load_from_device_to_profile(self, profile_path: str,
+                                  progress_callback: Optional[Callable] = None,
+                                  completion_callback: Optional[Callable] = None,
+                                  show_progress_dialog: bool = False) -> None:
+        """
+        Load configuration from device and save to profile file - ultra simple version.
+        
+        Args:
+            profile_path: Path where the profile file should be saved
+            progress_callback: Optional callback for progress updates (step, total, message)
+            completion_callback: Optional callback when operation is complete
+            show_progress_dialog: Ignored - no progress dialogs in ultra simple version
+        """
+        if self.is_busy:
+            self.logger.warning("Operation already running")
+            if completion_callback:
+                result = SimpleOperationResult(
+                    success=False,
+                    operation_type='device_to_profile',
+                    profile_path=profile_path,
+                    parameters_processed=0,
+                    failed_parameters=[],
+                    error_message="Another operation is already running",
+                    operation_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result)
+            return
+        
+        # Start operation in background thread (validation will be done there)
+        self.is_busy = True
+        operation_thread = threading.Thread(
+            target=self._execute_load_from_device,
+            args=(profile_path, progress_callback, completion_callback),
+            name="UltraSimpleLoadFromDevice",
+            daemon=True
+        )
+        operation_thread.start()
+    
+    def _execute_load_from_device(self, profile_path: str, 
+                                progress_callback: Optional[Callable],
+                                completion_callback: Optional[Callable]):
+        """Execute load from device operation - ultra simple version."""
+        start_time = time.time()
+        
+        try:
+            self.logger.info(f"Starting load from device to: {profile_path}")
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(1, 3, "Reading device configuration...")
+            
+            # Read device configuration using new LT32Pro components
+            try:
+                device_config = self._read_device_configuration_sync(progress_callback)
+                
+                if not device_config:
+                    # Provide more specific error message
+                    raise Exception("Failed to read device configuration. Please check: 1) Device is connected and powered on, 2) Correct COM port is selected, 3) Device is responding to commands, 4) No other applications are using the COM port")
+                
+                self.logger.info(f"Successfully read {len(device_config)} parameters from device")
+                
+            except Exception as device_error:
+                # Use error handler for better error messages
+                try:
+                    error_category = self.error_handler.categorize_error(device_error)
+                    suggestions = self.error_handler.get_recovery_suggestions(error_category, device_error)
+                    
+                    # Create user-friendly error message
+                    error_message = f"Device communication failed: {str(device_error)}"
+                    if suggestions:
+                        error_message += f"\n\nTroubleshooting suggestions:\n" + "\n".join(f"ÔÇó {s}" for s in suggestions[:3])
+                    
+                    raise Exception(error_message)
+                except:
+                    # Fallback to original error handling
+                    self.logger.error(f"Device configuration read error: {str(device_error)}")
+                    
+                    # Provide user-friendly error message
+                    if "timeout" in str(device_error).lower():
+                        raise Exception("Device communication timeout. Please check device connection and try again.")
+                    elif "permission" in str(device_error).lower():
+                        raise Exception("COM port access denied. Please close other applications using the port and try again.")
+                    elif "not found" in str(device_error).lower():
+                        raise Exception("Device not found. Please check device connection and COM port settings.")
+                    else:
+                        raise Exception(f"Device communication failed: {str(device_error)}")
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(2, 3, "Processing parameters...")
+            
+            # Save to profile file using simplified file handler
+            success, error_msg = self.file_handler.write_universal_profile(profile_path, device_config)
+            
+            if not success:
+                raise Exception(f"Failed to save profile file: {error_msg}")
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(3, 3, "Operation completed")
+            

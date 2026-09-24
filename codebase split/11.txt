@@ -1,0 +1,4328 @@
+        'heartbeat_ign_on': '60',
+        'heartbeat_ign_off': '300',
+        'timer_ign_on': '30',
+        'timer_ign_off': '300',
+        'vibration': '128',
+        'sensitivity': '5',
+        'movement_alert': 'ON',
+        'power_alert': 'ON',
+        'battery_alert': 'ON',
+        'speed_limit': '120',
+        'protocol': '2',
+        'tcp_ack': 'OFF',
+        'GT06SEL': '2',  # Default to CRX protocol
+        'POSBYACK': '0'  # Default to disabled TCP ACK
+    }
+    
+    def __init__(self):
+        self.validation_issues: List[ValidationIssue] = []
+
+    def validate_profile_file(self, file_path: str) -> Tuple[bool, List[ValidationIssue]]:
+        """
+        Validate a complete profile file.
+        
+        Args:
+            file_path: Path to the profile file to validate
+            
+        Returns:
+            Tuple of (is_valid, list_of_issues)
+        """
+        self.validation_issues.clear()
+        
+        if not os.path.exists(file_path):
+            self.validation_issues.append(ValidationIssue(
+                ValidationSeverity.ERROR, "File", "existence",
+                f"Profile file does not exist: {file_path}"
+            ))
+            return False, self.validation_issues
+        
+        try:
+            config = configparser.ConfigParser()
+            config.read(file_path, encoding='utf-8')
+            
+            self._validate_file_format(config)
+            self._validate_required_sections(config)
+            self._validate_parameter_values(config)
+            self._check_parameter_completeness(config)
+            
+        except Exception as e:
+            self.validation_issues.append(ValidationIssue(
+                ValidationSeverity.ERROR, "File", "parsing",
+                f"Failed parsing profile file: {str(e)}"
+            ))
+            return False, self.validation_issues
+        
+        has_errors = any(issue.severity == ValidationSeverity.ERROR for issue in self.validation_issues)
+        return not has_errors, self.validation_issues
+
+    def _validate_file_format(self, config: configparser.ConfigParser) -> None:
+        """Validate basic file format."""
+        if not config.sections():
+            self.validation_issues.append(ValidationIssue(
+                ValidationSeverity.ERROR, "File", "format",
+                "Profile file contains no sections"
+            ))
+
+    def _validate_required_sections(self, config: configparser.ConfigParser) -> None:
+        """Validate required sections and parameters."""
+        for section_name, required_params in self.REQUIRED_SECTIONS.items():
+            if not config.has_section(section_name):
+                self.validation_issues.append(ValidationIssue(
+                    ValidationSeverity.ERROR, section_name, "section",
+                    f"Required section missing: {section_name}"
+                ))
+                continue
+            
+            section = config[section_name]
+            for param in required_params:
+                if param not in section:
+                    self.validation_issues.append(ValidationIssue(
+                        ValidationSeverity.ERROR, section_name, param,
+                        f"Required parameter missing: {param}"
+                    ))
+
+    def _validate_parameter_values(self, config: configparser.ConfigParser) -> None:
+        """Validate parameter values."""
+        # Create a case-insensitive mapping of validation rules
+        validation_rules_lower = {k.lower(): k for k in self.VALIDATION_RULES.keys()}
+        
+        for section_name in config.sections():
+            if section_name not in self.REQUIRED_SECTIONS and section_name not in self.OPTIONAL_SECTIONS:
+                continue
+                
+            section = config[section_name]
+            for param_name, value in section.items():
+                # Check for case-insensitive match
+                if param_name in validation_rules_lower:
+                    # Use the original case name for validation
+                    original_param_name = validation_rules_lower[param_name]
+                    self._validate_single_parameter(section_name, original_param_name, value)
+
+    def _validate_single_parameter(self, section: str, param: str, value: str) -> None:
+        """Validate a single parameter value."""
+        if not value.strip():
+            if self.VALIDATION_RULES[param].get('required', False):
+                self.validation_issues.append(ValidationIssue(
+                    ValidationSeverity.ERROR, section, param,
+                    f"Required parameter cannot be empty: {param}"
+                ))
+            return
+        
+        rules = self.VALIDATION_RULES[param]
+        param_type = rules['type']
+        
+        try:
+            if param_type == 'ip_address':
+                ipaddress.ip_address(value)
+            elif param_type == 'port':
+                port = int(value)
+                min_val, max_val = rules['range']
+                if not (min_val <= port <= max_val):
+                    raise ValueError(f"Port must be between {min_val} and {max_val}")
+            elif param_type == 'integer':
+                int_val = int(value)
+                if 'range' in rules:
+                    min_val, max_val = rules['range']
+                    if not (min_val <= int_val <= max_val):
+                        raise ValueError(f"Value must be between {min_val} and {max_val}")
+            elif param_type == 'boolean':
+                if value.upper() not in ['ON', 'OFF', 'TRUE', 'FALSE', 'ENABLED', 'DISABLED']:
+                    raise ValueError("Boolean value must be ON/OFF, TRUE/FALSE, or ENABLED/DISABLED")
+            elif param_type == 'enum':
+                if value not in rules['values']:
+                    raise ValueError(f"Value must be one of: {', '.join(rules['values'])}")
+            elif param_type == 'string':
+                if 'max_length' in rules and len(value) > rules['max_length']:
+                    raise ValueError(f"String too long (max {rules['max_length']} characters)")
+                if 'pattern' in rules and not re.match(rules['pattern'], value):
+                    raise ValueError(f"String does not match required pattern")
+            elif param_type == 'imei':
+                if not self._validate_imei(value):
+                    raise ValueError("Invalid IMEI format (must be 15 digits)")
+            elif param_type == 'iccid':
+                if not self._validate_iccid(value):
+                    raise ValueError("Invalid ICCID format (must be 19-20 digits)")
+            elif param_type == 'version':
+                if not re.match(r'^\d+\.\d+(\.\d+)?$', value):
+                    raise ValueError("Invalid version format (expected X.Y or X.Y.Z)")
+                    
+        except ValueError as e:
+            self.validation_issues.append(ValidationIssue(
+                ValidationSeverity.ERROR, section, param,
+                f"Invalid value for {param}: {str(e)}", current_value=value
+            ))
+
+    def _validate_imei(self, imei: str) -> bool:
+        """Validate IMEI format."""
+        return re.match(r'^\d{15}$', imei) is not None
+
+    def _validate_iccid(self, iccid: str) -> bool:
+        """Validate ICCID format."""
+        return re.match(r'^\d{19,20}$', iccid) is not None
+
+    def _check_parameter_completeness(self, config: configparser.ConfigParser) -> None:
+        """Check for missing optional parameters."""
+        # Check optional sections
+        for section_name, params in self.OPTIONAL_SECTIONS.items():
+            if not config.has_section(section_name):
+                self.validation_issues.append(ValidationIssue(
+                    ValidationSeverity.INFO, section_name, "section",
+                    f"Optional section missing: {section_name}"
+                ))
+                continue
+            
+            section = config[section_name]
+            for param in params:
+                if param not in section and param in self.DEFAULT_VALUES:
+                    self.validation_issues.append(ValidationIssue(
+                        ValidationSeverity.INFO, section_name, param,
+                        f"Optional parameter missing: {param}",
+                        suggested_value=self.DEFAULT_VALUES[param]
+                    ))
+        
+        # Check required sections for optional parameters with default values
+        for section_name, params in self.REQUIRED_SECTIONS.items():
+            if config.has_section(section_name):
+                section = config[section_name]
+                # Get all parameters that could be in this section
+                all_section_params = []
+                if section_name == 'Profile_Info':
+                    all_section_params = ['profile_version']  # Only profile_version has a default
+                elif section_name == 'APN_Configuration':
+                    all_section_params = ['apn_user', 'apn_password']
+                
+                for param in all_section_params:
+                    if param not in section and param in self.DEFAULT_VALUES:
+                        self.validation_issues.append(ValidationIssue(
+                            ValidationSeverity.INFO, section_name, param,
+                            f"Optional parameter missing: {param}",
+                            suggested_value=self.DEFAULT_VALUES[param]
+                        ))
+
+    def get_validation_summary(self) -> Dict[str, int]:
+        """Get validation summary."""
+        summary = {
+            'errors': 0,
+            'warnings': 0,
+            'info': 0,
+            'total': len(self.validation_issues)
+        }
+        
+        for issue in self.validation_issues:
+            if issue.severity == ValidationSeverity.ERROR:
+                summary['errors'] += 1
+            elif issue.severity == ValidationSeverity.WARNING:
+                summary['warnings'] += 1
+            elif issue.severity == ValidationSeverity.INFO:
+                summary['info'] += 1
+        
+        return summary
+    
+    def create_backup(self, file_path: str, backup_dir: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Create a backup of a profile file.
+        
+        Args:
+            file_path: Path to the profile file to backup
+            backup_dir: Optional directory to store backup (defaults to same directory as file)
+            
+        Returns:
+            Tuple of (success boolean, backup_path or error message)
+        """
+        try:
+            # Check if file exists
+            if not os.path.exists(file_path):
+                return False, f"File does not exist: {file_path}"
+            
+            # Create backup file name
+            if backup_dir:
+                # Create backup directory if it doesn't exist
+                os.makedirs(backup_dir, exist_ok=True)
+                backup_path = os.path.join(backup_dir, f"{os.path.basename(file_path)}.backup.{int(datetime.now().timestamp())}")
+            else:
+                # Create backup in same directory as original file
+                file_dir = os.path.dirname(file_path)
+                backup_path = os.path.join(file_dir, f"{os.path.basename(file_path)}.backup.{int(datetime.now().timestamp())}")
+            
+            # Copy file to backup location
+            shutil.copy2(file_path, backup_path)
+            
+            return True, backup_path
+            
+        except Exception as e:
+            return False, f"Error creating backup: {str(e)}"
+    
+    def restore_from_backup(self, backup_path: str, target_path: str) -> Tuple[bool, str]:
+        """
+        Restore a profile file from a backup.
+        
+        Args:
+            backup_path: Path to the backup file
+            target_path: Path where to restore the file
+            
+        Returns:
+            Tuple of (success boolean, message)
+        """
+        try:
+            # Check if backup file exists
+            if not os.path.exists(backup_path):
+                return False, f"Backup file does not exist: {backup_path}"
+            
+            # Validate the backup file before restoring
+            is_valid, issues = self.validate_profile_file(backup_path)
+            if not is_valid:
+                # Collect error messages
+                error_messages = [issue.message for issue in issues if issue.severity == ValidationSeverity.ERROR]
+                return False, f"Invalid backup file: {'; '.join(error_messages)}"
+            
+            # Copy backup to target location
+            shutil.copy2(backup_path, target_path)
+            
+            return True, f"Profile restored successfully from {backup_path}"
+            
+        except Exception as e:
+            return False, f"Error restoring from backup: {str(e)}"
+    
+    def add_missing_parameters(self, file_path: str, add_defaults: bool = True) -> Tuple[bool, str]:
+        """
+        Add missing optional parameters to a profile file.
+        
+        Args:
+            file_path: Path to the profile file
+            add_defaults: Whether to add default values for missing parameters
+            
+        Returns:
+            Tuple of (success boolean, message)
+        """
+        try:
+            # Read the existing config file
+            config = configparser.ConfigParser()
+            config.read(file_path, encoding='utf-8')
+            
+            added_count = 0
+            
+            # Add missing optional parameters with default values
+            if add_defaults:
+                for section_name, params in self.OPTIONAL_SECTIONS.items():
+                    if not config.has_section(section_name):
+                        config.add_section(section_name)
+                    
+                    section = config[section_name]
+                    for param in params:
+                        if param not in section and param in self.DEFAULT_VALUES:
+                            section[param] = self.DEFAULT_VALUES[param]
+                            added_count += 1
+            
+            # Write the updated config back to file
+            with open(file_path, 'w', encoding='utf-8') as config_file:
+                config.write(config_file)
+            
+            return True, f"Added {added_count} missing parameters"
+            
+        except Exception as e:
+            return False, f"Error adding missing parameters: {str(e)}"
+    
+    def upgrade_legacy_profile(self, file_path: str, backup: bool = True) -> Tuple[bool, str]:
+        """
+        Upgrade a legacy profile format to the current format.
+        
+        Args:
+            file_path: Path to the legacy profile file
+            backup: Whether to create a backup before upgrading
+            
+        Returns:
+            Tuple of (success boolean, message)
+        """
+        try:
+            # Create backup if requested
+            if backup:
+                backup_success, backup_message = self.create_backup(file_path)
+                if not backup_success:
+                    return False, f"Failed to create backup: {backup_message}"
+            
+            # Read the existing config file
+            config = configparser.ConfigParser()
+            config.read(file_path, encoding='utf-8')
+            
+            # Check if profile is already in current format
+            if (config.has_section('Profile_Info') and 
+                config.has_section('APN_Configuration') and
+                config.has_section('Server_Configuration')):
+                return True, "Profile is already in current format"
+            
+            # Create new config with current format
+            new_config = configparser.ConfigParser()
+            
+            # Add Profile_Info section
+            new_config.add_section('Profile_Info')
+            new_config['Profile_Info']['profile_name'] = 'Upgraded Profile'
+            new_config['Profile_Info']['profile_version'] = '1.0'
+            new_config['Profile_Info']['created_date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Migrate sections from legacy format
+            if config.has_section('APN_Settings'):
+                new_config.add_section('APN_Configuration')
+                apn_section = config['APN_Settings']
+                if 'apn_server' in apn_section:
+                    new_config['APN_Configuration']['apn_server'] = apn_section['apn_server']
+                if 'apn_user' in apn_section:
+                    new_config['APN_Configuration']['apn_user'] = apn_section['apn_user']
+                if 'apn_password' in apn_section:
+                    new_config['APN_Configuration']['apn_password'] = apn_section['apn_password']
+                else:
+                    new_config['APN_Configuration']['apn_password'] = ''
+            
+            if config.has_section('Server_Settings'):
+                new_config.add_section('Server_Configuration')
+                server_section = config['Server_Settings']
+                if 'server_ip' in server_section:
+                    new_config['Server_Configuration']['server_ip'] = server_section['server_ip']
+                if 'server_port' in server_section:
+                    new_config['Server_Configuration']['server_port'] = server_section['server_port']
+            
+            if config.has_section('Timers'):
+                new_config.add_section('Timer_Settings')
+                timer_section = config['Timers']
+                if 'timer_ign_on' in timer_section:
+                    new_config['Timer_Settings']['timer_ign_on'] = timer_section['timer_ign_on']
+            
+            # Write the updated config back to file
+            with open(file_path, 'w', encoding='utf-8') as config_file:
+                new_config.write(config_file)
+            
+            return True, "Profile upgraded successfully"
+            
+        except Exception as e:
+            return False, f"Error upgrading profile: {str(e)}"
+
+</document_content>
+</document>
+<document index="49">
+<source>.\services\non_blocking_profile_manager.py</source>
+<document_content>
+"""
+Non-Blocking Profile Manager - Executes profile operations in background threads.
+
+This module provides the NonBlockingProfileManager class that executes profile operations
+in background threads to maintain UI responsiveness. It includes thread-safe progress
+callbacks, operation cancellation, and proper cleanup.
+
+Key Features:
+- Background thread execution for all profile operations
+- Thread-safe progress updates using tkinter's after() method
+- Operation cancellation with proper cleanup and thread termination
+- Operation context management for maintaining state across threads
+- Comprehensive error handling and recovery
+"""
+
+import threading
+import time
+import logging
+from datetime import datetime
+from dataclasses import dataclass
+from typing import Dict, Any, Optional, Callable, List
+from enum import Enum
+
+
+class OperationType(Enum):
+    """Enumeration of supported profile operation types."""
+    LOAD_FROM_DEVICE = "load_from_device"
+    LOAD_TO_DEVICE = "load_to_device"
+    LOAD_TO_UI = "load_to_ui"
+    SAVE_FROM_UI = "save_from_ui"
+
+
+@dataclass
+class OperationContext:
+    """Context information for profile operations."""
+    operation_type: OperationType
+    operation_id: str
+    file_path: Optional[str] = None
+    profile_name: Optional[str] = None
+    parameters: Optional[Dict[str, str]] = None
+    progress_callback: Optional[Callable] = None
+    completion_callback: Optional[Callable] = None
+    cancellation_token: Optional[threading.Event] = None
+    start_time: Optional[datetime] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class ProgressInfo:
+    """Progress information for profile operations."""
+    operation_id: str
+    operation_type: OperationType
+    current_step: int
+    total_steps: int
+    current_parameter: str
+    status_message: str
+    can_cancel: bool
+    is_complete: bool
+    success: bool = False
+    error_message: Optional[str] = None
+
+
+@dataclass
+class OperationResult:
+    """Result of a profile operation."""
+    operation_id: str
+    operation_type: OperationType
+    success: bool
+    error_message: Optional[str] = None
+    parameters_processed: int = 0
+    failed_parameters: List[str] = None
+    operation_duration: float = 0.0
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class NonBlockingProfileManager:
+    """
+    Non-blocking profile manager that executes operations in background threads.
+    
+    This class provides thread-safe execution of profile operations while maintaining
+    UI responsiveness through background thread execution and thread-safe callbacks.
+    """
+    
+    def __init__(self, app_instance):
+        """
+        Initialize the non-blocking profile manager.
+        
+        Args:
+            app_instance: Main application instance with UI and services
+        """
+        self.app = app_instance
+        self.i18n = getattr(app_instance, 'i18n_service', None) or getattr(app_instance, 'i18n', None)
+        
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        
+        # Operation management
+        self.active_operations: Dict[str, OperationContext] = {}
+        self.operation_threads: Dict[str, threading.Thread] = {}
+        self.operation_counter = 0
+        self.operation_lock = threading.Lock()
+        
+        # Default callbacks
+        self.default_progress_callback: Optional[Callable] = None
+        self.default_completion_callback: Optional[Callable] = None
+        
+        # Operation timeout settings (in seconds)
+        self.operation_timeouts = {
+            OperationType.LOAD_FROM_DEVICE: 300,  # 5 minutes
+            OperationType.LOAD_TO_DEVICE: 300,    # 5 minutes
+            OperationType.LOAD_TO_UI: 30,         # 30 seconds
+            OperationType.SAVE_FROM_UI: 30        # 30 seconds
+        }
+        
+        # Optimized thread pool settings
+        import os
+        cpu_count = os.cpu_count() or 2
+        self.max_concurrent_operations = min(4, max(2, cpu_count // 2))
+        
+        # Performance optimization settings
+        self.progress_update_interval = 0.2  # 200ms between updates
+        self.last_progress_update = {}  # Track last update time per operation
+        self.memory_cleanup_threshold = 100  # MB
+        self.parameter_batch_size = 10  # Process parameters in batches
+        
+        # Performance monitoring
+        self.performance_monitor = None
+        try:
+            from .profile_performance_monitor import ProfilePerformanceMonitor
+            self.performance_monitor = ProfilePerformanceMonitor()
+            self.performance_monitor.start_monitoring()
+        except ImportError:
+            self.logger.warning("Performance monitor not available")
+        
+        self.logger.info(f"NonBlockingProfileManager initialized with {self.max_concurrent_operations} max concurrent operations")
+    
+    def execute_profile_operation(self, operation_type: OperationType, **kwargs) -> str:
+        """
+        Execute a profile operation in a background thread with performance monitoring.
+        
+        Args:
+            operation_type: Type of operation to execute
+            **kwargs: Operation-specific arguments
+            
+        Returns:
+            str: Operation ID for tracking the operation
+            
+        Raises:
+            RuntimeError: If too many operations are running concurrently
+        """
+        # Check concurrent operation limit
+        with self.operation_lock:
+            if len(self.active_operations) >= self.max_concurrent_operations:
+                # Clean up completed operations first
+                self.cleanup_completed_operations()
+                
+                # Check again after cleanup
+                if len(self.active_operations) >= self.max_concurrent_operations:
+                    raise RuntimeError(f"Maximum concurrent operations ({self.max_concurrent_operations}) exceeded")
+            
+            # Generate unique operation ID
+            self.operation_counter += 1
+            operation_id = f"{operation_type.value}_{self.operation_counter}_{int(time.time())}"
+        
+        # Create operation context
+        context = OperationContext(
+            operation_type=operation_type,
+            operation_id=operation_id,
+            file_path=kwargs.get('file_path'),
+            profile_name=kwargs.get('profile_name'),
+            parameters=kwargs.get('parameters'),
+            progress_callback=kwargs.get('progress_callback', self.default_progress_callback),
+            completion_callback=kwargs.get('completion_callback', self.default_completion_callback),
+            cancellation_token=threading.Event(),
+            start_time=datetime.now(),
+            metadata=kwargs.get('metadata', {})
+        )
+        
+        # Store operation context
+        with self.operation_lock:
+            self.active_operations[operation_id] = context
+        
+        # Start performance monitoring for this operation
+        if self.performance_monitor:
+            expected_params = kwargs.get('expected_parameters', 0)
+            self.performance_monitor.start_operation_monitoring(
+                operation_id, operation_type.value, expected_params
+            )
+        
+        # Create and start operation thread
+        operation_thread = threading.Thread(
+            target=self._execute_operation_thread,
+            args=(context,),
+            name=f"ProfileOperation_{operation_id}",
+            daemon=True
+        )
+        
+        self.operation_threads[operation_id] = operation_thread
+        operation_thread.start()
+        
+        self.logger.info(f"Started profile operation: {operation_id} ({operation_type.value})")
+        return operation_id
+    
+    def cancel_operation(self, operation_id: str) -> bool:
+        """
+        Cancel a running profile operation.
+        
+        Args:
+            operation_id: ID of the operation to cancel
+            
+        Returns:
+            bool: True if cancellation was initiated, False if operation not found
+        """
+        with self.operation_lock:
+            context = self.active_operations.get(operation_id)
+            if not context:
+                self.logger.warning(f"Cannot cancel operation {operation_id}: not found")
+                return False
+            
+            # Signal cancellation
+            if context.cancellation_token:
+                context.cancellation_token.set()
+                self.logger.info(f"Cancellation requested for operation: {operation_id}")
+                return True
+            
+        return False
+    
+    def get_operation_status(self, operation_id: str) -> Optional[OperationContext]:
+        """
+        Get the status of a profile operation.
+        
+        Args:
+            operation_id: ID of the operation
+            
+        Returns:
+            OperationContext or None if operation not found
+        """
+        with self.operation_lock:
+            return self.active_operations.get(operation_id)
+    
+    def get_active_operations(self) -> List[str]:
+        """
+        Get list of active operation IDs.
+        
+        Returns:
+            List of active operation IDs
+        """
+        with self.operation_lock:
+            return list(self.active_operations.keys())
+    
+    def set_progress_callback(self, callback: Callable[[ProgressInfo], None]) -> None:
+        """
+        Set the default progress callback for all operations.
+        
+        Args:
+            callback: Function to call with progress updates
+        """
+        self.default_progress_callback = callback
+        self.logger.debug("Default progress callback set")
+    
+    def set_completion_callback(self, callback: Callable[[OperationResult], None]) -> None:
+        """
+        Set the default completion callback for all operations.
+        
+        Args:
+            callback: Function to call when operations complete
+        """
+        self.default_completion_callback = callback
+        self.logger.debug("Default completion callback set")
+    
+    def cleanup_completed_operations(self) -> int:
+        """
+        Clean up completed operation threads and contexts.
+        
+        Returns:
+            int: Number of operations cleaned up
+        """
+        cleaned_count = 0
+        
+        with self.operation_lock:
+            completed_operations = []
+            
+            for operation_id, thread in self.operation_threads.items():
+                if not thread.is_alive():
+                    completed_operations.append(operation_id)
+            
+            for operation_id in completed_operations:
+                # Remove from active operations
+                if operation_id in self.active_operations:
+                    del self.active_operations[operation_id]
+                
+                # Remove thread reference
+                if operation_id in self.operation_threads:
+                    del self.operation_threads[operation_id]
+                
+                cleaned_count += 1
+        
+        if cleaned_count > 0:
+            self.logger.debug(f"Cleaned up {cleaned_count} completed operations")
+        
+        return cleaned_count
+    
+    def shutdown(self, timeout: float = 30.0) -> bool:
+        """
+        Shutdown the manager and wait for all operations to complete.
+        
+        Args:
+            timeout: Maximum time to wait for operations to complete
+            
+        Returns:
+            bool: True if all operations completed within timeout
+        """
+        self.logger.info("Shutting down NonBlockingProfileManager")
+        
+        # Cancel all active operations
+        with self.operation_lock:
+            operation_ids = list(self.active_operations.keys())
+        
+        for operation_id in operation_ids:
+            self.cancel_operation(operation_id)
+        
+        # Wait for all threads to complete
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            with self.operation_lock:
+                if not self.operation_threads:
+                    break
+                
+                # Check if any threads are still alive
+                alive_threads = [t for t in self.operation_threads.values() if t.is_alive()]
+                if not alive_threads:
+                    break
+            
+            time.sleep(0.1)
+        
+        # Force cleanup
+        self.cleanup_completed_operations()
+        
+        # Check if shutdown was successful
+        with self.operation_lock:
+            remaining_operations = len(self.active_operations)
+            if remaining_operations > 0:
+                self.logger.warning(f"Shutdown incomplete: {remaining_operations} operations still active")
+                return False
+        
+        # Stop performance monitoring
+        if self.performance_monitor:
+            try:
+                self.performance_monitor.stop_monitoring()
+            except Exception as e:
+                self.logger.error(f"Error stopping performance monitor: {e}")
+        
+        self.logger.info("NonBlockingProfileManager shutdown complete")
+        return True
+    
+    def _execute_operation_thread(self, context: OperationContext) -> None:
+        """
+        Execute a profile operation in a background thread.
+        
+        Args:
+            context: Operation context with all necessary information
+        """
+        operation_id = context.operation_id
+        operation_type = context.operation_type
+        
+        try:
+            self.logger.info(f"Executing operation {operation_id} ({operation_type.value})")
+            
+            # Execute the appropriate operation
+            if operation_type == OperationType.LOAD_FROM_DEVICE:
+                result = self._execute_load_from_device(context)
+            elif operation_type == OperationType.LOAD_TO_DEVICE:
+                result = self._execute_load_to_device(context)
+            elif operation_type == OperationType.LOAD_TO_UI:
+                result = self._execute_load_to_ui(context)
+            elif operation_type == OperationType.SAVE_FROM_UI:
+                result = self._execute_save_from_ui(context)
+            else:
+                raise ValueError(f"Unsupported operation type: {operation_type}")
+            
+            # Calculate operation duration
+            if context.start_time:
+                result.operation_duration = (datetime.now() - context.start_time).total_seconds()
+            
+            self.logger.info(f"Operation {operation_id} completed: success={result.success}")
+            
+        except Exception as e:
+            self.logger.error(f"Operation {operation_id} failed with exception: {str(e)}")
+            
+            # Create error result
+            result = OperationResult(
+                operation_id=operation_id,
+                operation_type=operation_type,
+                success=False,
+                error_message=str(e),
+                operation_duration=(datetime.now() - context.start_time).total_seconds() if context.start_time else 0.0
+            )
+        
+        finally:
+            # Finish performance monitoring
+            if self.performance_monitor:
+                try:
+                    performance_profile = self.performance_monitor.finish_operation_monitoring(
+                        operation_id, result.success, result.error_message
+                    )
+                    
+                    # Log performance summary
+                    self.logger.info(f"Operation {operation_id} performance: "
+                                   f"duration={performance_profile.total_duration:.2f}s, "
+                                   f"params={performance_profile.parameters_processed}, "
+                                   f"rate={performance_profile.parameters_per_second:.2f} params/sec, "
+                                   f"peak_memory={performance_profile.peak_memory_usage:.1f}MB")
+                    
+                    # Log optimization recommendations
+                    if performance_profile.optimization_recommendations:
+                        self.logger.info(f"Optimization recommendations for {operation_id}: "
+                                       f"{'; '.join(performance_profile.optimization_recommendations)}")
+                        
+                except Exception as perf_error:
+                    self.logger.error(f"Performance monitoring error for {operation_id}: {perf_error}")
+            
+            # Clean up progress update tracking
+            if operation_id in self.last_progress_update:
+                del self.last_progress_update[operation_id]
+            
+            # Call completion callback on main thread if provided
+            if context.completion_callback:
+                self._schedule_completion_callback(context.completion_callback, result)
+            
+            # Note: Don't automatically clean up operation context here
+            # Let cleanup_completed_operations() handle it to allow status checking
+    
+    def _execute_load_from_device(self, context: OperationContext) -> OperationResult:
+        """
+        Execute load from device operation.
+        
+        Args:
+            context: Operation context
+            
+        Returns:
+            OperationResult with operation results
+        """
+        operation_id = context.operation_id
+        file_path = context.file_path
+        
+        if not file_path:
+            raise ValueError("file_path is required for load_from_device operation")
+        
+        # Check if operation was cancelled before starting
+        if context.cancellation_token and context.cancellation_token.is_set():
+            return OperationResult(
+                operation_id=operation_id,
+                operation_type=OperationType.LOAD_FROM_DEVICE,
+                success=False,
+                error_message="Operation cancelled before execution"
+            )
+        
+        # Send initial progress update
+        self._send_progress_update(context, 0, 100, "", "Initializing device read...")
+        
+        try:
+            # Check device connection
+            if not self._is_device_connected():
+                raise RuntimeError("Device not connected")
+            
+            self._send_progress_update(context, 5, 100, "", "Reading device parameters...")
+            
+            # Get all parameter commands
+            if not hasattr(self.app, 'configuration_reader_service') or not self.app.configuration_reader_service:
+                raise RuntimeError("Configuration reader service not available")
+            
+            config_reader = self.app.configuration_reader_service
+            all_commands = config_reader._get_all_parameter_commands()
+            
+            if not all_commands:
+                raise RuntimeError("No parameter commands available")
+            
+            # Read parameters with optimized batching and progress updates
+            parameters = {}
+            successful_reads = 0
+            failed_parameters = []
+            total_commands = len(all_commands)
+            
+            # Process parameters in optimized batches
+            for batch_start in range(0, total_commands, self.parameter_batch_size):
+                batch_end = min(batch_start + self.parameter_batch_size, total_commands)
+                batch_commands = all_commands[batch_start:batch_end]
+                
+                # Check for cancellation before each batch
+                if context.cancellation_token and context.cancellation_token.is_set():
+                    return OperationResult(
+                        operation_id=operation_id,
+                        operation_type=OperationType.LOAD_FROM_DEVICE,
+                        success=False,
+                        error_message="Operation cancelled by user",
+                        parameters_processed=successful_reads,
+                        failed_parameters=failed_parameters
+                    )
+                
+                # Process batch
+                for i, (param_name, command, command_type) in enumerate(batch_commands):
+                    param_index = batch_start + i
+                    
+                    # Update progress (optimized frequency)
+                    progress = 10 + int((param_index / total_commands) * 80)  # 10-90% for parameter reading
+                    self._send_progress_update(context, progress, 100, param_name, f"Reading parameter: {param_name}")
+                    
+                    # Record parameter processing start time
+                    param_start_time = time.time()
+                    
+                    try:
+                        result = config_reader.read_specific_parameter(param_name, command, command_type, max_retries=1)
+                        
+                        if result.success and result.value is not None:
+                            parameters[param_name] = str(result.value)
+                            successful_reads += 1
+                        else:
+                            failed_parameters.append(param_name)
+                            parameters[param_name] = ""  # Store empty value for failed parameters
+                            
+                    except Exception as param_error:
+                        self.logger.warning(f"Failed to read parameter {param_name}: {str(param_error)}")
+                        failed_parameters.append(param_name)
+                        parameters[param_name] = ""
+                    
+                    # Record parameter processing time for performance monitoring
+                    param_processing_time = time.time() - param_start_time
+                    if self.performance_monitor:
+                        self.performance_monitor.record_parameter_processed(
+                            operation_id, param_name, param_processing_time
+                        )
+                
+                # Trigger memory cleanup if needed
+                if self.performance_monitor and self.performance_monitor.should_trigger_memory_cleanup():
+                    self.performance_monitor.trigger_memory_cleanup()
+                
+                # Small delay between batches to prevent overwhelming the device
+                if batch_end < total_commands:
+                    time.sleep(0.05)  # 50ms delay between batches
+            
+            # Save to profile file using SimplifiedProfileFileHandler
+            self._send_progress_update(context, 90, 100, "", "Saving profile file...")
+            
+            # Use SimplifiedProfileFileHandler to write the parameters directly
+            from services.simplified_profile_file_handler import SimplifiedProfileFileHandler
+            file_handler = SimplifiedProfileFileHandler()
+            
+            success, error_message = file_handler.write_universal_profile(file_path, parameters)
+            
+            if not success:
+                raise RuntimeError(f"Failed to save profile file: {error_message}")
+            
+            self.logger.info(f"Successfully saved profile file: {file_path} with {len(parameters)} parameters")
+            
+            # Final progress update
+            self._send_progress_update(context, 100, 100, "", "Operation completed successfully")
+            
+            return OperationResult(
+                operation_id=operation_id,
+                operation_type=OperationType.LOAD_FROM_DEVICE,
+                success=True,
+                parameters_processed=successful_reads,
+                failed_parameters=failed_parameters,
+                metadata={'total_parameters': total_commands, 'file_path': file_path}
+            )
+            
+        except Exception as e:
+            self._send_progress_update(context, 0, 100, "", f"Error: {str(e)}")
+            raise
+    
+    def _execute_load_to_device(self, context: OperationContext) -> OperationResult:
+        """
+        Execute load to device operation.
+        
+        Args:
+            context: Operation context
+            
+        Returns:
+            OperationResult with operation results
+        """
+        operation_id = context.operation_id
+        file_path = context.file_path
+        parameters = context.parameters
+        
+        if not file_path and not parameters:
+            raise ValueError("Either file_path or parameters is required for load_to_device operation")
+        
+        # Check if operation was cancelled before starting
+        if context.cancellation_token and context.cancellation_token.is_set():
+            return OperationResult(
+                operation_id=operation_id,
+                operation_type=OperationType.LOAD_TO_DEVICE,
+                success=False,
+                error_message="Operation cancelled before execution"
+            )
+        
+        # Send initial progress update
+        self._send_progress_update(context, 0, 100, "", "Loading profile file...")
+        
+        try:
+            # Check device connection
+            if not self._is_device_connected():
+                raise RuntimeError("Device not connected")
+            
+            # If parameters not provided, read from file
+            if not parameters:
+                self._send_progress_update(context, 10, 100, "", "Reading profile file...")
+                
+                # Use SimplifiedProfileFileHandler to read the profile
+                from services.simplified_profile_file_handler import SimplifiedProfileFileHandler
+                file_handler = SimplifiedProfileFileHandler()
+                parameters, error = file_handler.read_universal_profile(file_path)
+                
+                if error:
+                    raise RuntimeError(f"Failed to read profile file: {error}")
+                
+                if not parameters:
+                    raise RuntimeError("No parameters found in profile file")
+            
+            self._send_progress_update(context, 20, 100, "", "Preparing device communication...")
+            
+            # Get device communication manager directly
+            if not hasattr(self.app, 'device_communication_manager') or not self.app.device_communication_manager:
+                raise RuntimeError("Device communication manager not available")
+            
+            device_manager = self.app.device_communication_manager
+            
+            # Create progress callback for device operations
+            def device_progress_callback(current_step, total_steps, current_param, status_msg):
+                # Map device progress to overall progress (20-95%)
+                if total_steps > 0:
+                    device_progress = (current_step / total_steps) * 75  # 75% of total progress
+                    overall_progress = 20 + device_progress
+                    self._send_progress_update(context, int(overall_progress), 100, current_param, status_msg)
+            
+            self._send_progress_update(context, 25, 100, "", "Writing parameters to device...")
+            
+            # Write parameters to device using DeviceCommunicationManager
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                write_results = loop.run_until_complete(
+                    device_manager.write_all_parameters(parameters, device_progress_callback)
+                )
+                
+                # Check for cancellation after device operation
+                if context.cancellation_token and context.cancellation_token.is_set():
+                    return OperationResult(
+                        operation_id=operation_id,
+                        operation_type=OperationType.LOAD_TO_DEVICE,
+                        success=False,
+                        error_message="Operation cancelled during device writing",
+                        parameters_processed=len([r for r in write_results.values() if r])
+                    )
+                
+                # Process results
+                successful_writes = sum(1 for success in write_results.values() if success)
+                failed_parameters = [param for param, success in write_results.items() if not success]
+                
+                self._send_progress_update(context, 95, 100, "", "Finalizing operation...")
+                
+                # Determine success based on write results
+                if successful_writes > 0:
+                    self._send_progress_update(context, 100, 100, "", f"Successfully wrote {successful_writes}/{len(parameters)} parameters")
+                    
+                    return OperationResult(
+                        operation_id=operation_id,
+                        operation_type=OperationType.LOAD_TO_DEVICE,
+                        success=True,
+                        parameters_processed=successful_writes,
+                        failed_parameters=failed_parameters,
+                        metadata={'file_path': file_path, 'total_parameters': len(parameters)}
+                    )
+                else:
+                    raise RuntimeError(f"Failed to write any parameters to device. Failed parameters: {failed_parameters}")
+                    
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            self._send_progress_update(context, 0, 100, "", f"Error: {str(e)}")
+            raise
+    
+    def _execute_load_to_ui(self, context: OperationContext) -> OperationResult:
+        """
+        Execute load to UI operation.
+        
+        Args:
+            context: Operation context
+            
+        Returns:
+            OperationResult with operation results
+        """
+        operation_id = context.operation_id
+        file_path = context.file_path
+        
+        if not file_path:
+            raise ValueError("file_path is required for load_to_ui operation")
+        
+        # Check if operation was cancelled before starting
+        if context.cancellation_token and context.cancellation_token.is_set():
+            return OperationResult(
+                operation_id=operation_id,
+                operation_type=OperationType.LOAD_TO_UI,
+                success=False,
+                error_message="Operation cancelled before execution"
+            )
+        
+        # Send initial progress update
+        self._send_progress_update(context, 0, 100, "", "Loading profile file...")
+        
+        try:
+            # Use core profile manager to load profile to UI
+            if hasattr(self.app, 'core_profile_manager'):
+                core_manager = self.app.core_profile_manager
+                success = core_manager.load_profile_to_ui(file_path)
+                
+                if success:
+                    self._send_progress_update(context, 100, 100, "", "Profile loaded to UI successfully")
+                    return OperationResult(
+                        operation_id=operation_id,
+                        operation_type=OperationType.LOAD_TO_UI,
+                        success=True,
+                        metadata={'file_path': file_path}
+                    )
+                else:
+                    raise RuntimeError("Failed to load profile to UI")
+            else:
+                raise RuntimeError("Core profile manager not available")
+                
+        except Exception as e:
+            self._send_progress_update(context, 0, 100, "", f"Error: {str(e)}")
+            raise
+    
+    def _execute_save_from_ui(self, context: OperationContext) -> OperationResult:
+        """
+        Execute save from UI operation.
+        
+        Args:
+            context: Operation context
+            
+        Returns:
+            OperationResult with operation results
+        """
+        operation_id = context.operation_id
+        file_path = context.file_path
+        profile_name = context.profile_name
+        
+        if not file_path:
+            raise ValueError("file_path is required for save_from_ui operation")
+        
+        # Check if operation was cancelled before starting
+        if context.cancellation_token and context.cancellation_token.is_set():
+            return OperationResult(
+                operation_id=operation_id,
+                operation_type=OperationType.SAVE_FROM_UI,
+                success=False,
+                error_message="Operation cancelled before execution"
+            )
+        
+        # Send initial progress update
+        self._send_progress_update(context, 0, 100, "", "Saving UI configuration...")
+        
+        try:
+            # Use core profile manager to save profile from UI
+            if hasattr(self.app, 'core_profile_manager'):
+                core_manager = self.app.core_profile_manager
+                success = core_manager.save_profile_from_ui(file_path, profile_name)
+                
+                if success:
+                    self._send_progress_update(context, 100, 100, "", "Profile saved successfully")
+                    return OperationResult(
+                        operation_id=operation_id,
+                        operation_type=OperationType.SAVE_FROM_UI,
+                        success=True,
+                        metadata={'file_path': file_path, 'profile_name': profile_name}
+                    )
+                else:
+                    raise RuntimeError("Failed to save profile from UI")
+            else:
+                raise RuntimeError("Core profile manager not available")
+                
+        except Exception as e:
+            self._send_progress_update(context, 0, 100, "", f"Error: {str(e)}")
+            raise
+    
+    def _is_device_connected(self) -> bool:
+        """
+        Check if device is connected.
+        
+        Returns:
+            bool: True if device is connected, False otherwise
+        """
+        try:
+            # Check if serial service exists and is connected
+            if not hasattr(self.app, 'serial_service') or not self.app.serial_service:
+                return False
+                
+            if not getattr(self.app.serial_service, 'is_connected', False):
+                return False
+            
+            # Check if configuration reader service is available
+            if not hasattr(self.app, 'configuration_reader_service') or not self.app.configuration_reader_service:
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error checking device connection: {str(e)}")
+            return False
+    
+    def _send_progress_update(self, context: OperationContext, current_step: int, total_steps: int, 
+                            current_parameter: str, status_message: str) -> None:
+        """
+        Send progress update using thread-safe callback with optimized frequency.
+        
+        Args:
+            context: Operation context
+            current_step: Current step number
+            total_steps: Total number of steps
+            current_parameter: Name of current parameter being processed
+            status_message: Status message to display
+        """
+        if not context.progress_callback:
+            return
+        
+        # Optimize progress update frequency to prevent UI flooding
+        current_time = time.time()
+        operation_id = context.operation_id
+        
+        # Check if enough time has passed since last update
+        if operation_id in self.last_progress_update:
+            time_since_last = current_time - self.last_progress_update[operation_id]
+            if time_since_last < self.progress_update_interval and current_step < total_steps:
+                return  # Skip this update to prevent flooding
+        
+        self.last_progress_update[operation_id] = current_time
+        
+        # Record progress update for performance monitoring
+        if self.performance_monitor:
+            self.performance_monitor.record_progress_update(operation_id, current_parameter)
+        
+        # Create progress info
+        progress_info = ProgressInfo(
+            operation_id=context.operation_id,
+            operation_type=context.operation_type,
+            current_step=current_step,
+            total_steps=total_steps,
+            current_parameter=current_parameter,
+            status_message=status_message,
+            can_cancel=True,
+            is_complete=(current_step >= total_steps),
+            success=(current_step >= total_steps)
+        )
+        
+        # Schedule callback on main thread
+        self._schedule_progress_callback(context.progress_callback, progress_info)
+    
+    def _schedule_progress_callback(self, callback: Callable, progress_info: ProgressInfo) -> None:
+        """
+        Schedule progress callback on main thread using tkinter's after() method.
+        
+        Args:
+            callback: Progress callback function
+            progress_info: Progress information to send
+        """
+        try:
+            if hasattr(self.app, 'root') and self.app.root and hasattr(self.app.root, 'after_idle'):
+                self.app.root.after_idle(lambda: self._safe_callback_execution(callback, progress_info))
+            else:
+                # Fallback: call directly (not thread-safe but better than nothing)
+                self._safe_callback_execution(callback, progress_info)
+        except Exception as e:
+            self.logger.error(f"Error scheduling progress callback: {str(e)}")
+    
+    def _schedule_completion_callback(self, callback: Callable, result: OperationResult) -> None:
+        """
+        Schedule completion callback on main thread using tkinter's after() method.
+        
+        Args:
+            callback: Completion callback function
+            result: Operation result to send
+        """
+        try:
+            if hasattr(self.app, 'root') and self.app.root and hasattr(self.app.root, 'after_idle'):
+                self.app.root.after_idle(lambda: self._safe_callback_execution(callback, result))
+            else:
+                # Fallback: call directly (not thread-safe but better than nothing)
+                self._safe_callback_execution(callback, result)
+        except Exception as e:
+            self.logger.error(f"Error scheduling completion callback: {str(e)}")
+    
+    def _safe_callback_execution(self, callback: Callable, *args) -> None:
+        """
+        Execute callback with error handling.
+        
+        Args:
+            callback: Callback function to execute
+            *args: Arguments to pass to callback
+        """
+        try:
+            callback(*args)
+        except Exception as e:
+            self.logger.error(f"Error in callback execution: {str(e)}")
+</document_content>
+</document>
+<document index="50">
+<source>.\services\operation_confirmation_service.py</source>
+<document_content>
+"""
+Operation Confirmation Service - Provides confirmation dialogs and success feedback.
+
+This module provides a centralized service for handling confirmation dialogs for
+destructive operations, success notifications, and progress indicators for
+long-running operations in the LT32Pro Device Configurator application.
+"""
+
+import tkinter as tk
+from tkinter import messagebox
+import threading
+import time
+from typing import Callable, Optional, Dict, Any, List
+import customtkinter as ctk
+from ui.custom_confirmation_dialog import show_confirmation_dialog
+
+class OperationConfirmationService:
+    """Centralized service for operation confirmations and success feedback."""
+    
+    # Operation types that require confirmation
+    OPERATION_FACTORY_RESET = "factory_reset"
+    OPERATION_DEVICE_RESET = "device_reset"
+    OPERATION_FORMAT_DEVICE = "format_device"
+    OPERATION_CLEAR_MEMORY = "clear_memory"
+    OPERATION_RESTORE_DEFAULTS = "restore_defaults"
+    OPERATION_BULK_SEND = "bulk_send"
+    
+    # Progress indicator types
+    PROGRESS_TYPE_DETERMINATE = "determinate"  # Known total steps
+    PROGRESS_TYPE_INDETERMINATE = "indeterminate"  # Unknown total steps
+    
+    def __init__(self, app_instance):
+        """
+        Initialize the operation confirmation service.
+        
+        Args:
+            app_instance: Reference to the main application instance
+        """
+        self.app = app_instance
+        self.progress_dialogs = {}  # Store active progress dialogs
+        self.progress_threads = {}  # Store progress update threads
+        self.stop_progress = {}  # Flags to stop progress threads
+        
+        # Define confirmation messages for different operation types
+        self.confirmation_messages = {
+            self.OPERATION_FACTORY_RESET: {
+                "title": "Confirm Factory Reset",
+                "message": "WARNING: This will reset the device to factory settings.\n\nAll device configurations will be lost. This action cannot be undone.\n\nDo you want to continue?",
+                "detail": "The device will restart after the factory reset."
+            },
+            self.OPERATION_DEVICE_RESET: {
+                "title": "Confirm Device Reset",
+                "message": "This will restart the device.\n\nThe current connection will be lost and you will need to reconnect after the device restarts.\n\nDo you want to continue?",
+                "detail": "Device settings will be preserved."
+            },
+            self.OPERATION_FORMAT_DEVICE: {
+                "title": "Confirm Device Format",
+                "message": "WARNING: This will format the device memory.\n\nAll stored data will be permanently deleted. This action cannot be undone.\n\nDo you want to continue?",
+                "detail": "Device configuration settings will be preserved."
+            },
+            self.OPERATION_CLEAR_MEMORY: {
+                "title": "Confirm Clear Memory",
+                "message": "This will clear all stored messages in the device memory.\n\nAll unsent data will be deleted. This action cannot be undone.\n\nDo you want to continue?",
+                "detail": "Device configuration settings will be preserved."
+            },
+            self.OPERATION_RESTORE_DEFAULTS: {
+                "title": "Confirm Restore Defaults",
+                "message": "This will restore all application settings to default values.\n\nCurrent UI values will be reset. This will not affect the device settings.\n\nDo you want to continue?",
+                "detail": "You will need to send the commands to update the device."
+            },
+            self.OPERATION_BULK_SEND: {
+                "title": "Confirm Bulk Send",
+                "message": "This will send all current parameter values to the device.\n\nThis will overwrite all device settings with the current UI values.\n\nDo you want to continue?",
+                "detail": "The device may restart after receiving some commands."
+            }
+        }
+    
+    def confirm_operation(self, operation_type: str, custom_message: Optional[str] = None) -> bool:
+        """
+        Show a confirmation dialog for a potentially destructive operation.
+        
+        Args:
+            operation_type: The type of operation (from class constants)
+            custom_message: Optional custom message to override the default
+            
+        Returns:
+            True if the user confirmed, False otherwise
+        """
+        # Get the confirmation message for this operation type using i18n
+        if operation_type in self.confirmation_messages:
+            # Use i18n service if available
+            if hasattr(self.app, 'i18n'):
+                # Map operation types to i18n keys
+                i18n_key_map = {
+                    self.OPERATION_BULK_SEND: {
+                        "title": "confirm_bulk_send_title",
+                        "message": "confirm_bulk_send_message", 
+                        "detail": "confirm_bulk_send_detail"
+                    },
+                    self.OPERATION_FACTORY_RESET: {
+                        "title": "confirm_factory_reset_title",
+                        "message": "confirm_factory_reset_message",
+                        "detail": "confirm_factory_reset_detail"
+                    },
+                    self.OPERATION_DEVICE_RESET: {
+                        "title": "confirm_device_reset_title",
+                        "message": "confirm_device_reset_message",
+                        "detail": "confirm_device_reset_detail"
+                    },
+                    self.OPERATION_RESTORE_DEFAULTS: {
+                        "title": "confirm_restore_defaults_title",
+                        "message": "confirm_restore_defaults_message",
+                        "detail": "confirm_restore_defaults_detail"
+                    }
+                }
+                
+                if operation_type in i18n_key_map:
+                    title = self.app.i18n.get(i18n_key_map[operation_type]["title"], self.confirmation_messages[operation_type]["title"])
+                    message = custom_message or self.app.i18n.get(i18n_key_map[operation_type]["message"], self.confirmation_messages[operation_type]["message"])
+                    detail = self.app.i18n.get(i18n_key_map[operation_type]["detail"], self.confirmation_messages[operation_type]["detail"])
+                else:
+                    # Fallback to hardcoded messages for unmapped operations
+                    title = self.confirmation_messages[operation_type]["title"]
+                    message = custom_message or self.confirmation_messages[operation_type]["message"]
+                    detail = self.confirmation_messages[operation_type]["detail"]
+            else:
+                # Fallback to hardcoded messages if i18n not available
+                title = self.confirmation_messages[operation_type]["title"]
+                message = custom_message or self.confirmation_messages[operation_type]["message"]
+                detail = self.confirmation_messages[operation_type]["detail"]
+            
+            # Use custom confirmation dialog instead of basic messagebox
+            try:
+                # Try to get the main window as parent - improved detection
+                parent = None
+                
+                # Try different ways to get the main window
+                if hasattr(self.app, 'winfo_exists') and callable(getattr(self.app, 'winfo_exists', None)):
+                    try:
+                        if self.app.winfo_exists():
+                            parent = self.app
+                    except:
+                        pass
+                
+                if parent is None and hasattr(self.app, 'root'):
+                    parent = self.app.root
+                    
+                if parent is None and hasattr(self.app, 'master'):
+                    parent = self.app.master
+                    
+                # If we still don't have a parent, try to find the main window
+                if parent is None:
+                    import tkinter as tk
+                    try:
+                        # Get the default root window
+                        parent = tk._default_root
+                    except:
+                        pass
+                
+                # Show custom confirmation dialog
+                return show_confirmation_dialog(parent, title, message, detail, "warning")
+            except Exception as e:
+                # Fallback to basic messagebox if custom dialog fails
+                print(f"Warning: Custom dialog failed, using fallback: {e}")
+                full_message = f"{message}\n\n{detail}"
+                return messagebox.askyesno(title, full_message, icon=messagebox.WARNING)
+        else:
+            # For unknown operation types, use a generic confirmation
+            generic_title = self.app.i18n.get("confirm_operation", "Confirm Operation") if hasattr(self.app, 'i18n') else "Confirm Operation"
+            generic_message = self.app.i18n.get("confirm_operation_message", "Are you sure you want to perform this operation?") if hasattr(self.app, 'i18n') else "Are you sure you want to perform this operation?"
+            
+            try:
+                # Try to get the main window as parent - improved detection
+                parent = None
+                
+                # Try different ways to get the main window
+                if hasattr(self.app, 'winfo_exists') and callable(getattr(self.app, 'winfo_exists', None)):
+                    try:
+                        if self.app.winfo_exists():
+                            parent = self.app
+                    except:
+                        pass
+                
+                if parent is None and hasattr(self.app, 'root'):
+                    parent = self.app.root
+                    
+                if parent is None and hasattr(self.app, 'master'):
+                    parent = self.app.master
+                    
+                # If we still don't have a parent, try to find the main window
+                if parent is None:
+                    import tkinter as tk
+                    try:
+                        # Get the default root window
+                        parent = tk._default_root
+                    except:
+                        pass
+                
+                # Show custom confirmation dialog
+                return show_confirmation_dialog(parent, generic_title, generic_message, "", "question")
+            except Exception as e:
+                # Fallback to basic messagebox if custom dialog fails
+                print(f"Warning: Custom dialog failed, using fallback: {e}")
+                return messagebox.askyesno(
+                    generic_title, 
+                    generic_message,
+                    icon=messagebox.QUESTION
+                )
+    
+    def show_success_notification(self, message: str) -> None:
+        """
+        Show a success notification in the console.
+        
+        Args:
+            message: The success message to display
+        """
+        # Redirect success notifications to console instead of UI log
+        print(f"INFO: Ô£ô {message}")
+        
+        # Still flash the log area if available for visual feedback
+        if hasattr(self.app, 'log_frame') and hasattr(self.app.log_frame, '_flash_log_for_attention'):
+            self.app.log_frame._flash_log_for_attention(success=True)
+    
+    def create_progress_dialog(self, title: str, operation_name: str, 
+                              progress_type: str = PROGRESS_TYPE_DETERMINATE,
+                              total_steps: int = 100,
+                              cancelable: bool = True) -> str:
+        """
+        Create a progress dialog for a long-running operation.
+        
+        Args:
+            title: The dialog title
+            operation_name: Name of the operation
+            progress_type: Type of progress indicator (determinate/indeterminate)
+            total_steps: Total number of steps for determinate progress
+            cancelable: Whether the operation can be canceled
+            
+        Returns:
+            Dialog ID for updating the progress
+        """
+        # Generate a unique ID for this dialog
+        dialog_id = f"progress_{len(self.progress_dialogs) + 1}_{int(time.time())}"
+        
+        # Create the dialog window
+        dialog = ctk.CTkToplevel(self.app)
+        dialog.title(title)
+        dialog.geometry("400x170")
+        dialog.resizable(False, False)
+        dialog.transient(self.app)  # Make it float on top of the main window
+        dialog.grab_set()  # Make it modal
+        
+        # Center the dialog on the main window
+        if hasattr(self.app, 'winfo_x') and hasattr(self.app, 'winfo_y'):
+            x = self.app.winfo_x() + (self.app.winfo_width() // 2) - 200
+            y = self.app.winfo_y() + (self.app.winfo_height() // 2) - 75
+            dialog.geometry(f"+{x}+{y}")
+        
+        # Create dialog content
+        dialog.grid_columnconfigure(0, weight=1)
+        
+        # Operation name label
+        operation_label = ctk.CTkLabel(dialog, text=operation_name, font=ctk.CTkFont(size=14, weight="bold"))
+        operation_label.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
+        
+        # Progress bar
+        progress_bar = ctk.CTkProgressBar(dialog)
+        progress_bar.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="ew")
+        
+        if progress_type == self.PROGRESS_TYPE_INDETERMINATE:
+            # For indeterminate progress, we'll animate the progress bar
+            progress_bar.set(0)
+            self.stop_progress[dialog_id] = False
+            self._start_indeterminate_animation(dialog_id, progress_bar)
+        else:
+            # For determinate progress, initialize to 0
+            progress_bar.set(0)
+        
+        # Status label
+        status_label = ctk.CTkLabel(dialog, text="Starting operation...")
+        status_label.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="w")
+        
+        # Cancel button (if cancelable)
+        cancel_button = None
+        if cancelable:
+            cancel_button = ctk.CTkButton(
+                dialog, 
+                text="Cancel", 
+                command=lambda: self._cancel_operation(dialog_id)
+            )
+            cancel_button.grid(row=3, column=0, padx=20, pady=(0, 20))
+        
+        # Store dialog components
+        self.progress_dialogs[dialog_id] = {
+            "dialog": dialog,
+            "progress_bar": progress_bar,
+            "status_label": status_label,
+            "operation_name": operation_name,
+            "progress_type": progress_type,
+            "total_steps": total_steps,
+            "current_step": 0,
+            "cancelable": cancelable,
+            "cancel_callback": None,
+            "cancel_button": cancel_button
+        }
+        
+        return dialog_id
+    
+    def update_progress(self, dialog_id: str, step: int = None, 
+                       status_text: Optional[str] = None,
+                       increment: int = None) -> None:
+        """
+        Update the progress of an operation.
+        
+        Args:
+            dialog_id: The dialog ID returned from create_progress_dialog
+            step: Current step (for determinate progress)
+            status_text: Optional status text to display
+            increment: Optional increment to add to current step
+        """
+        if dialog_id not in self.progress_dialogs:
+            return
+
+        dialog_info = self.progress_dialogs[dialog_id]
+        dialog = dialog_info["dialog"]
+        # Check if dialog and widgets still exist
+        if not dialog.winfo_exists() or not dialog_info["progress_bar"].winfo_exists() or not dialog_info["status_label"].winfo_exists():
+            return
+
+        # Update step if provided
+        if step is not None:
+            dialog_info["current_step"] = min(step, dialog_info["total_steps"])
+        elif increment is not None:
+            dialog_info["current_step"] = min(
+                dialog_info["current_step"] + increment,
+                dialog_info["total_steps"]
+            )
+
+        # Calculate progress value (0.0 to 1.0)
+        if dialog_info["progress_type"] == self.PROGRESS_TYPE_DETERMINATE:
+            progress_value = dialog_info["current_step"] / dialog_info["total_steps"]
+            if dialog_info["progress_bar"].winfo_exists():
+                dialog_info["progress_bar"].set(progress_value)
+
+        # Update status text if provided
+        if status_text and dialog_info["status_label"].winfo_exists():
+            dialog_info["status_label"].configure(text=status_text)
+    
+    def complete_progress(self, dialog_id: str, success: bool = True, 
+                         completion_message: Optional[str] = None) -> None:
+        """
+        Complete a progress operation and close the dialog.
+        
+        Args:
+            dialog_id: The dialog ID returned from create_progress_dialog
+            success: Whether the operation completed successfully
+            completion_message: Optional completion message
+        """
+        if dialog_id not in self.progress_dialogs:
+            return
+
+        dialog_info = self.progress_dialogs[dialog_id]
+        dialog = dialog_info["dialog"]
+        # Check if dialog and widgets still exist
+        if not dialog.winfo_exists() or not dialog_info["progress_bar"].winfo_exists() or not dialog_info["status_label"].winfo_exists():
+            return
+
+        # Stop any animation
+        if dialog_id in self.stop_progress:
+            self.stop_progress[dialog_id] = True
+
+        # Set progress to 100% if successful
+        if success and dialog_info["progress_type"] == self.PROGRESS_TYPE_DETERMINATE:
+            if dialog_info["progress_bar"].winfo_exists():
+                dialog_info["progress_bar"].set(1.0)
+
+        # Update status text
+        if completion_message and dialog_info["status_label"].winfo_exists():
+            dialog_info["status_label"].configure(text=completion_message)
+        elif success and dialog_info["status_label"].winfo_exists():
+            dialog_info["status_label"].configure(text="Operation completed successfully.")
+        elif dialog_info["status_label"].winfo_exists():
+            # Check if this was a cancellation vs. a failure
+            if completion_message and "canceled" in completion_message.lower():
+                dialog_info["status_label"].configure(text="Operation was canceled.")
+            else:
+                dialog_info["status_label"].configure(text="Operation failed or was canceled.")
+
+        # Show completion message in log
+        operation_name = dialog_info["operation_name"]
+        if success:
+            self.show_success_notification(f"{operation_name} completed successfully")
+        else:
+            if hasattr(self.app, 'log_frame'):
+                # Check if this was a cancellation vs. a failure
+                if completion_message and "canceled" in completion_message.lower():
+                    self.app.log_frame.log_message(f"INFO: {operation_name} was canceled by user\n")
+                else:
+                    self.app.log_frame.log_message(f"WARNING: {operation_name} was not completed\n")
+
+        # Close the dialog after a short delay
+        self.app.after(1500, lambda: self._close_progress_dialog(dialog_id))
+    
+    def set_cancel_callback(self, dialog_id: str, callback: Callable) -> None:
+        """
+        Set a callback function to be called when the operation is canceled.
+        
+        Args:
+            dialog_id: The dialog ID returned from create_progress_dialog
+            callback: The callback function
+        """
+        if dialog_id in self.progress_dialogs:
+            self.progress_dialogs[dialog_id]["cancel_callback"] = callback
+    
+    def _cancel_operation(self, dialog_id: str) -> None:
+        """
+        Cancel an operation and close its progress dialog.
+        
+        Args:
+            dialog_id: The dialog ID to cancel
+        """
+        if dialog_id not in self.progress_dialogs:
+            return
+            
+        dialog_info = self.progress_dialogs[dialog_id]
+        
+        # Disable cancel button to prevent double-clicks
+        if dialog_info.get("cancel_button") and dialog_info["cancel_button"].winfo_exists():
+            dialog_info["cancel_button"].configure(state="disabled")
+        
+        # Call the cancel callback if provided
+        if dialog_info["cancel_callback"]:
+            dialog_info["cancel_callback"]()
+        
+        # Stop any animation
+        if dialog_id in self.stop_progress:
+            self.stop_progress[dialog_id] = True
+        
+        # Update status text
+        dialog_info["status_label"].configure(text="Operation canceled.")
+        
+        # Log the cancellation
+        operation_name = dialog_info["operation_name"]
+        if hasattr(self.app, 'log_frame'):
+            self.app.log_frame.log_message(f"INFO: {operation_name} was canceled by user\n")
+        
+        # Close the dialog after a short delay
+        self.app.after(1000, lambda: self._close_progress_dialog(dialog_id))
+    
+    def _close_progress_dialog(self, dialog_id: str) -> None:
+        """
+        Close a progress dialog and clean up resources.
+        
+        Args:
+            dialog_id: The dialog ID to close
+        """
+        if dialog_id not in self.progress_dialogs:
+            return
+            
+        # Get the dialog window
+        dialog = self.progress_dialogs[dialog_id]["dialog"]
+        
+        # Release grab and destroy the dialog
+        dialog.grab_release()
+        dialog.destroy()
+        
+        # Clean up resources
+        if dialog_id in self.progress_threads:
+            self.progress_threads.pop(dialog_id, None)
+        if dialog_id in self.stop_progress:
+            self.stop_progress.pop(dialog_id, None)
+        
+        # Remove from progress dialogs
+        self.progress_dialogs.pop(dialog_id, None)
+    
+    def _start_indeterminate_animation(self, dialog_id: str, progress_bar) -> None:
+        """
+        Start an animation for indeterminate progress.
+        
+        Args:
+            dialog_id: The dialog ID
+            progress_bar: The progress bar widget
+        """
+        # Create a thread to animate the progress bar
+        def animate_progress():
+            direction = 1  # 1 for increasing, -1 for decreasing
+            value = 0.0
+            
+            while not self.stop_progress.get(dialog_id, True):
+                # Update progress value
+                value += 0.02 * direction
+                
+                # Reverse direction at the ends
+                if value >= 1.0:
+                    value = 1.0
+                    direction = -1
+                elif value <= 0.0:
+                    value = 0.0
+                    direction = 1
+                
+                # Update the progress bar
+                self.app.after(0, lambda v=value: progress_bar.set(v))
+                
+                # Sleep briefly
+                time.sleep(0.05)
+        
+        # Start the animation thread
+        thread = threading.Thread(target=animate_progress, daemon=True)
+        self.progress_threads[dialog_id] = thread
+        thread.start()
+    
+    def show_operation_progress_in_log(self, operation: str, progress: int, total: int) -> None:
+        """
+        Show operation progress in the console.
+        
+        Args:
+            operation: The operation name
+            progress: Current progress value
+            total: Total progress value
+        """
+        if hasattr(self.app, 'error_handler'):
+            self.app.error_handler.show_operation_progress(operation, progress, total)
+        else:
+            # Redirect progress messages to console instead of UI log
+            percentage = int((progress / total) * 100)
+            bar_length = 20
+            filled_length = int(bar_length * progress / total)
+            bar = 'Ôûê' * filled_length + 'Ôûæ' * (bar_length - filled_length)
+            
+            print(f"INFO: {operation}: {progress}/{total} ({percentage}%) [{bar}]")
+</document_content>
+</document>
+<document index="51">
+<source>.\services\parameter_error_feedback_service.py</source>
+<document_content>
+"""
+Parameter Error Feedback Service
+
+This service provides user feedback for parameter processing errors,
+including summary feedback when multiple parameters fail to process.
+"""
+
+import logging
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+from services.parameter_processor import ProcessingSummary, ErrorSeverity
+
+logger = logging.getLogger(__name__)
+
+
+class FeedbackLevel(Enum):
+    """Levels of user feedback."""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+@dataclass
+class UserFeedback:
+    """User feedback message."""
+    level: FeedbackLevel
+    title: str
+    message: str
+    details: Optional[List[str]] = None
+    parameter_count: Optional[int] = None
+
+
+class ParameterErrorFeedbackService:
+    """
+    Provides user feedback for parameter processing errors and warnings.
+    
+    This service analyzes parameter processing results and generates appropriate
+    user feedback messages, including summary feedback for multiple failures.
+    """
+    
+    def __init__(self):
+        """Initialize the feedback service."""
+        self.feedback_history = []
+    
+    def generate_processing_feedback(self, summary: ProcessingSummary) -> List[UserFeedback]:
+        """
+        Generate user feedback based on parameter processing summary.
+        
+        Args:
+            summary: ProcessingSummary from parameter processing operation
+            
+        Returns:
+            List of UserFeedback messages for the user
+            
+        Requirements: 5.4 - Provide summary feedback for multiple failures
+        """
+        feedback_messages = []
+        
+        # Generate overall summary feedback
+        if summary.failed_parameters == 0:
+            # All parameters processed successfully
+            if summary.total_parameters > 0:
+                feedback_messages.append(UserFeedback(
+                    level=FeedbackLevel.INFO,
+                    title="Parameter Processing Complete",
+                    message=f"Successfully processed all {summary.total_parameters} parameters from device.",
+                    parameter_count=summary.total_parameters
+                ))
+        else:
+            # Some or all parameters failed
+            success_rate = (summary.successful_parameters / summary.total_parameters) * 100
+            
+            if summary.successful_parameters == 0:
+                # Complete failure
+                feedback_messages.append(UserFeedback(
+                    level=FeedbackLevel.ERROR,
+                    title="Parameter Processing Failed",
+                    message=f"Failed to process any of the {summary.total_parameters} parameters from device.",
+                    details=summary.errors[:5] if summary.errors else None,  # Limit to first 5 errors
+                    parameter_count=summary.total_parameters
+                ))
+            else:
+                # Partial failure
+                feedback_level = FeedbackLevel.WARNING if success_rate >= 50 else FeedbackLevel.ERROR
+                
+                feedback_messages.append(UserFeedback(
+                    level=feedback_level,
+                    title="Parameter Processing Partially Complete",
+                    message=f"Processed {summary.successful_parameters} of {summary.total_parameters} parameters successfully ({success_rate:.1f}% success rate).",
+                    details=self._format_failure_details(summary),
+                    parameter_count=summary.total_parameters
+                ))
+        
+        # Generate specific warnings if present
+        if summary.warnings:
+            warning_count = len(summary.warnings)
+            if warning_count <= 3:
+                # Show individual warnings for small numbers
+                for warning in summary.warnings:
+                    feedback_messages.append(UserFeedback(
+                        level=FeedbackLevel.WARNING,
+                        title="Parameter Processing Warning",
+                        message=warning
+                    ))
+            else:
+                # Summarize warnings for large numbers
+                feedback_messages.append(UserFeedback(
+                    level=FeedbackLevel.WARNING,
+                    title="Parameter Processing Warnings",
+                    message=f"Encountered {warning_count} warnings during parameter processing.",
+                    details=summary.warnings[:5]  # Show first 5 warnings
+                ))
+        
+        # Store feedback in history
+        self.feedback_history.extend(feedback_messages)
+        
+        return feedback_messages
+    
+    def _format_failure_details(self, summary: ProcessingSummary) -> List[str]:
+        """
+        Format failure details for user feedback.
+        
+        Args:
+            summary: ProcessingSummary with error information
+            
+        Returns:
+            List of formatted error details
+        """
+        details = []
+        
+        # Add error summary
+        if summary.errors:
+            error_count = len(summary.errors)
+            if error_count <= 5:
+                details.extend(summary.errors)
+            else:
+                details.extend(summary.errors[:3])
+                details.append(f"... and {error_count - 3} more errors")
+        
+        # Add warning summary if there are many warnings
+        if summary.warnings and len(summary.warnings) > 3:
+            details.append(f"Additionally, {len(summary.warnings)} warnings were encountered")
+        
+        return details
+    
+    def generate_ui_update_error_feedback(self, parameter_name: str, error_message: str) -> UserFeedback:
+        """
+        Generate feedback for UI update errors.
+        
+        Args:
+            parameter_name: Name of parameter that failed to update in UI
+            error_message: Error message from UI update failure
+            
+        Returns:
+            UserFeedback for the UI update error
+            
+        Requirements: 5.3 - Log UI update errors and provide feedback
+        """
+        feedback = UserFeedback(
+            level=FeedbackLevel.WARNING,
+            title="UI Update Error",
+            message=f"Parameter '{parameter_name}' was processed successfully but failed to update in the interface.",
+            details=[f"Error: {error_message}", "The parameter value was saved but may not be visible until the interface is refreshed."]
+        )
+        
+        self.feedback_history.append(feedback)
+        logger.warning(f"UI update failed for parameter {parameter_name}: {error_message}")
+        
+        return feedback
+    
+    def generate_malformed_data_feedback(self, parameter_name: str, raw_data: str, error_details: str) -> UserFeedback:
+        """
+        Generate feedback for malformed parameter data.
+        
+        Args:
+            parameter_name: Name of parameter with malformed data
+            raw_data: The malformed raw data
+            error_details: Details about what was malformed
+            
+        Returns:
+            UserFeedback for the malformed data
+            
+        Requirements: 5.1 - Log appropriate error messages for malformed data
+        """
+        feedback = UserFeedback(
+            level=FeedbackLevel.WARNING,
+            title="Malformed Parameter Data",
+            message=f"Parameter '{parameter_name}' contains malformed data and may not display correctly.",
+            details=[f"Raw data: {raw_data[:100]}{'...' if len(raw_data) > 100 else ''}", f"Issue: {error_details}"]
+        )
+        
+        self.feedback_history.append(feedback)
+        logger.warning(f"Malformed data for parameter {parameter_name}: {error_details}")
+        
+        return feedback
+    
+    def get_feedback_summary(self) -> Dict[str, any]:
+        """
+        Get a summary of all feedback generated.
+        
+        Returns:
+            Dictionary with feedback statistics and recent messages
+        """
+        if not self.feedback_history:
+            return {
+                'total_feedback': 0,
+                'error_count': 0,
+                'warning_count': 0,
+                'info_count': 0,
+                'recent_messages': []
+            }
+        
+        error_count = sum(1 for f in self.feedback_history if f.level == FeedbackLevel.ERROR)
+        warning_count = sum(1 for f in self.feedback_history if f.level == FeedbackLevel.WARNING)
+        info_count = sum(1 for f in self.feedback_history if f.level == FeedbackLevel.INFO)
+        
+        return {
+            'total_feedback': len(self.feedback_history),
+            'error_count': error_count,
+            'warning_count': warning_count,
+            'info_count': info_count,
+            'recent_messages': [
+                {
+                    'level': f.level.value,
+                    'title': f.title,
+                    'message': f.message,
+                    'parameter_count': f.parameter_count
+                }
+                for f in self.feedback_history[-5:]  # Last 5 messages
+            ]
+        }
+    
+    def clear_feedback_history(self):
+        """Clear the feedback history."""
+        self.feedback_history.clear()
+        logger.debug("Cleared parameter error feedback history")
+    
+    def format_feedback_for_display(self, feedback: UserFeedback) -> str:
+        """
+        Format feedback message for display to user.
+        
+        Args:
+            feedback: UserFeedback to format
+            
+        Returns:
+            Formatted string for display
+        """
+        formatted = f"[{feedback.level.value.upper()}] {feedback.title}: {feedback.message}"
+        
+        if feedback.details:
+            formatted += "\nDetails:\n"
+            for detail in feedback.details:
+                formatted += f"  ÔÇó {detail}\n"
+        
+        return formatted.strip()
+</document_content>
+</document>
+<document index="52">
+<source>.\services\parameter_error_handler.py</source>
+<document_content>
+"""
+Parameter Error Handler for LT32 PRO Configurator
+
+This module provides comprehensive error handling specifically for parameter operations,
+including communication timeouts, invalid device responses, connection validation,
+and user-friendly error messages with corrective actions.
+"""
+
+import time
+import threading
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Callable, Tuple
+from datetime import datetime, timedelta
+from enum import Enum
+import re
+
+
+class ParameterErrorType(Enum):
+    """Types of parameter operation errors."""
+    COMMUNICATION_TIMEOUT = "communication_timeout"
+    INVALID_RESPONSE = "invalid_response"
+    CONNECTION_LOST = "connection_lost"
+    DEVICE_NOT_RESPONDING = "device_not_responding"
+    COMMAND_REJECTED = "command_rejected"
+    PARSING_ERROR = "parsing_error"
+    VALIDATION_ERROR = "validation_error"
+    DEVICE_BUSY = "device_busy"
+    PARAMETER_NOT_SUPPORTED = "parameter_not_supported"
+    SEQUENCE_ERROR = "sequence_error"
+    BUFFER_OVERFLOW = "buffer_overflow"
+    CHECKSUM_ERROR = "checksum_error"
+
+
+class ParameterErrorSeverity(Enum):
+    """Severity levels for parameter errors."""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+@dataclass
+class ParameterError:
+    """Detailed parameter operation error information."""
+    error_type: ParameterErrorType
+    severity: ParameterErrorSeverity
+    parameter_name: str
+    command_sent: str
+    response_received: str
+    error_message: str
+    suggested_actions: List[str]
+    timestamp: datetime
+    retry_count: int = 0
+    context: Dict[str, Any] = None
+
+
+@dataclass
+class ConnectionValidationResult:
+    """Result of connection validation before parameter operations."""
+    is_valid: bool
+    error_message: Optional[str]
+    connection_quality: int  # 0-100
+    last_activity: Optional[datetime]
+    suggested_actions: List[str]
+
+
+class ParameterErrorHandler:
+    """
+    Comprehensive error handling service for parameter operations.
+    
+    This service provides specific error handling for parameter reading/writing operations,
+    including timeout detection, response validation, connection monitoring, and
+    user-friendly error reporting with corrective actions.
+    """
+
+    def __init__(self, app_instance):
+        """
+        Initialize the parameter error handler.
+        
+        Args:
+            app_instance: Reference to the main application instance
+        """
+        self.app = app_instance
+        self.error_history = []
+        self.connection_validation_enabled = True
+        self.timeout_threshold = 10.0  # seconds
+        self.max_retry_attempts = 3
+        self.retry_delay = 2.0  # seconds
+        
+        # Error pattern recognition
+        self._init_error_patterns()
+        
+        # Error message templates
+        self._init_error_messages()
+        
+        # Corrective action suggestions
+        self._init_corrective_actions()
+        
+        # Connection monitoring
+        self.last_successful_operation = None
+        self.consecutive_failures = 0
+        self.connection_quality_history = []
+
+    def _init_error_patterns(self) -> None:
+        """Initialize patterns for recognizing different types of errors."""
+        self.error_patterns = {
+            ParameterErrorType.COMMUNICATION_TIMEOUT: [
+                r'timeout',
+                r'no response',
+                r'communication timeout',
+                r'device not responding'
+            ],
+            ParameterErrorType.INVALID_RESPONSE: [
+                r'invalid response',
+                r'unexpected response',
+                r'malformed response',
+                r'response format error',
+                r'parsing failed'
+            ],
+            ParameterErrorType.CONNECTION_LOST: [
+                r'connection lost',
+                r'device disconnected',
+                r'serial port error',
+                r'communication error'
+            ],
+            ParameterErrorType.DEVICE_NOT_RESPONDING: [
+                r'device not responding',
+                r'no acknowledgment',
+                r'silent device',
+                r'unresponsive'
+            ],
+            ParameterErrorType.COMMAND_REJECTED: [
+                r'command rejected',
+                r'invalid command',
+                r'command not recognized',
+                r'error response'
+            ],
+            ParameterErrorType.DEVICE_BUSY: [
+                r'device busy',
+                r'resource busy',
+                r'operation in progress',
+                r'try again later'
+            ],
+            ParameterErrorType.PARAMETER_NOT_SUPPORTED: [
+                r'parameter not supported',
+                r'unknown parameter',
+                r'command not available',
+                r'feature not supported'
+            ]
+        }
+
+    def _init_error_messages(self) -> None:
+        """Initialize user-friendly error messages."""
+        self.error_messages = {
+            ParameterErrorType.COMMUNICATION_TIMEOUT: {
+                'title': 'Communication Timeout',
+                'message': 'The device did not respond to the parameter command within the expected time ({timeout}s). Parameter: {parameter_name}',
+                'details': 'Command sent: {command_sent}\nTimeout after: {timeout} seconds'
+            },
+            ParameterErrorType.INVALID_RESPONSE: {
+                'title': 'Invalid Device Response',
+                'message': 'The device returned an invalid or unexpected response for parameter {parameter_name}.',
+                'details': 'Command sent: {command_sent}\nResponse received: {response_received}\nExpected format: {expected_format}'
+            },
+            ParameterErrorType.CONNECTION_LOST: {
+                'title': 'Connection Lost',
+                'message': 'The connection to the device was lost during parameter operation for {parameter_name}.',
+                'details': 'Last command: {command_sent}\nConnection status: Disconnected'
+            },
+            ParameterErrorType.DEVICE_NOT_RESPONDING: {
+                'title': 'Device Not Responding',
+                'message': 'The device is connected but not responding to parameter commands. Parameter: {parameter_name}',
+                'details': 'Command sent: {command_sent}\nNo response received after {timeout} seconds'
+            },
+            ParameterErrorType.COMMAND_REJECTED: {
+                'title': 'Command Rejected',
+                'message': 'The device rejected the parameter command for {parameter_name}.',
+                'details': 'Command sent: {command_sent}\nDevice response: {response_received}'
+            },
+            ParameterErrorType.PARSING_ERROR: {
+                'title': 'Response Parsing Error',
+                'message': 'Failed to parse the device response for parameter {parameter_name}.',
+                'details': 'Command sent: {command_sent}\nResponse received: {response_received}\nParsing error: {parsing_error}'
+            },
+            ParameterErrorType.VALIDATION_ERROR: {
+                'title': 'Parameter Validation Error',
+                'message': 'The parameter value for {parameter_name} failed validation before sending to the device.',
+                'details': 'Parameter value: {parameter_value}\nValidation error: {validation_error}'
+            },
+            ParameterErrorType.DEVICE_BUSY: {
+                'title': 'Device Busy',
+                'message': 'The device is currently busy and cannot process the parameter command for {parameter_name}.',
+                'details': 'Command sent: {command_sent}\nDevice status: Busy'
+            },
+            ParameterErrorType.PARAMETER_NOT_SUPPORTED: {
+                'title': 'Parameter Not Supported',
+                'message': 'The parameter {parameter_name} is not supported by this device or firmware version.',
+                'details': 'Command sent: {command_sent}\nDevice response: {response_received}'
+            }
+        }
+
+    def _init_corrective_actions(self) -> None:
+        """Initialize corrective action suggestions for each error type."""
+        self.corrective_actions = {
+            ParameterErrorType.COMMUNICATION_TIMEOUT: [
+                "Check the physical connection between the device and computer",
+                "Verify the device is powered on and in configuration mode",
+                "Try increasing the communication timeout in settings",
+                "Restart the device and try again",
+                "Check for interference on the communication line"
+            ],
+            ParameterErrorType.INVALID_RESPONSE: [
+                "Verify the device firmware version is compatible",
+                "Check if the parameter command format has changed",
+                "Try reading the parameter again to see if it was a temporary issue",
+                "Contact technical support if the problem persists",
+                "Check device documentation for correct response format"
+            ],
+            ParameterErrorType.CONNECTION_LOST: [
+                "Check the USB cable connection",
+                "Verify the device has stable power supply",
+                "Try a different USB port or cable",
+                "Restart both the device and the application",
+                "Check Windows Device Manager for COM port issues"
+            ],
+            ParameterErrorType.DEVICE_NOT_RESPONDING: [
+                "Power cycle the device (turn off and on)",
+                "Check if the device is in the correct mode for configuration",
+                "Verify the correct COM port is selected",
+                "Try disconnecting and reconnecting to the device",
+                "Check if another application is using the device"
+            ],
+            ParameterErrorType.COMMAND_REJECTED: [
+                "Verify the parameter command syntax is correct",
+                "Check if the parameter is supported by your device model",
+                "Ensure the device is in configuration mode",
+                "Try sending the command with different formatting",
+                "Check device documentation for supported commands"
+            ],
+            ParameterErrorType.PARSING_ERROR: [
+                "The device response format may have changed - check for firmware updates",
+                "Try reading the parameter again to see if it was a temporary issue",
+                "Check if the response contains error messages from the device",
+                "Contact technical support with the exact response received",
+                "Verify the parameter specification is up to date"
+            ],
+            ParameterErrorType.VALIDATION_ERROR: [
+                "Check the parameter value is within the allowed range",
+                "Verify the parameter format matches the specification",
+                "Review the parameter documentation for correct values",
+                "Try using a different valid value for testing",
+                "Check for any conditional requirements for this parameter"
+            ],
+            ParameterErrorType.DEVICE_BUSY: [
+                "Wait a few seconds and try the operation again",
+                "Check if another parameter operation is in progress",
+                "Ensure no other applications are communicating with the device",
+                "Try sending commands with longer delays between them",
+                "Restart the device if it remains busy for extended periods"
+            ],
+            ParameterErrorType.PARAMETER_NOT_SUPPORTED: [
+                "Check the device model and firmware version",
+                "Verify the parameter is available on your specific device",
+                "Update the device firmware if a newer version is available",
+                "Check the parameter specification for device compatibility",
+                "Contact technical support for parameter availability information"
+            ]
+        }
+
+    def validate_connection_before_operation(self, operation_name: str = "parameter operation") -> ConnectionValidationResult:
+        """
+        Validate the connection before performing parameter operations.
+        
+        Args:
+            operation_name: Name of the operation being performed
+            
+        Returns:
+            ConnectionValidationResult with validation details
+        """
+        if not self.connection_validation_enabled:
+            return ConnectionValidationResult(
+                is_valid=True,
+                error_message=None,
+                connection_quality=100,
+                last_activity=datetime.now(),
+                suggested_actions=[]
+            )
+
+        # Enhanced connection validation with comprehensive checks
+        validation_issues = []
+        suggested_actions = []
+        connection_quality = 100
+        
+        # Check basic connection
+        if not hasattr(self.app, 'serial_service') or not self.app.serial_service.is_connected:
+            validation_issues.append("Device is not connected")
+            connection_quality = 0
+            suggested_actions.extend([
+                "Connect to the device using the Connection tab",
+                "Verify the device is powered on and in configuration mode",
+                "Check the USB cable connection is secure",
+                "Select the correct COM port from the dropdown",
+                "Try a different USB port if connection fails"
+            ])
+        else:
+            # Check serial port status
+            try:
+                if hasattr(self.app.serial_service, 'serial_port') and self.app.serial_service.serial_port:
+                    if not self.app.serial_service.serial_port.is_open:
+                        validation_issues.append("Serial port is not open")
+                        connection_quality = 0
+                        suggested_actions.extend([
+                            "Reconnect to the device",
+                            "Check if another application is using the COM port",
+                            "Restart the application if the port appears stuck"
+                        ])
+            except Exception as e:
+                validation_issues.append(f"Serial port error: {str(e)}")
+                connection_quality = 0
+                suggested_actions.append("Check the device connection and try reconnecting")
+
+        # Check connection quality
+        if connection_quality > 0:
+            connection_quality = self._assess_connection_quality()
+        
+        # Check last activity with more detailed analysis
+        last_activity = getattr(self.app.serial_service, 'last_activity_time', None)
+        if last_activity and isinstance(last_activity, datetime):
+            try:
+                time_since_activity = datetime.now() - last_activity
+                
+                if time_since_activity > timedelta(minutes=10):
+                    validation_issues.append(f"No communication for {int(time_since_activity.total_seconds() / 60)} minutes")
+                    connection_quality = max(0, connection_quality - 40)
+                    suggested_actions.extend([
+                        "Send a test command to verify device responsiveness",
+                        "Check if the device has entered sleep mode",
+                        "Try power cycling the device",
+                        "Verify the device is still physically connected"
+                    ])
+                elif time_since_activity > timedelta(minutes=5):
+                    validation_issues.append(f"Limited recent communication ({int(time_since_activity.total_seconds() / 60)} minutes ago)")
+                    connection_quality = max(0, connection_quality - 20)
+                    suggested_actions.extend([
+                        "Test the connection by sending a simple command",
+                        "Check if the device is still responsive"
+                    ])
+            except (TypeError, AttributeError):
+                # Handle cases where last_activity is not a datetime object
+                pass
+
+        # Check for recent failures with detailed analysis
+        try:
+            consecutive_failures = int(self.consecutive_failures) if self.consecutive_failures is not None else 0
+            
+            if consecutive_failures >= 5:
+                validation_issues.append(f"High failure rate detected ({consecutive_failures} consecutive failures)")
+                connection_quality = max(0, connection_quality - 50)
+                suggested_actions.extend([
+                    "Check the device connection stability",
+                    "Try restarting the device completely",
+                    "Verify there's no electromagnetic interference",
+                    "Consider using a different USB port or cable",
+                    "Check if the device firmware needs updating"
+                ])
+            elif consecutive_failures >= 3:
+                validation_issues.append(f"Multiple recent failures ({consecutive_failures} consecutive)")
+                connection_quality = max(0, connection_quality - 30)
+                suggested_actions.extend([
+                    "Check the device connection stability",
+                    "Try restarting the device",
+                    "Verify there's no interference"
+                ])
+        except (TypeError, ValueError):
+            # Handle cases where consecutive_failures is not a number
+            pass
+
+        # Check device responsiveness if we have a way to test it
+        if connection_quality > 0 and hasattr(self.app, 'serial_service'):
+            responsiveness_check = self._check_device_responsiveness()
+            if not responsiveness_check['responsive']:
+                validation_issues.append("Device not responding to test commands")
+                connection_quality = max(0, connection_quality - 30)
+                suggested_actions.extend(responsiveness_check['suggested_actions'])
+
+        # Determine overall validation result
+        is_valid = len(validation_issues) == 0 or connection_quality >= 50
+        
+        # Create comprehensive error message
+        error_message = None
+        if validation_issues:
+            error_message = f"Connection validation failed for {operation_name}: " + "; ".join(validation_issues)
+        
+        # Log validation results
+        self._log_connection_validation_results(operation_name, is_valid, connection_quality, validation_issues)
+        
+        return ConnectionValidationResult(
+            is_valid=is_valid,
+            error_message=error_message,
+            connection_quality=connection_quality,
+            last_activity=last_activity,
+            suggested_actions=suggested_actions
+        )
+    
+    def _check_device_responsiveness(self) -> Dict[str, Any]:
+        """
+        Check if the device is responsive by analyzing recent communication patterns.
+        
+        Returns:
+            Dictionary with responsiveness status and suggested actions
+        """
+        try:
+            # Check if we have recent successful operations
+            recent_successes = []
+            recent_timeouts = []
+            
+            try:
+                recent_successes = [e for e in self.error_history if 
+                                  hasattr(e, 'timestamp') and isinstance(e.timestamp, datetime) and
+                                  (datetime.now() - e.timestamp).total_seconds() < 60 and
+                                  hasattr(e, 'error_type') and
+                                  e.error_type not in [ParameterErrorType.COMMUNICATION_TIMEOUT, 
+                                                     ParameterErrorType.DEVICE_NOT_RESPONDING]]
+                
+                # Check if we have recent timeouts
+                recent_timeouts = [e for e in self.error_history if 
+                                 hasattr(e, 'timestamp') and isinstance(e.timestamp, datetime) and
+                                 (datetime.now() - e.timestamp).total_seconds() < 300 and
+                                 hasattr(e, 'error_type') and
+                                 e.error_type == ParameterErrorType.COMMUNICATION_TIMEOUT]
+            except (TypeError, AttributeError):
+                pass
+            
+            if len(recent_timeouts) > 2:
+                return {
+                    'responsive': False,
+                    'suggested_actions': [
+                        "Device appears unresponsive - try power cycling",
+                        "Check if device is in sleep mode or low power state",
+                        "Verify device is in configuration mode",
+                        "Try increasing communication timeout settings"
+                    ]
+                }
+            elif len(recent_successes) > 0:
+                return {
+                    'responsive': True,
+                    'suggested_actions': []
+                }
+            else:
+                return {
+                    'responsive': True,  # Assume responsive if no recent data
+                    'suggested_actions': []
+                }
+                
+        except Exception as e:
+            return {
+                'responsive': True,  # Default to responsive on error
+                'suggested_actions': []
+            }
+    
+    def _log_connection_validation_results(self, operation_name: str, is_valid: bool, 
+                                         connection_quality: int, validation_issues: List[str]):
+        """
+        Log detailed connection validation results.
+        
+        Args:
+            operation_name: Name of the operation being validated
+            is_valid: Whether validation passed
+            connection_quality: Connection quality score
+            validation_issues: List of validation issues found
+        """
+        status = "PASSED" if is_valid else "FAILED"
+        self.app.log_frame.log_message(f"DEBUG: Connection validation for {operation_name}: {status}\n")
+        self.app.log_frame.log_message(f"DEBUG: - Connection quality: {connection_quality}%\n")
+        
+        if validation_issues:
+            self.app.log_frame.log_message("DEBUG: - Issues found:\n")
+            for issue in validation_issues:
+                self.app.log_frame.log_message(f"DEBUG:   * {issue}\n")
+        else:
+            self.app.log_frame.log_message("DEBUG: - No issues found\n")
+        
+        # Log additional diagnostic information
+        if hasattr(self.app, 'serial_service') and self.app.serial_service.is_connected:
+            try:
+                port_name = getattr(self.app.serial_service.serial_port, 'port', 'Unknown')
+                self.app.log_frame.log_message(f"DEBUG: - Connected to port: {port_name}\n")
+            except:
+                pass
+        
+        self.app.log_frame.log_message(f"DEBUG: - Consecutive failures: {self.consecutive_failures}\n")
+
+    def handle_parameter_error(self, error_type: ParameterErrorType, parameter_name: str,
+                             command_sent: str, response_received: str = "",
+                             context: Dict[str, Any] = None) -> ParameterError:
+        """
+        Handle a parameter operation error with comprehensive logging and user feedback.
+        
+        Args:
+            error_type: Type of error that occurred
+            parameter_name: Name of the parameter being processed
+            command_sent: Command that was sent to the device
+            response_received: Response received from device (if any)
+            context: Additional context information
+            
+        Returns:
+            ParameterError object with error details
+        """
+        if context is None:
+            context = {}
+
+        # Determine error severity
+        severity = self._determine_error_severity(error_type, context)
+        
+        # Create error object
+        error = ParameterError(
+            error_type=error_type,
+            severity=severity,
+            parameter_name=parameter_name,
+            command_sent=command_sent,
+            response_received=response_received,
+            error_message=self._format_error_message(error_type, parameter_name, command_sent, response_received, context),
+            suggested_actions=self.corrective_actions.get(error_type, []),
+            timestamp=datetime.now(),
+            context=context
+        )
+
+        # Add to error history
+        self.error_history.append(error)
+        
+        # Update failure tracking
+        self._update_failure_tracking(error_type)
+        
+        # Log the error with appropriate detail level
+        self._log_parameter_error(error)
+        
+        # Show user notification based on severity
+        self._show_error_notification(error)
+        
+        # Trigger automatic recovery if appropriate
+        self._attempt_automatic_recovery(error)
+        
+        return error
+
+    def handle_communication_timeout(self, parameter_name: str, command_sent: str, 
+                                   timeout_duration: float) -> ParameterError:
+        """
+        Handle communication timeout errors with specific timeout information.
+        
+        Args:
+            parameter_name: Name of the parameter
+            command_sent: Command that timed out
+            timeout_duration: How long we waited before timing out
+            
+        Returns:
+            ParameterError object
+        """
+        context = {
+            'timeout_duration': timeout_duration,
+            'timeout_threshold': self.timeout_threshold,
+            'retry_suggested': timeout_duration < self.timeout_threshold * 2,
+            'connection_check_needed': timeout_duration >= self.timeout_threshold
+        }
+        
+        # Enhanced timeout handling with specific corrective actions
+        error = self.handle_parameter_error(
+            ParameterErrorType.COMMUNICATION_TIMEOUT,
+            parameter_name,
+            command_sent,
+            "",
+            context
+        )
+        
+        # Add timeout-specific corrective actions
+        timeout_actions = [
+            f"Wait {int(self.timeout_threshold)}s and retry the parameter operation",
+            "Check if the device is responding to other commands",
+            "Verify the device is not in sleep mode or low power state",
+            "Try increasing the communication timeout in settings",
+            "Check for interference on the communication line"
+        ]
+        
+        # Replace generic actions with timeout-specific ones
+        error.suggested_actions = timeout_actions
+        
+        # Log detailed timeout information
+        self._log_timeout_details(parameter_name, command_sent, timeout_duration)
+        
+        return error
+    
+    def _log_timeout_details(self, parameter_name: str, command_sent: str, timeout_duration: float):
+        """
+        Log detailed timeout information for troubleshooting.
+        
+        Args:
+            parameter_name: Name of the parameter that timed out
+            command_sent: Command that was sent
+            timeout_duration: How long we waited
+        """
+        self.app.log_frame.log_message(f"DEBUG: Timeout details for {parameter_name}:\n")
+        self.app.log_frame.log_message(f"DEBUG: - Command sent: {command_sent}\n")
+        self.app.log_frame.log_message(f"DEBUG: - Timeout duration: {timeout_duration:.2f}s\n")
+        self.app.log_frame.log_message(f"DEBUG: - Timeout threshold: {self.timeout_threshold:.2f}s\n")
+        self.app.log_frame.log_message(f"DEBUG: - Consecutive failures: {self.consecutive_failures}\n")
+        
+        # Check connection quality if available
+        if hasattr(self.app, 'error_handler') and hasattr(self.app.error_handler, 'connection_quality'):
+            quality = self.app.error_handler.connection_quality
+            self.app.log_frame.log_message(f"DEBUG: - Connection quality: {quality}%\n")
+            
+            if quality < 50:
+                self.app.log_frame.log_message("WARNING: Poor connection quality may be causing timeouts\n")
+
+    def handle_invalid_response(self, parameter_name: str, command_sent: str,
+                              response_received: str, expected_format: str = "",
+                              parsing_error: str = "") -> ParameterError:
+        """
+        Handle invalid device response errors with detailed response information.
+        
+        Args:
+            parameter_name: Name of the parameter
+            command_sent: Command that was sent
+            response_received: Invalid response received
+            expected_format: Expected response format
+            parsing_error: Specific parsing error message
+            
+        Returns:
+            ParameterError object
+        """
+        context = {
+            'expected_format': expected_format,
+            'parsing_error': parsing_error,
+            'response_length': len(response_received),
+            'response_type': self._analyze_response_type(response_received),
+            'possible_causes': self._analyze_response_issues(response_received, expected_format)
+        }
+        
+        # Enhanced invalid response handling
+        error = self.handle_parameter_error(
+            ParameterErrorType.INVALID_RESPONSE,
+            parameter_name,
+            command_sent,
+            response_received,
+            context
+        )
+        
+        # Add response-specific corrective actions
+        response_actions = self._get_response_specific_actions(response_received, expected_format, parsing_error)
+        error.suggested_actions = response_actions
+        
+        # Log detailed response analysis
+        self._log_response_analysis(parameter_name, command_sent, response_received, expected_format, parsing_error)
+        
+        return error
+    
+    def _analyze_response_type(self, response: str) -> str:
+        """
+        Analyze the type of response received to provide better error context.
+        
+        Args:
+            response: Response received from device
+            
+        Returns:
+            String describing the response type
+        """
+        if not response:
+            return "empty_response"
+        elif response.startswith("ERROR"):
+            return "error_response"
+        elif response.startswith("OK"):
+            return "ok_response"
+        elif ":" in response:
+            return "formatted_response"
+        elif response.isdigit():
+            return "numeric_response"
+        elif len(response) < 5:
+            return "short_response"
+        else:
+            return "unknown_response"
+    
+    def _analyze_response_issues(self, response: str, expected_format: str) -> List[str]:
+        """
+        Analyze potential issues with the response.
+        
+        Args:
+            response: Response received
+            expected_format: Expected format
+            
+        Returns:
+            List of possible causes for the invalid response
+        """
+        issues = []
+        
+        if not response:
+            issues.append("Device sent empty response")
+        elif response.startswith("ERROR"):
+            issues.append("Device returned error response")
+        elif expected_format and ":" in expected_format and ":" not in response:
+            issues.append("Response missing expected delimiter ':'")
+        elif expected_format and "=" in expected_format and "=" not in response:
+            issues.append("Response missing expected delimiter '='")
+        elif len(response) < 3:
+            issues.append("Response too short to be valid")
+        elif response.count(",") != expected_format.count(",") if expected_format else False:
+            issues.append("Response has wrong number of comma-separated values")
+        
+        return issues
+    
+    def _get_response_specific_actions(self, response: str, expected_format: str, parsing_error: str) -> List[str]:
+        """
+        Get corrective actions specific to the type of invalid response.
+        
+        Args:
+            response: Response received
+            expected_format: Expected format
+            parsing_error: Parsing error message
+            
+        Returns:
+            List of suggested corrective actions
+        """
+        actions = []
+        
+        if not response:
+            actions.extend([
+                "Check if the device is powered on and responding",
+                "Verify the command syntax is correct for your device model",
+                "Try sending a simple test command to verify communication",
+                "Check if the device requires a different command format"
+            ])
+        elif response.startswith("ERROR"):
+            actions.extend([
+                "Check if the parameter is supported by your device firmware",
+                "Verify the parameter command syntax matches your device model",
+                "Try reading device information to confirm compatibility",
+                "Check device documentation for supported parameter commands"
+            ])
+        elif "timeout" in parsing_error.lower():
+            actions.extend([
+                "Increase the response timeout setting",
+                "Check for communication interference",
+                "Verify the device is not in sleep mode",
+                "Try sending the command again after a short delay"
+            ])
+        else:
+            actions.extend([
+                "Verify the device firmware version is compatible",
+                "Check if the response format has changed in newer firmware",
+                "Try reading the parameter again to see if it was a temporary issue",
+                "Contact technical support with the exact response received"
+            ])
+        
+        return actions
+    
+    def _log_response_analysis(self, parameter_name: str, command_sent: str, response_received: str, 
+                              expected_format: str, parsing_error: str):
+        """
+        Log detailed response analysis for troubleshooting.
+        
+        Args:
+            parameter_name: Name of the parameter
+            command_sent: Command that was sent
+            response_received: Response received
+            expected_format: Expected format
+            parsing_error: Parsing error message
+        """
+        self.app.log_frame.log_message(f"DEBUG: Response analysis for {parameter_name}:\n")
+        self.app.log_frame.log_message(f"DEBUG: - Command sent: {command_sent}\n")
+        self.app.log_frame.log_message(f"DEBUG: - Response received: '{response_received}'\n")
+        self.app.log_frame.log_message(f"DEBUG: - Response length: {len(response_received)} characters\n")
+        self.app.log_frame.log_message(f"DEBUG: - Expected format: {expected_format}\n")
+        
+        if parsing_error:
+            self.app.log_frame.log_message(f"DEBUG: - Parsing error: {parsing_error}\n")
+        
+        # Analyze response characteristics
+        response_type = self._analyze_response_type(response_received)
+        self.app.log_frame.log_message(f"DEBUG: - Response type: {response_type}\n")
+        
+        issues = self._analyze_response_issues(response_received, expected_format)
+        if issues:
+            self.app.log_frame.log_message("DEBUG: - Identified issues:\n")
+            for issue in issues:
+                self.app.log_frame.log_message(f"DEBUG:   * {issue}\n")
+
+    def handle_connection_validation_failure(self, validation_result: ConnectionValidationResult,
+                                           operation_name: str) -> ParameterError:
+        """
+        Handle connection validation failures before parameter operations.
+        
+        Args:
+            validation_result: Result of connection validation
+            operation_name: Name of the operation that was prevented
+            
+        Returns:
+            ParameterError object
+        """
+        context = {
+            'connection_quality': validation_result.connection_quality,
+            'last_activity': validation_result.last_activity,
+            'operation_name': operation_name
+        }
+        
+        return self.handle_parameter_error(
+            ParameterErrorType.CONNECTION_LOST,
+            operation_name,
+            "Connection validation",
+            validation_result.error_message or "Connection validation failed",
+            context
+        )
+
+    def _assess_connection_quality(self) -> int:
+        """
+        Assess the current connection quality based on recent activity and errors.
+        
+        Returns:
+            Connection quality score (0-100)
+        """
+        base_quality = 100
+        
+        # Reduce quality based on recent errors
+        try:
+            recent_errors = [e for e in self.error_history if 
+                            hasattr(e, 'timestamp') and isinstance(e.timestamp, datetime) and
+                            (datetime.now() - e.timestamp).total_seconds() < 300]  # Last 5 minutes
+            
+            quality_reduction = min(len(recent_errors) * 10, 50)
+            base_quality -= quality_reduction
+        except (TypeError, AttributeError):
+            pass
+        
+        # Reduce quality based on consecutive failures
+        try:
+            consecutive_failures = int(self.consecutive_failures) if self.consecutive_failures is not None else 0
+            consecutive_penalty = min(consecutive_failures * 15, 60)
+            base_quality -= consecutive_penalty
+        except (TypeError, ValueError):
+            pass
+        
+        # Check if we have error handler with connection quality
+        if hasattr(self.app, 'error_handler') and hasattr(self.app.error_handler, 'connection_quality'):
+            try:
+                # Use the main error handler's quality assessment
+                main_quality = self.app.error_handler.connection_quality
+                if isinstance(main_quality, (int, float)):
+                    base_quality = min(base_quality, main_quality)
+            except (TypeError, AttributeError):
+                # Handle cases where connection_quality is not a number
+                pass
+        
+        return max(0, base_quality)
+
+    def _determine_error_severity(self, error_type: ParameterErrorType, context: Dict[str, Any]) -> ParameterErrorSeverity:
+        """
+        Determine the severity of an error based on type and context.
+        
+        Args:
+            error_type: Type of error
+            context: Error context
+            
+        Returns:
+            Error severity level
+        """
+        # Critical errors that prevent all operations
+        if error_type in [ParameterErrorType.CONNECTION_LOST]:
+            return ParameterErrorSeverity.CRITICAL
+        
+        # Errors that affect multiple operations
+        if error_type in [ParameterErrorType.DEVICE_NOT_RESPONDING, ParameterErrorType.DEVICE_BUSY]:
+            return ParameterErrorSeverity.ERROR
+        
+        # Errors that affect single operations but may be recoverable
+        if error_type in [ParameterErrorType.COMMUNICATION_TIMEOUT, ParameterErrorType.INVALID_RESPONSE]:
+            # Check retry count to escalate severity
+            try:
+                retry_count = int(context.get('retry_count', 0))
+                max_retries = int(self.max_retry_attempts)
+                if retry_count >= max_retries:
+                    return ParameterErrorSeverity.ERROR
+                else:
+                    return ParameterErrorSeverity.WARNING
+            except (TypeError, ValueError):
+                return ParameterErrorSeverity.WARNING
+        
+        # Validation and parsing errors are typically warnings
+        if error_type in [ParameterErrorType.VALIDATION_ERROR, ParameterErrorType.PARSING_ERROR]:
+            return ParameterErrorSeverity.WARNING
+        
+        # Default to warning
+        return ParameterErrorSeverity.WARNING
+
+    def _format_error_message(self, error_type: ParameterErrorType, parameter_name: str,
+                            command_sent: str, response_received: str, context: Dict[str, Any]) -> str:
+        """
+        Format a user-friendly error message.
+        
+        Args:
+            error_type: Type of error
+            parameter_name: Parameter name
+            command_sent: Command sent
+            response_received: Response received
+            context: Additional context
+            
+        Returns:
+            Formatted error message
+        """
+        message_template = self.error_messages.get(error_type, {})
+        base_message = message_template.get('message', f'Parameter error: {error_type.value}')
+        
+        # Format the message with available context
+        format_dict = {
+            'parameter_name': parameter_name,
+            'command_sent': command_sent,
+            'response_received': response_received,
+            'timeout': context.get('timeout_duration', self.timeout_threshold),
+            'expected_format': context.get('expected_format', 'Unknown'),
+            'parsing_error': context.get('parsing_error', 'Unknown'),
+            'parameter_value': context.get('parameter_value', 'Unknown'),
+            'validation_error': context.get('validation_error', 'Unknown')
+        }
+        
+        try:
+            return base_message.format(**format_dict)
+        except KeyError:
+            # Fallback if formatting fails
+            return f"{base_message} (Parameter: {parameter_name})"
+
+    def _update_failure_tracking(self, error_type: ParameterErrorType) -> None:
+        """
+        Update failure tracking statistics.
+        
+        Args:
+            error_type: Type of error that occurred
+        """
+        try:
+            if error_type in [ParameterErrorType.COMMUNICATION_TIMEOUT, 
+                             ParameterErrorType.DEVICE_NOT_RESPONDING,
+                             ParameterErrorType.CONNECTION_LOST]:
+                self.consecutive_failures = int(self.consecutive_failures or 0) + 1
+            else:
+                # Reset consecutive failures for non-critical errors
+                current_failures = int(self.consecutive_failures or 0)
+                self.consecutive_failures = max(0, current_failures - 1)
+        except (TypeError, ValueError):
+            # Handle cases where consecutive_failures is not a number
+            self.consecutive_failures = 1 if error_type in [ParameterErrorType.COMMUNICATION_TIMEOUT, 
+                                                           ParameterErrorType.DEVICE_NOT_RESPONDING,
+                                                           ParameterErrorType.CONNECTION_LOST] else 0
+
+    def _log_parameter_error(self, error: ParameterError) -> None:
+        """
+        Log parameter error with appropriate detail level.
+        
+        Args:
+            error: Parameter error to log
+        """
+        # Format log message based on severity
+        if error.severity == ParameterErrorSeverity.CRITICAL:
+            log_prefix = "CRITICAL"
+        elif error.severity == ParameterErrorSeverity.ERROR:
+            log_prefix = "ERROR"
+        elif error.severity == ParameterErrorSeverity.WARNING:
+            log_prefix = "WARNING"
+        else:
+            log_prefix = "INFO"
+        
+        # Log the main error message
+        self.app.log_frame.log_message(f"{log_prefix}: {error.error_message}\n")
+        
+        # Log additional details for errors and critical issues
+        if error.severity in [ParameterErrorSeverity.ERROR, ParameterErrorSeverity.CRITICAL]:
+            if error.command_sent:
+                self.app.log_frame.log_message(f"DEBUG: Command sent: {error.command_sent}\n")
+            if error.response_received:
+                self.app.log_frame.log_message(f"DEBUG: Response received: {error.response_received}\n")
+        
+        # Log suggested actions for critical and error level issues
+        if error.severity in [ParameterErrorSeverity.ERROR, ParameterErrorSeverity.CRITICAL] and error.suggested_actions:
+            self.app.log_frame.log_message(f"INFO: Suggested solutions:\n")
+            for i, action in enumerate(error.suggested_actions[:3], 1):  # Limit to top 3 actions
+                self.app.log_frame.log_message(f"INFO: {i}. {action}\n")
+
+    def _show_error_notification(self, error: ParameterError) -> None:
+        """
+        Show user notification based on error severity.
+        
+        Args:
+            error: Parameter error to show
+        """
+        # Only show dialog for critical errors
+        if error.severity == ParameterErrorSeverity.CRITICAL:
+            try:
+                from tkinter import messagebox
+                message_template = self.error_messages.get(error.error_type, {})
+                title = message_template.get('title', 'Parameter Error')
+                
+                # Show error dialog with primary suggested action
+                message = error.error_message
+                if error.suggested_actions:
+                    message += f"\n\nSuggested action: {error.suggested_actions[0]}"
+                
+                self.app.after(0, lambda: messagebox.showerror(title, message))
+            except Exception as e:
+                self.app.log_frame.log_message(f"WARNING: Failed to show error dialog: {str(e)}\n")
+
+    def _attempt_automatic_recovery(self, error: ParameterError) -> None:
+        """
+        Attempt automatic recovery for certain types of errors.
+        
+        Args:
+            error: Parameter error to attempt recovery for
+        """
+        # Only attempt recovery for specific error types
+        if error.error_type not in [ParameterErrorType.COMMUNICATION_TIMEOUT, 
+                                   ParameterErrorType.DEVICE_BUSY]:
+            return
+        
+        # Don't attempt recovery if we've already tried too many times
+        if error.retry_count >= self.max_retry_attempts:
+            return
+        
+        # Schedule a retry after a delay
+        def retry_operation():
+            self.app.log_frame.log_message(f"INFO: Attempting automatic recovery for {error.parameter_name}\n")
+            # The actual retry would be handled by the calling service
+            
+        self.app.after(int(self.retry_delay * 1000), retry_operation)
+
+    def create_user_friendly_error_message(self, error: ParameterError) -> str:
+        """
+        Create a comprehensive, user-friendly error message with corrective actions.
+        
+        Args:
+            error: ParameterError object
+            
+        Returns:
+            Formatted user-friendly error message
+        """
+        message_parts = []
+        
+        # Main error description
+        message_parts.append(f"Parameter Operation Failed: {error.parameter_name}")
+        message_parts.append(f"Error: {error.error_message}")
+        
+        # Add context information if available
+        if error.context:
+            if 'timeout_duration' in error.context:
+                message_parts.append(f"Timeout: {error.context['timeout_duration']:.1f}s")
+            if 'response_length' in error.context:
+                message_parts.append(f"Response length: {error.context['response_length']} characters")
+            if 'connection_quality' in error.context:
+                quality = error.context['connection_quality']
+                quality_desc = "Excellent" if quality >= 90 else "Good" if quality >= 70 else "Fair" if quality >= 40 else "Poor"
+                message_parts.append(f"Connection quality: {quality}% ({quality_desc})")
+        
+        # Add suggested actions
+        if error.suggested_actions:
+            message_parts.append("\nSuggested solutions:")
+            for i, action in enumerate(error.suggested_actions[:5], 1):  # Limit to top 5 actions
+                message_parts.append(f"{i}. {action}")
+        
+        # Add retry information if applicable
+        if error.retry_count > 0:
+            message_parts.append(f"\nRetry attempt: {error.retry_count}/{self.max_retry_attempts}")
+        
+        return "\n".join(message_parts)
+    
+    def handle_parameter_operation_error(self, operation_type: str, parameter_name: str, 
+                                       error_details: Dict[str, Any]) -> ParameterError:
+        """
+        Handle parameter operation errors with comprehensive error analysis and user feedback.
+        
+        Args:
+            operation_type: Type of operation (read, write, validate)
+            parameter_name: Name of the parameter
+            error_details: Dictionary with error details
+            
+        Returns:
+            ParameterError object with comprehensive error information
+        """
+        # Determine error type based on error details
+        error_type = self._determine_error_type_from_details(error_details)
+        
+        # Extract relevant information
+        command_sent = error_details.get('command_sent', '')
+        response_received = error_details.get('response_received', '')
+        
+        # Create enhanced context
+        context = {
+            'operation_type': operation_type,
+            'error_details': error_details,
+            'timestamp': datetime.now(),
+            'session_info': self._get_session_info()
+        }
+        
+        # Handle the error with enhanced context
+        error = self.handle_parameter_error(
+            error_type,
+            parameter_name,
+            command_sent,
+            response_received,
+            context
+        )
+        
+        # Add operation-specific corrective actions
+        operation_actions = self._get_operation_specific_actions(operation_type, error_type, error_details)
+        if operation_actions:
+            error.suggested_actions = operation_actions + error.suggested_actions
+        
+        return error
+    
+    def _determine_error_type_from_details(self, error_details: Dict[str, Any]) -> ParameterErrorType:
+        """
+        Determine the error type based on error details.
+        
+        Args:
+            error_details: Dictionary with error details
+            
+        Returns:
+            ParameterErrorType enum value
+        """
+        if 'timeout' in str(error_details).lower():
+            return ParameterErrorType.COMMUNICATION_TIMEOUT
+        elif 'invalid_response' in error_details or 'parsing_error' in error_details:
+            return ParameterErrorType.INVALID_RESPONSE
+        elif 'connection' in str(error_details).lower():
+            return ParameterErrorType.CONNECTION_LOST
+        elif 'validation' in str(error_details).lower():
+            return ParameterErrorType.VALIDATION_ERROR
+        elif 'busy' in str(error_details).lower():
+            return ParameterErrorType.DEVICE_BUSY
+        elif 'not_supported' in error_details:
+            return ParameterErrorType.PARAMETER_NOT_SUPPORTED
+        else:
+            return ParameterErrorType.DEVICE_NOT_RESPONDING
+    
+    def _get_operation_specific_actions(self, operation_type: str, error_type: ParameterErrorType, 
+                                      error_details: Dict[str, Any]) -> List[str]:
+        """
+        Get corrective actions specific to the operation type.
+        
+        Args:
+            operation_type: Type of operation (read, write, validate)
+            error_type: Type of error that occurred
+            error_details: Error details dictionary
+            
+        Returns:
+            List of operation-specific corrective actions
+        """
+        actions = []
+        
+        if operation_type == 'read':
+            if error_type == ParameterErrorType.COMMUNICATION_TIMEOUT:
+                actions.extend([
+                    "Try reading a single parameter instead of bulk reading",
+                    "Increase the read timeout for this specific parameter",
+                    "Check if the parameter exists on your device model"
+                ])
+            elif error_type == ParameterErrorType.INVALID_RESPONSE:
+                actions.extend([
+                    "Verify the parameter read command is correct for your device",
+                    "Check if the parameter name has changed in newer firmware",
+                    "Try reading device information first to verify compatibility"
+                ])
+        elif operation_type == 'write':
+            if error_type == ParameterErrorType.COMMUNICATION_TIMEOUT:
+                actions.extend([
+                    "Verify the parameter value is within acceptable range",
+                    "Check if the device is in configuration mode",
+                    "Try sending the parameter command manually"
+                ])
+            elif error_type == ParameterErrorType.COMMAND_REJECTED:
+                actions.extend([
+                    "Verify the parameter value format is correct",
+                    "Check if the parameter is read-only on your device",
+                    "Ensure the device is not locked or in protected mode"
+                ])
+        elif operation_type == 'validate':
+            actions.extend([
+                "Check the parameter value against the specification",
+                "Verify the parameter format matches the expected type",
+                "Review the parameter documentation for valid ranges"
+            ])
+        
+        return actions
+    
+    def _get_session_info(self) -> Dict[str, Any]:
+        """
+        Get current session information for error context.
+        
+        Returns:
+            Dictionary with session information
+        """
+        return {
+            'total_errors': len(self.error_history),
+            'consecutive_failures': self.consecutive_failures,
+            'connection_quality': self._assess_connection_quality(),
+            'last_successful_operation': self.last_successful_operation,
+            'session_start': getattr(self, 'session_start', datetime.now())
+        }
+    
+    def get_error_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about parameter errors.
+        
+        Returns:
+            Dictionary with error statistics
+        """
+        if not self.error_history:
+            return {
+                'total_errors': 0,
+                'error_types': {},
+                'severity_distribution': {},
+                'recent_errors': 0,
+                'consecutive_failures': self.consecutive_failures
+            }
+        
+        # Count errors by type
+        error_types = {}
+        severity_distribution = {}
+        
+        for error in self.error_history:
+            error_type_name = error.error_type.value
+            error_types[error_type_name] = error_types.get(error_type_name, 0) + 1
+            
+            severity_name = error.severity.value
+            severity_distribution[severity_name] = severity_distribution.get(severity_name, 0) + 1
+        
+        # Count recent errors (last hour)
+        recent_errors = len([e for e in self.error_history if 
+                           (datetime.now() - e.timestamp).total_seconds() < 3600])
+        
+        return {
+            'total_errors': len(self.error_history),
+            'error_types': error_types,
+            'severity_distribution': severity_distribution,
+            'recent_errors': recent_errors,
+            'consecutive_failures': self.consecutive_failures,
+            'connection_quality': self._assess_connection_quality()
+        }
+
+    def clear_error_history(self) -> None:
+        """Clear the error history and reset failure tracking."""
+        self.error_history.clear()
+        self.consecutive_failures = 0
+        self.app.log_frame.log_message("INFO: Parameter error history cleared\n")
+
+    def set_timeout_threshold(self, timeout_seconds: float) -> None:
+        """
+        Set the timeout threshold for parameter operations.
+        
+        Args:
+            timeout_seconds: Timeout threshold in seconds
+        """
+        self.timeout_threshold = max(1.0, timeout_seconds)
+        self.app.log_frame.log_message(f"INFO: Parameter timeout threshold set to {self.timeout_threshold}s\n")
+
+    def enable_connection_validation(self, enabled: bool) -> None:
+        """
+        Enable or disable connection validation before operations.
+        
+        Args:
+            enabled: Whether to enable connection validation
+        """
+        self.connection_validation_enabled = enabled
+        status = "enabled" if enabled else "disabled"
+        self.app.log_frame.log_message(f"INFO: Connection validation {status}\n")
+
+    def get_recent_errors(self, hours: int = 1) -> List[ParameterError]:
+        """
+        Get recent parameter errors within the specified time window.
+        
+        Args:
+            hours: Number of hours to look back
+            
+        Returns:
+            List of recent parameter errors
+        """
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        return [error for error in self.error_history if error.timestamp >= cutoff_time]
+
+    def export_error_log(self, filename: str = None) -> str:
+        """
+        Export error history to a log file.
+        
+        Args:
+            filename: Optional filename for the log file
+            
+        Returns:
+            Path to the exported log file
+        """
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"parameter_errors_{timestamp}.log"
+        
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(f"Parameter Error Log - Generated: {datetime.now()}\n")
+                f.write("=" * 60 + "\n\n")
+                
+                for error in self.error_history:
+                    f.write(f"Timestamp: {error.timestamp}\n")
+                    f.write(f"Error Type: {error.error_type.value}\n")
+                    f.write(f"Severity: {error.severity.value}\n")
+                    f.write(f"Parameter: {error.parameter_name}\n")
+                    f.write(f"Command: {error.command_sent}\n")
+                    f.write(f"Response: {error.response_received}\n")
+                    f.write(f"Message: {error.error_message}\n")
+                    f.write(f"Retry Count: {error.retry_count}\n")
+                    
+                    if error.suggested_actions:
+                        f.write("Suggested Actions:\n")
+                        for i, action in enumerate(error.suggested_actions, 1):
+                            f.write(f"  {i}. {action}\n")
+                    
+                    f.write("-" * 40 + "\n\n")
+                
+                # Add statistics
+                stats = self.get_error_statistics()
+                f.write("Error Statistics:\n")
+                f.write(f"Total Errors: {stats['total_errors']}\n")
+                f.write(f"Recent Errors (1h): {stats['recent_errors']}\n")
+                f.write(f"Consecutive Failures: {stats['consecutive_failures']}\n")
+                f.write(f"Connection Quality: {stats['connection_quality']}%\n")
+            
+            self.app.log_frame.log_message(f"INFO: Error log exported to {filename}\n")
+            return filename
+            
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to export error log: {str(e)}\n")
+            return ""
+</document_content>
+</document>
+<document index="53">
+<source>.\services\parameter_operation_logger.py</source>
+<document_content>
+"""
+Parameter Operation Logger for LT32 PRO Configurator
+
+This module provides comprehensive logging for all parameter operations including
+read/write operations, command and response logging, operation statistics, and
+log export functionality as specified in task 8.1.
+
+Requirements addressed:
+- 9.1: Logging for all parameter read/write operations with timestamps
+- 9.2: Command and response logging for troubleshooting
+- 9.3: Operation summary logs showing success/failure statistics
+- 9.4: Log export functionality for parameter operation records
+- 9.5: Detailed error information for failed operations
+- 9.6: Parameter operation tracking and history
+"""
+
+import logging
+import json
+import csv
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional, Union
+from dataclasses import dataclass, asdict
+from pathlib import Path
+import threading
+from collections import defaultdict, deque
+
+
+@dataclass
+class ParameterOperationLog:
+    """Detailed log entry for a parameter operation."""
+    timestamp: datetime
+    operation_type: str  # 'read', 'write', 'bulk_read', 'bulk_write'
+    parameter_name: str
+    command_sent: Optional[str]
+    response_received: Optional[str]
+    success: bool
+    value: Optional[Any]
+    error_message: Optional[str]
+    duration_ms: float
+    session_id: str
+    operation_id: str
+    retry_count: int = 0
+    context: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class OperationSummary:
+    """Summary statistics for parameter operations."""
+    session_id: str
+    start_time: datetime
+    end_time: datetime
+    total_operations: int
+    successful_operations: int
+    failed_operations: int
+    total_duration_ms: float
+    parameters_processed: List[str]
+    error_categories: Dict[str, int]
+    operation_types: Dict[str, int]
+
+
+class ParameterOperationLogger:
+    """
+    Comprehensive logger for parameter operations with statistics and export capabilities.
+    
+    This logger provides detailed tracking of all parameter operations including:
+    - Individual parameter read/write operations
+    - Bulk operations with progress tracking
+    - Command and response logging for troubleshooting
+    - Operation statistics and summaries
+    - Export functionality for analysis and record-keeping
+    """
+
+    def __init__(self, app_instance=None, max_log_entries: int = 10000):
+        """
+        Initialize the parameter operation logger.
+        
+        Args:
+            app_instance: Main application instance for UI integration
+            max_log_entries: Maximum number of log entries to keep in memory
+        """
+        self.app = app_instance
+        self.max_log_entries = max_log_entries
+        
+        # Thread-safe logging
+        self._lock = threading.Lock()
+        
+        # Log storage
+        self.operation_logs = deque(maxlen=max_log_entries)
+        self.session_summaries = {}
+        self.current_session_id = self._generate_session_id()
+        self.current_operation_id = 0
+        
+        # Statistics tracking
+        self.operation_stats = defaultdict(int)
+        self.error_stats = defaultdict(int)
+        self.parameter_stats = defaultdict(lambda: {'reads': 0, 'writes': 0, 'errors': 0})
+        
+        # Session tracking
+        self.session_start_time = datetime.now()
+        self.active_operations = {}  # Track ongoing operations
+        
+        # Initialize Python logging
+        self._init_python_logging()
+        
+        # Log the logger initialization
+        self.log_system_event("Parameter Operation Logger initialized", {
+            'session_id': self.current_session_id,
+            'max_entries': max_log_entries,
+            'start_time': self.session_start_time.isoformat()
+        })
+
+    def _init_python_logging(self):
+        """Initialize Python logging for file-based logging."""
+        # Create logs directory if it doesn't exist
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        
+        # Configure logger
+        self.logger = logging.getLogger('parameter_operations')
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Remove existing handlers to avoid duplicates
+        for handler in self.logger.handlers[:]:
+            self.logger.removeHandler(handler)
+        
+        # File handler for detailed logs
+        log_file = log_dir / f"parameter_operations_{datetime.now().strftime('%Y%m%d')}.log"
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Formatter for detailed logging
+        formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)8s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        
+        # Console handler for important messages
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+
+    def _generate_session_id(self) -> str:
+        """Generate a unique session ID."""
+        return f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    def _generate_operation_id(self) -> str:
+        """Generate a unique operation ID."""
+        self.current_operation_id += 1
+        return f"op_{self.current_session_id}_{self.current_operation_id:04d}"
+
+    def log_parameter_operation(self, 
+                              operation_type: str,
+                              parameter_name: str,
+                              command_sent: Optional[str] = None,
+                              response_received: Optional[str] = None,
+                              success: bool = True,
+                              value: Optional[Any] = None,
+                              error_message: Optional[str] = None,
+                              duration_ms: float = 0.0,
+                              retry_count: int = 0,
+                              context: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Log a parameter operation with full details.
+        
+        Args:
+            operation_type: Type of operation ('read', 'write', 'bulk_read', 'bulk_write')
+            parameter_name: Name of the parameter being operated on
+            command_sent: AT command sent to device
+            response_received: Response received from device
+            success: Whether the operation was successful
+            value: Parameter value (for reads) or value being set (for writes)
+            error_message: Error message if operation failed
+            duration_ms: Operation duration in milliseconds
+            retry_count: Number of retries attempted
+            context: Additional context information
+            
+        Returns:
+            Operation ID for tracking
+        """
+        with self._lock:
+            operation_id = self._generate_operation_id()
+            timestamp = datetime.now()
+            
+            # Create log entry
+            log_entry = ParameterOperationLog(
+                timestamp=timestamp,
+                operation_type=operation_type,
+                parameter_name=parameter_name,
+                command_sent=command_sent,
+                response_received=response_received,
+                success=success,
+                value=value,
+                error_message=error_message,
+                duration_ms=duration_ms,
+                session_id=self.current_session_id,
+                operation_id=operation_id,
+                retry_count=retry_count,
+                context=context or {}
+            )
+            
+            # Store in memory
+            self.operation_logs.append(log_entry)
+            
+            # Update statistics
+            self._update_statistics(log_entry)
+            
+            # Log to file
+            self._log_to_file(log_entry)
+            
+            # Log to UI if available
+            self._log_to_ui(log_entry)
+            
+            return operation_id
+
+    def _update_statistics(self, log_entry: ParameterOperationLog):
+        """Update operation statistics."""
+        # Overall operation stats
+        self.operation_stats[log_entry.operation_type] += 1
+        self.operation_stats['total'] += 1
+        
+        if log_entry.success:
+            self.operation_stats['successful'] += 1
+        else:
+            self.operation_stats['failed'] += 1
+            
+            # Error categorization
+            if log_entry.error_message:
+                error_category = self._categorize_error(log_entry.error_message)
+                self.error_stats[error_category] += 1
+        
+        # Parameter-specific stats
+        param_stats = self.parameter_stats[log_entry.parameter_name]
+        if log_entry.operation_type in ['read', 'bulk_read']:
+            param_stats['reads'] += 1
+        elif log_entry.operation_type in ['write', 'bulk_write']:
+            param_stats['writes'] += 1
+        
+        if not log_entry.success:
+            param_stats['errors'] += 1
+
+    def _categorize_error(self, error_message: str) -> str:
+        """Categorize error messages for statistics."""
+        error_lower = error_message.lower()
+        
+        if 'timeout' in error_lower or 'no response' in error_lower:
+            return 'timeout'
+        elif 'connection' in error_lower or 'disconnected' in error_lower:
+            return 'connection'
+        elif 'invalid' in error_lower or 'format' in error_lower:
+            return 'format'
+        elif 'permission' in error_lower or 'access' in error_lower:
+            return 'permission'
+        elif 'validation' in error_lower or 'range' in error_lower:
+            return 'validation'
+        else:
+            return 'other'
+
+    def _log_to_file(self, log_entry: ParameterOperationLog):
+        """Log entry to file using Python logging."""
+        level = logging.ERROR if not log_entry.success else logging.INFO
+        
+        # Create detailed log message
+        message_parts = [
+            f"[{log_entry.operation_type.upper()}]",
+            f"Parameter: {log_entry.parameter_name}",
+            f"Success: {log_entry.success}",
+            f"Duration: {log_entry.duration_ms:.1f}ms",
+            f"OpID: {log_entry.operation_id}"
+        ]
+        
+        if log_entry.command_sent:
+            message_parts.append(f"Command: {log_entry.command_sent}")
+        
+        if log_entry.response_received:
+            message_parts.append(f"Response: {log_entry.response_received}")
+        
+        if log_entry.value is not None:
+            message_parts.append(f"Value: {log_entry.value}")
+        
+        if log_entry.error_message:
+            message_parts.append(f"Error: {log_entry.error_message}")
+        
+        if log_entry.retry_count > 0:
+            message_parts.append(f"Retries: {log_entry.retry_count}")
+        
+        message = " | ".join(message_parts)
+        self.logger.log(level, message)
+
+    def _log_to_ui(self, log_entry: ParameterOperationLog):
+        """Log entry to UI log frame if available."""
+        if not self.app or not hasattr(self.app, 'log_frame'):
+            return
+        
+        try:
+            # Format message for UI
+            timestamp_str = log_entry.timestamp.strftime("%H:%M:%S")
+            operation_type = log_entry.operation_type.upper()
+            
+            if log_entry.success:
+                if log_entry.operation_type in ['read', 'bulk_read']:
+                    message = f"INFO: [{timestamp_str}] {operation_type} {log_entry.parameter_name}: {log_entry.value} ({log_entry.duration_ms:.1f}ms)"
+                else:
+                    message = f"INFO: [{timestamp_str}] {operation_type} {log_entry.parameter_name} successful ({log_entry.duration_ms:.1f}ms)"
+            else:
+                message = f"ERROR: [{timestamp_str}] {operation_type} {log_entry.parameter_name} failed: {log_entry.error_message} ({log_entry.duration_ms:.1f}ms)"
+            
+            # Add command/response details for debugging
+            if log_entry.command_sent:
+                self.app.log_frame.log_message(f"DEBUG: Command sent: {log_entry.command_sent}")
+            if log_entry.response_received:
+                self.app.log_frame.log_message(f"DEBUG: Response received: {log_entry.response_received}")
+            
+            self.app.log_frame.log_message(message)
+            
+        except Exception as e:
+            # Don't let UI logging errors break the operation
+            self.logger.warning(f"Failed to log to UI: {str(e)}")
+
+    def log_bulk_operation_start(self, operation_type: str, parameters: List[str], context: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Log the start of a bulk operation.
+        
+        Args:
+            operation_type: Type of bulk operation ('bulk_read', 'bulk_write')
+            parameters: List of parameter names to be processed
+            context: Additional context information
+            
+        Returns:
+            Operation ID for tracking
+        """
+        operation_id = self._generate_operation_id()
+        
+        with self._lock:
+            self.active_operations[operation_id] = {
+                'type': operation_type,
+                'parameters': parameters,
+                'start_time': datetime.now(),
+                'processed': 0,
+                'successful': 0,
+                'failed': 0,
+                'context': context or {}
+            }
+        
+        self.log_system_event(f"Bulk operation started: {operation_type}", {
+            'operation_id': operation_id,
+            'parameter_count': len(parameters),
+            'parameters': parameters,
+            'context': context
+        })
+        
+        return operation_id
+
+    def log_bulk_operation_progress(self, operation_id: str, parameter_name: str, success: bool, error_message: Optional[str] = None):
+        """
+        Log progress of a bulk operation.
+        
+        Args:
+            operation_id: ID of the bulk operation
+            parameter_name: Name of the parameter just processed
+            success: Whether the parameter operation was successful
+            error_message: Error message if operation failed
+        """
+        with self._lock:
+            if operation_id not in self.active_operations:
+                return
+            
+            operation = self.active_operations[operation_id]
+            operation['processed'] += 1
+            
+            if success:
+                operation['successful'] += 1
+            else:
+                operation['failed'] += 1
+            
+            # Log progress
+            progress_pct = (operation['processed'] / len(operation['parameters'])) * 100
+            self.log_system_event(f"Bulk operation progress: {operation['type']}", {
+                'operation_id': operation_id,
+                'parameter': parameter_name,
+                'success': success,
+                'error': error_message,
+                'progress': f"{operation['processed']}/{len(operation['parameters'])} ({progress_pct:.1f}%)",
+                'successful': operation['successful'],
+                'failed': operation['failed']
+            })
+
+    def log_bulk_operation_complete(self, operation_id: str) -> Dict[str, Any]:
+        """
+        Log completion of a bulk operation and return summary.
+        
+        Args:
+            operation_id: ID of the bulk operation
+            
+        Returns:
+            Dictionary with operation summary
+        """
+        with self._lock:
+            if operation_id not in self.active_operations:
+                return {}
+            
+            operation = self.active_operations[operation_id]
+            end_time = datetime.now()
+            duration = (end_time - operation['start_time']).total_seconds() * 1000
+            
+            summary = {
+                'operation_id': operation_id,
+                'type': operation['type'],
+                'total_parameters': len(operation['parameters']),
+                'processed': operation['processed'],
+                'successful': operation['successful'],
+                'failed': operation['failed'],
+                'duration_ms': duration,
+                'success_rate': (operation['successful'] / operation['processed'] * 100) if operation['processed'] > 0 else 0
+            }
+            
+            # Remove from active operations
+            del self.active_operations[operation_id]
+            
+            self.log_system_event(f"Bulk operation completed: {operation['type']}", summary)
+            
+            return summary
+
+    def log_system_event(self, event: str, details: Optional[Dict[str, Any]] = None):
+        """
+        Log a system event related to parameter operations.
+        
+        Args:
+            event: Description of the event
+            details: Additional event details
+        """
+        timestamp = datetime.now()
+        
+        # Log to file
+        message_parts = [f"SYSTEM: {event}"]
+        if details:
+            message_parts.append(f"Details: {json.dumps(details, default=str)}")
+        
+        message = " | ".join(message_parts)
+        self.logger.info(message)
+        
+        # Log to UI if available
+        if self.app and hasattr(self.app, 'log_frame'):
+            try:
+                ui_message = f"SYSTEM: [{timestamp.strftime('%H:%M:%S')}] {event}"
+                self.app.log_frame.log_message(ui_message)
+            except Exception:
+                pass  # Don't let UI logging errors break the operation
+
+    def get_operation_statistics(self, time_range: Optional[timedelta] = None) -> Dict[str, Any]:
+        """
+        Get comprehensive operation statistics.
+        
+        Args:
+            time_range: Optional time range to filter statistics (e.g., last hour)
+            
+        Returns:
+            Dictionary with detailed statistics
+        """
+        with self._lock:
+            # Filter logs by time range if specified
+            if time_range:
+                cutoff_time = datetime.now() - time_range
+                filtered_logs = [log for log in self.operation_logs if log.timestamp >= cutoff_time]
+            else:
+                filtered_logs = list(self.operation_logs)
+            
+            if not filtered_logs:
+                return {
+                    'total_operations': 0,
+                    'successful_operations': 0,
+                    'failed_operations': 0,
+                    'success_rate': 0.0,
+                    'average_duration_ms': 0.0,
+                    'operation_types': {},
+                    'error_categories': {},
+                    'parameter_stats': {},
+                    'time_range': str(time_range) if time_range else 'all_time'
+                }
+            
+            # Calculate statistics
+            total_ops = len(filtered_logs)
+            successful_ops = sum(1 for log in filtered_logs if log.success)
+            failed_ops = total_ops - successful_ops
+            
+            # Operation types
+            op_types = defaultdict(int)
+            for log in filtered_logs:
+                op_types[log.operation_type] += 1
+            
+            # Error categories
+            error_categories = defaultdict(int)
+            for log in filtered_logs:
+                if not log.success and log.error_message:
+                    category = self._categorize_error(log.error_message)
+                    error_categories[category] += 1
+            
+            # Parameter statistics
+            param_stats = defaultdict(lambda: {'reads': 0, 'writes': 0, 'errors': 0, 'avg_duration_ms': 0.0})
+            param_durations = defaultdict(list)
+            
+            for log in filtered_logs:
+                param = log.parameter_name
+                param_durations[param].append(log.duration_ms)
+                
+                if log.operation_type in ['read', 'bulk_read']:
+                    param_stats[param]['reads'] += 1
+                elif log.operation_type in ['write', 'bulk_write']:
+                    param_stats[param]['writes'] += 1
+                
+                if not log.success:
+                    param_stats[param]['errors'] += 1
+            
+            # Calculate average durations
+            for param, durations in param_durations.items():
+                param_stats[param]['avg_duration_ms'] = sum(durations) / len(durations)
+            
+            # Overall average duration
+            all_durations = [log.duration_ms for log in filtered_logs]
+            avg_duration = sum(all_durations) / len(all_durations) if all_durations else 0.0
+            
+            return {
+                'total_operations': total_ops,
+                'successful_operations': successful_ops,
+                'failed_operations': failed_ops,
+                'success_rate': (successful_ops / total_ops * 100) if total_ops > 0 else 0.0,
+                'average_duration_ms': avg_duration,
+                'operation_types': dict(op_types),
+                'error_categories': dict(error_categories),
+                'parameter_stats': dict(param_stats),
+                'time_range': str(time_range) if time_range else 'all_time',
+                'session_id': self.current_session_id,
+                'log_count': total_ops
+            }
+
+    def export_operation_logs(self, file_path: str, format: str = 'json', time_range: Optional[timedelta] = None) -> bool:
+        """
+        Export operation logs to a file.
+        
+        Args:
+            file_path: Path to save the exported logs
+            format: Export format ('json', 'csv', 'txt')
+            time_range: Optional time range to filter logs
+            
+        Returns:
+            True if export was successful, False otherwise
+        """
+        try:
+            with self._lock:
+                # Filter logs by time range if specified
+                if time_range:
+                    cutoff_time = datetime.now() - time_range
+                    logs_to_export = [log for log in self.operation_logs if log.timestamp >= cutoff_time]
+                else:
+                    logs_to_export = list(self.operation_logs)
+            
+            if not logs_to_export:
+                self.logger.warning("No logs to export")
+                return False
+            
+            # Export based on format
+            if format.lower() == 'json':
+                return self._export_logs_json(file_path, logs_to_export)
+            elif format.lower() == 'csv':
+                return self._export_logs_csv(file_path, logs_to_export)
+            elif format.lower() == 'txt':
+                return self._export_logs_txt(file_path, logs_to_export)
+            else:
+                raise ValueError(f"Unsupported export format: {format}")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to export logs: {str(e)}")
+            return False
+
+    def _export_logs_json(self, file_path: str, logs: List[ParameterOperationLog]) -> bool:
+        """Export logs in JSON format."""
+        try:
+            export_data = {
+                'export_info': {
+                    'timestamp': datetime.now().isoformat(),
+                    'session_id': self.current_session_id,
+                    'log_count': len(logs),
+                    'format': 'json'
+                },
+                'statistics': self.get_operation_statistics(),
+                'logs': []
+            }
+            
+            for log in logs:
+                log_dict = asdict(log)
+                log_dict['timestamp'] = log.timestamp.isoformat()
+                export_data['logs'].append(log_dict)
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            self.log_system_event(f"Logs exported to JSON: {file_path}", {
+                'log_count': len(logs),
+                'file_size_bytes': Path(file_path).stat().st_size
+            })
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to export logs to JSON: {str(e)}")
+            return False
+
+    def _export_logs_csv(self, file_path: str, logs: List[ParameterOperationLog]) -> bool:
+        """Export logs in CSV format."""
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # Write header
+                writer.writerow([
+                    'Timestamp', 'Operation Type', 'Parameter Name', 'Success',
+                    'Value', 'Command Sent', 'Response Received', 'Error Message',
+                    'Duration (ms)', 'Session ID', 'Operation ID', 'Retry Count'
+                ])
+                
+                # Write log entries
+                for log in logs:
+                    writer.writerow([
+                        log.timestamp.isoformat(),
+                        log.operation_type,
+                        log.parameter_name,
+                        log.success,
+                        log.value,
+                        log.command_sent,
+                        log.response_received,
+                        log.error_message,
+                        log.duration_ms,
+                        log.session_id,
+                        log.operation_id,
+                        log.retry_count
+                    ])
+            
+            self.log_system_event(f"Logs exported to CSV: {file_path}", {
+                'log_count': len(logs),
+                'file_size_bytes': Path(file_path).stat().st_size
+            })
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to export logs to CSV: {str(e)}")
+            return False
+
+    def _export_logs_txt(self, file_path: str, logs: List[ParameterOperationLog]) -> bool:
+        """Export logs in human-readable text format."""
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # Write header
+                f.write("LT32Pro Parameter Operation Logs\n")
+                f.write("=" * 50 + "\n")
+                f.write(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Session ID: {self.current_session_id}\n")
+                f.write(f"Total Log Entries: {len(logs)}\n\n")
+                
+                # Write statistics
+                stats = self.get_operation_statistics()
+                f.write("Operation Statistics:\n")
+                f.write("-" * 20 + "\n")
+                f.write(f"Total Operations: {stats['total_operations']}\n")
+                f.write(f"Successful: {stats['successful_operations']}\n")
+                f.write(f"Failed: {stats['failed_operations']}\n")
+                f.write(f"Success Rate: {stats['success_rate']:.1f}%\n")
+                f.write(f"Average Duration: {stats['average_duration_ms']:.1f}ms\n\n")
+                
+                # Write detailed logs
+                f.write("Detailed Operation Logs:\n")
+                f.write("-" * 25 + "\n\n")
+                
+                for log in logs:
+                    f.write(f"[{log.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] ")
+                    f.write(f"{log.operation_type.upper()} - {log.parameter_name}\n")
+                    f.write(f"  Success: {log.success}\n")
+                    
+                    if log.value is not None:
+                        f.write(f"  Value: {log.value}\n")
+                    
+                    if log.command_sent:
+                        f.write(f"  Command: {log.command_sent}\n")
+                    
+                    if log.response_received:
+                        f.write(f"  Response: {log.response_received}\n")
+                    
+                    if log.error_message:
+                        f.write(f"  Error: {log.error_message}\n")
+                    
+                    f.write(f"  Duration: {log.duration_ms:.1f}ms\n")
+                    f.write(f"  Operation ID: {log.operation_id}\n")
+                    
+                    if log.retry_count > 0:
+                        f.write(f"  Retries: {log.retry_count}\n")
+                    
+                    f.write("\n")
+            
+            self.log_system_event(f"Logs exported to TXT: {file_path}", {
+                'log_count': len(logs),
+                'file_size_bytes': Path(file_path).stat().st_size
+            })
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to export logs to TXT: {str(e)}")
+            return False
+
+    def get_recent_operations(self, count: int = 50) -> List[ParameterOperationLog]:
+        """
+        Get the most recent parameter operations.
+        
+        Args:
+            count: Number of recent operations to return
+            
+        Returns:
+            List of recent operation logs
+        """
+        with self._lock:
+            return list(self.operation_logs)[-count:]
+
+    def get_failed_operations(self, time_range: Optional[timedelta] = None) -> List[ParameterOperationLog]:
+        """
+        Get all failed operations within a time range.
+        
+        Args:
+            time_range: Optional time range to filter operations
+            
+        Returns:
+            List of failed operation logs
+        """
+        with self._lock:
+            failed_ops = [log for log in self.operation_logs if not log.success]
+            
+            if time_range:
+                cutoff_time = datetime.now() - time_range
+                failed_ops = [log for log in failed_ops if log.timestamp >= cutoff_time]
+            
+            return failed_ops
+
+    def clear_logs(self, keep_statistics: bool = True):
+        """
+        Clear all operation logs.
+        
+        Args:
+            keep_statistics: Whether to keep current session statistics
+        """
+        with self._lock:
+            if not keep_statistics:
+                self.operation_stats.clear()
+                self.error_stats.clear()
+                self.parameter_stats.clear()
+            
+            self.operation_logs.clear()
+            self.active_operations.clear()
+            
+            # Start new session
+            self.current_session_id = self._generate_session_id()
+            self.current_operation_id = 0
+            self.session_start_time = datetime.now()
+            
+            self.log_system_event("Operation logs cleared", {
+                'kept_statistics': keep_statistics,
+                'new_session_id': self.current_session_id
+            })
+
+    def get_session_summary(self) -> OperationSummary:
+        """
+        Get summary of the current session.
+        
+        Returns:
+            OperationSummary object with session statistics
+        """
+        with self._lock:
+            session_logs = [log for log in self.operation_logs if log.session_id == self.current_session_id]
+            
+            if not session_logs:
+                return OperationSummary(
+                    session_id=self.current_session_id,
+                    start_time=self.session_start_time,
+                    end_time=datetime.now(),
+                    total_operations=0,
+                    successful_operations=0,
+                    failed_operations=0,
+                    total_duration_ms=0.0,
+                    parameters_processed=[],
+                    error_categories={},
+                    operation_types={}
+                )
+            
+            successful = sum(1 for log in session_logs if log.success)
+            failed = len(session_logs) - successful
+            total_duration = sum(log.duration_ms for log in session_logs)
+            
+            # Get unique parameters processed
+            parameters = list(set(log.parameter_name for log in session_logs))
+            
+            # Error categories
+            error_categories = defaultdict(int)
+            for log in session_logs:
+                if not log.success and log.error_message:
+                    category = self._categorize_error(log.error_message)
+                    error_categories[category] += 1
+            
+            # Operation types
+            operation_types = defaultdict(int)
+            for log in session_logs:
+                operation_types[log.operation_type] += 1
+            
+            return OperationSummary(
+                session_id=self.current_session_id,
+                start_time=self.session_start_time,
+                end_time=datetime.now(),
+                total_operations=len(session_logs),
+                successful_operations=successful,
+                failed_operations=failed,
+                total_duration_ms=total_duration,
+                parameters_processed=parameters,
+                error_categories=dict(error_categories),
+                operation_types=dict(operation_types)
+            )
+</document_content>
+</document>
+<document index="54">
+<source>.\services\parameter_processor.py</source>
+<document_content>
+"""
+Parameter Processor for cleaning and standardizing device parameter values.
+
+This module provides functionality to process raw device responses into clean,
+UI-friendly parameter values. It handles time parameters, odometer values,
+and hourmeter values according to the requirements.
+"""
+
+import re
+import logging
+from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
+from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+
+class ParameterProcessingError(Exception):
+    """Custom exception for parameter processing errors."""
+    pass
+
+
+class ErrorSeverity(Enum):
+    """Severity levels for parameter processing errors."""
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+@dataclass
+class ProcessingResult:
+    """Result of parameter processing operation."""
+    success: bool
+    original_value: str
+    processed_value: str
+    error_message: Optional[str] = None
+    error_severity: Optional[ErrorSeverity] = None
+    parameter_name: Optional[str] = None
+
+
+@dataclass
+class ProcessingSummary:
+    """Summary of batch parameter processing operation."""
+    total_parameters: int
+    successful_parameters: int
+    failed_parameters: int
+    warnings: List[str]
+    errors: List[str]
+    processing_results: Dict[str, ProcessingResult]
+
+
+class ParameterProcessor:
+    """
+    Processes raw device parameter values into clean, standardized formats for UI display.

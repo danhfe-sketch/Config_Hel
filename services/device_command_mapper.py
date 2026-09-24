@@ -478,6 +478,15 @@ class DeviceCommandMapper:
         
         if not isinstance(param_name, str):
             raise ValueError(f"Parameter name must be a string, got {type(param_name).__name__}")
+            
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        # Se for uma string que termine com ".0" e seja convertível para float/int, transforma
+        elif isinstance(value, str) and value.endswith('.0'):
+            try:
+                value = int(float(value))
+            except ValueError:
+                pass
         
         self.logger.debug(f"Generating command for parameter: {param_name} with value: {value}")
         

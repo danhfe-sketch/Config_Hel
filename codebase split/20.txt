@@ -1,0 +1,4328 @@
+        self._on_cancel()
+        
+    def _close_dialog(self):
+        """Close the dialog safely."""
+        # Set flag to prevent further updates
+        self.is_destroying = True
+        
+        try:
+            if hasattr(self, 'dialog') and self.dialog is not None:
+                if self.dialog.winfo_exists():
+                    self.dialog.grab_release()
+                    self.dialog.destroy()
+                self.dialog = None
+        except Exception:
+            pass
+        
+        # Clear widget references to prevent further access
+        try:
+            self.status_label = None
+            self.progress_bar = None
+            self.percentage_label = None
+            self.cancel_button = None
+        except Exception:
+            pass
+            
+    def show(self):
+        """Show the dialog."""
+        try:
+            if hasattr(self, 'dialog') and self.dialog is not None and self.dialog.winfo_exists():
+                self.dialog.deiconify()
+                self.dialog.lift()
+                self.dialog.focus()
+        except Exception:
+            pass
+        
+    def hide(self):
+        """Hide the dialog."""
+        try:
+            if hasattr(self, 'dialog') and self.dialog is not None and self.dialog.winfo_exists():
+                self.dialog.withdraw()
+        except Exception:
+            pass
+            
+    def close(self):
+        """Close the dialog."""
+        self._close_dialog()
+        
+    def _check_timeout(self):
+        """Check for timeout and close dialog if stuck."""
+        try:
+            if self.is_destroying:
+                return
+                
+            if not hasattr(self, 'dialog') or self.dialog is None or not self.dialog.winfo_exists():
+                return
+                
+            # Check if dialog has been inactive for too long
+            current_time = time.time()
+            if current_time - self.last_update_time > self.timeout_seconds:
+                # Dialog has been stuck, close it
+                self._close_dialog()
+                return
+                
+            # Schedule next timeout check
+            self.dialog.after(10000, self._check_timeout)  # Check every 10 seconds
+            
+        except Exception:
+            # If there's any error, just close the dialog
+            self._close_dialog()
+
+
+def create_simple_progress_dialog(parent, i18n_service, operation_type: str = "device_operation") -> SimpleDeviceProgressDialog:
+    """Factory function to create a simple progress dialog."""
+    return SimpleDeviceProgressDialog(parent, i18n_service, operation_type)
+
+
+# Utility functions for common progress updates
+def create_device_to_profile_progress(step: int, total_steps: int, i18n_service, 
+                                     current_parameter: int = 0, total_parameters: int = 0,
+                                     parameter_name: str = "") -> SimpleProgressInfo:
+    """Create progress info for device-to-profile operation with parameter-based progress."""
+    # Simplified messages focused on parameter reading
+    if total_parameters > 0 and current_parameter > 0:
+        step_messages = {
+            1: i18n_service.get('reading_parameters', 'Lendo par├ómetros do dispositivo...'),
+            2: i18n_service.get('reading_parameters', 'Lendo par├ómetros do dispositivo...'),
+            3: i18n_service.get('processing_parameters', 'Processando par├ómetros...'),
+            4: i18n_service.get('saving_profile', 'Salvando perfil...')
+        }
+    else:
+        step_messages = {
+            1: i18n_service.get('initializing', 'Inicializando...'),
+            2: i18n_service.get('reading_parameters', 'Lendo par├ómetros do dispositivo...'),
+            3: i18n_service.get('creating_profile', 'Criando arquivo de perfil...'),
+            4: i18n_service.get('saving_profile', 'Salvando perfil...')
+        }
+    
+    step_names = {
+        1: i18n_service.get('step_connecting', 'Conex├úo'),
+        2: i18n_service.get('step_reading', 'Leitura'),
+        3: i18n_service.get('step_creating', 'Cria├º├úo'),
+        4: i18n_service.get('step_saving', 'Salvamento')
+    }
+    
+    # Calculate progress purely based on parameters read
+    if total_parameters > 0:
+        # Pure parameter-based progress (0-100% based on parameters read)
+        progress_percentage = (current_parameter / total_parameters) * 100
+    else:
+        # Fallback to step-based if no parameter info available
+        progress_percentage = (step / total_steps) * 100
+    
+    return SimpleProgressInfo(
+        operation_type='device_to_profile',
+        current_step=step,
+        total_steps=total_steps,
+        step_name=step_names.get(step, f'Passo {step}'),
+        status_message=step_messages.get(step, f'Executando passo {step}...'),
+        progress_percentage=min(progress_percentage, 100),
+        current_parameter=current_parameter,
+        total_parameters=total_parameters,
+        parameter_name=parameter_name
+    )
+
+
+def create_profile_to_device_progress(step: int, total_steps: int, i18n_service,
+                                     current_parameter: int = 0, total_parameters: int = 0,
+                                     parameter_name: str = "") -> SimpleProgressInfo:
+    """Create progress info for profile-to-device operation with parameter-based progress."""
+    # Simplified messages focused on parameter deployment
+    if total_parameters > 0 and current_parameter > 0:
+        step_messages = {
+            1: i18n_service.get('preparing_deployment', 'Preparando envio...'),
+            2: i18n_service.get('validating_profile', 'Validando configura├º├úo...'),
+            3: i18n_service.get('deploying_parameters', 'Enviando par├ómetros para dispositivo...'),
+            4: i18n_service.get('finalizing', 'Finalizando...')
+        }
+    else:
+        step_messages = {
+            1: i18n_service.get('loading_profile', 'Carregando arquivo de perfil...'),
+            2: i18n_service.get('validating_profile', 'Validando configura├º├úo...'),
+            3: i18n_service.get('deploying_to_device', 'Enviando para dispositivo...'),
+            4: i18n_service.get('updating_interface', 'Atualizando interface...')
+        }
+    
+    step_names = {
+        1: i18n_service.get('step_loading', 'Carregamento'),
+        2: i18n_service.get('step_validation', 'Valida├º├úo'),
+        3: i18n_service.get('step_deployment', 'Envio'),
+        4: i18n_service.get('step_update', 'Atualiza├º├úo')
+    }
+    
+    # Calculate progress purely based on parameters processed
+    if total_parameters > 0:
+        # Pure parameter-based progress (0-100% based on parameters processed)
+        progress_percentage = (current_parameter / total_parameters) * 100
+    else:
+        # Fallback to step-based if no parameter info available
+        progress_percentage = (step / total_steps) * 100
+    
+    return SimpleProgressInfo(
+        operation_type='profile_to_device',
+        current_step=step,
+        total_steps=total_steps,
+        step_name=step_names.get(step, f'Passo {step}'),
+        status_message=step_messages.get(step, f'Executando passo {step}...'),
+        progress_percentage=min(progress_percentage, 100),
+        current_parameter=current_parameter,
+        total_parameters=total_parameters,
+        parameter_name=parameter_name
+    )
+</document_content>
+</document>
+<document index="103">
+<source>.\ui\simple_progress_dialog.py</source>
+<document_content>
+"""
+Simple Progress Dialog - Thread-safe progress dialog with language support.
+
+This module provides a simple, reliable progress dialog for profile operations
+that integrates with the existing translation system and uses thread-safe updates.
+"""
+
+import tkinter as tk
+from tkinter import ttk
+import threading
+import time
+from typing import Callable, Optional
+
+
+class SimpleProgressDialog:
+    """Simple, thread-safe progress dialog with language support."""
+    
+    def __init__(self, parent, title_key: str, total_steps: int, i18n_service=None):
+        """
+        Initialize the progress dialog.
+        
+        Args:
+            parent: Parent window
+            title_key: Translation key for dialog title
+            total_steps: Total number of steps for progress calculation
+            i18n_service: Translation service instance
+        """
+        self.parent = parent
+        self.title_key = title_key
+        self.total_steps = max(1, total_steps)  # Ensure at least 1 to avoid division by zero
+        self.i18n = i18n_service
+        self.current_step = 0
+        self.is_cancelled = False
+        self.is_closed = False
+        self.cancel_callback = None
+        self.dialog = None
+        
+        # Create dialog in main thread
+        self._create_dialog()
+        
+    def _create_dialog(self):
+        """Create the progress dialog using basic Tkinter components."""
+        try:
+            # Create toplevel window
+            self.dialog = tk.Toplevel(self.parent)
+            
+            # Set title using translation service
+            title = self._get_translated_text(self.title_key, "Progress")
+            self.dialog.title(title)
+            
+            self.dialog.geometry("400x150")
+            self.dialog.resizable(False, False)
+            
+            # Set colors to match application theme
+            self.dialog.configure(bg='#2b2b2b')
+            
+            # Center the dialog
+            self._center_dialog()
+            
+            # Make modal
+            self.dialog.transient(self.parent)
+            self.dialog.grab_set()
+            
+            # Create main container with padding
+            main_frame = tk.Frame(self.dialog, bg='#2b2b2b', padx=20, pady=20)
+            main_frame.pack(fill="both", expand=True)
+            
+            # Status message label
+            self.status_label = tk.Label(
+                main_frame,
+                text=self._get_translated_text("initializing", "Initializing..."),
+                font=("Segoe UI", 10),
+                fg='#cccccc',
+                bg='#2b2b2b',
+                wraplength=360,
+                justify='center'
+            )
+            self.status_label.pack(pady=(0, 15))
+            
+            # Progress bar using ttk for better appearance
+            style = ttk.Style()
+            style.theme_use('clam')
+            style.configure("Custom.Horizontal.TProgressbar", 
+                          background='#0078d4',
+                          troughcolor='#404040',
+                          borderwidth=0,
+                          lightcolor='#0078d4',
+                          darkcolor='#0078d4')
+            
+            self.progress_var = tk.DoubleVar()
+            self.progress_bar = ttk.Progressbar(
+                main_frame,
+                variable=self.progress_var,
+                maximum=100,
+                style="Custom.Horizontal.TProgressbar",
+                length=350
+            )
+            self.progress_bar.pack(pady=(0, 10))
+            
+            # Percentage label
+            self.percentage_label = tk.Label(
+                main_frame,
+                text="0%",
+                font=("Segoe UI", 9),
+                fg='#cccccc',
+                bg='#2b2b2b'
+            )
+            self.percentage_label.pack(pady=(0, 15))
+            
+            # Cancel button
+            self.cancel_button = tk.Button(
+                main_frame,
+                text=self._get_translated_text("cancel", "Cancel"),
+                command=self._on_cancel,
+                font=("Segoe UI", 9),
+                bg='#404040',
+                fg='white',
+                activebackground='#505050',
+                activeforeground='white',
+                relief='flat',
+                borderwidth=0,
+                padx=15,
+                pady=5
+            )
+            self.cancel_button.pack()
+            
+            # Handle window close
+            self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+            
+        except Exception as e:
+            print(f"Error creating progress dialog: {e}")
+            self.dialog = None
+            
+    def _get_translated_text(self, key: str, default: str) -> str:
+        """Get translated text using i18n service or return default."""
+        if self.i18n:
+            return self.i18n.get(key, default)
+        return default
+        
+    def _center_dialog(self):
+        """Center the dialog on parent window."""
+        try:
+            self.dialog.update_idletasks()
+            
+            # Get parent position and size
+            parent_x = self.parent.winfo_x()
+            parent_y = self.parent.winfo_y()
+            parent_width = self.parent.winfo_width()
+            parent_height = self.parent.winfo_height()
+            
+            # Calculate center position
+            dialog_width = 400
+            dialog_height = 150
+            x = parent_x + (parent_width - dialog_width) // 2
+            y = parent_y + (parent_height - dialog_height) // 2
+            
+            self.dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        except Exception:
+            # If centering fails, dialog will appear at default position
+            pass
+            
+    def update_progress(self, current_step: int, message_key: str, param_name: str = ""):
+        """
+        Update progress - thread safe using tkinter's after() method.
+        
+        Args:
+            current_step: Current step number (0-based or 1-based)
+            message_key: Translation key for status message
+            param_name: Optional parameter name to include in message
+        """
+        if self.is_closed or not self.dialog:
+            return
+            
+        # Schedule update on main thread using after_idle for immediate execution
+        try:
+            if self.dialog.winfo_exists():
+                self.dialog.after_idle(self._do_update, current_step, message_key, param_name)
+        except Exception:
+            # Dialog may have been destroyed
+            pass
+            
+    def _do_update(self, current_step: int, message_key: str, param_name: str = ""):
+        """Perform the actual update on main thread."""
+        try:
+            if self.is_closed or not self.dialog:
+                return
+                
+            # Update current step
+            self.current_step = current_step
+            
+            # Calculate progress percentage
+            progress_percentage = min(100, (current_step / self.total_steps) * 100)
+            
+            # Update status message
+            status_text = self._get_translated_text(message_key, f"Step {current_step}")
+            if param_name:
+                # Format message with parameter name
+                status_text = f"{status_text}: {param_name}"
+                
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.config(text=status_text)
+            
+            # Update progress bar
+            if hasattr(self, 'progress_var') and self.progress_var:
+                self.progress_var.set(progress_percentage)
+            
+            # Update percentage label
+            percentage_text = f"{int(progress_percentage)}%"
+            if hasattr(self, 'percentage_label') and self.percentage_label:
+                self.percentage_label.config(text=percentage_text)
+                
+        except Exception as e:
+            print(f"Progress update error: {e}")
+            
+    def set_cancel_callback(self, callback: Callable):
+        """Set callback function for cancel operation."""
+        self.cancel_callback = callback
+        
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        if self.cancel_callback and not self.is_cancelled:
+            self.is_cancelled = True
+            try:
+                self.cancel_callback()
+            except Exception as e:
+                print(f"Cancel callback error: {e}")
+        self.close_dialog()
+        
+    def _on_close(self):
+        """Handle window close event."""
+        self._on_cancel()
+        
+    def show_success(self, message_key: str = "operation_completed"):
+        """Show success state with localized message."""
+        if self.is_closed or not self.dialog:
+            return
+            
+        try:
+            if self.dialog.winfo_exists():
+                self.dialog.after_idle(self._do_show_success, message_key)
+        except Exception:
+            pass
+            
+    def _do_show_success(self, message_key: str):
+        """Show success state on main thread."""
+        try:
+            if hasattr(self, 'status_label') and self.status_label:
+                success_text = self._get_translated_text(message_key, "Operation completed successfully!")
+                self.status_label.config(text=success_text)
+                
+            if hasattr(self, 'progress_var') and self.progress_var:
+                self.progress_var.set(100)
+                
+            if hasattr(self, 'percentage_label') and self.percentage_label:
+                self.percentage_label.config(text="100%")
+                
+            if hasattr(self, 'cancel_button') and self.cancel_button:
+                close_text = self._get_translated_text("close", "Close")
+                self.cancel_button.config(text=close_text, bg='#00aa00')
+        except Exception:
+            pass
+            
+    def show_error(self, error_message: str, message_key: str = "operation_failed"):
+        """Show error state with localized message."""
+        if self.is_closed or not self.dialog:
+            return
+            
+        try:
+            if self.dialog.winfo_exists():
+                self.dialog.after_idle(self._do_show_error, error_message, message_key)
+        except Exception:
+            pass
+            
+    def _do_show_error(self, error_message: str, message_key: str):
+        """Show error state on main thread."""
+        try:
+            if hasattr(self, 'status_label') and self.status_label:
+                error_prefix = self._get_translated_text(message_key, "Operation failed")
+                error_text = f"{error_prefix}: {error_message}"
+                self.status_label.config(text=error_text)
+                
+            if hasattr(self, 'cancel_button') and self.cancel_button:
+                close_text = self._get_translated_text("close", "Close")
+                self.cancel_button.config(text=close_text, bg='#cc0000')
+        except Exception:
+            pass
+            
+    def show(self):
+        """Show dialog."""
+        try:
+            if self.dialog and not self.is_closed:
+                self.dialog.deiconify()
+                self.dialog.lift()
+                self.dialog.focus()
+        except Exception:
+            pass
+            
+    def hide(self):
+        """Hide dialog."""
+        try:
+            if self.dialog and not self.is_closed:
+                self.dialog.withdraw()
+        except Exception:
+            pass
+            
+    def close_dialog(self):
+        """Close dialog safely."""
+        if self.is_closed:
+            return
+            
+        self.is_closed = True
+        
+        try:
+            if self.dialog:
+                self.dialog.grab_release()
+                self.dialog.destroy()
+                self.dialog = None
+        except Exception:
+            pass
+            
+        # Clear references to prevent further access
+        self.status_label = None
+        self.progress_bar = None
+        self.progress_var = None
+        self.percentage_label = None
+        self.cancel_button = None
+
+
+# Utility function for easy dialog creation
+def create_progress_dialog(parent, title_key: str, total_steps: int, i18n_service=None) -> SimpleProgressDialog:
+    """
+    Factory function to create a simple progress dialog.
+    
+    Args:
+        parent: Parent window
+        title_key: Translation key for dialog title
+        total_steps: Total number of steps
+        i18n_service: Translation service instance
+        
+    Returns:
+        SimpleProgressDialog instance
+    """
+    return SimpleProgressDialog(parent, title_key, total_steps, i18n_service)
+</document_content>
+</document>
+<document index="104">
+<source>.\ui\splash_screen.py</source>
+<document_content>
+import tkinter as tk
+from PIL import Image, ImageTk
+import os
+import sys
+import time
+import threading
+import logging
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
+
+# Import the helper function for resource paths
+from utils.helpers import resource_path
+
+# Set up logging for splash screen
+logger = logging.getLogger(__name__)
+
+@dataclass
+class SplashConfig:
+    """Configuration settings for the splash screen."""
+    image_path: str = "assets/images/splash.png"
+    fallback_image_paths: List[str] = None
+    timeout: int = 5000  # milliseconds
+    min_display_time: int = 1000  # milliseconds
+    fade_in_duration: int = 300  # milliseconds
+    fade_out_duration: int = 300  # milliseconds
+    progress_steps: int = 100
+    window_size: Tuple[int, int] = (600, 400)  # default size if image loading fails
+    max_image_size: Tuple[int, int] = (600, 400)  # maximum image dimensions
+    background_color: str = "#0066cc"
+    text_color: str = "white"
+    progress_color: str = "#00ccff"
+    progress_bg_color: str = "#003366"
+    
+    def __post_init__(self):
+        """Initialize fallback image paths if not provided."""
+        if self.fallback_image_paths is None:
+            # Cascading fallback order as per requirements: splash.png -> logo.png -> text-based
+            self.fallback_image_paths = [
+                "assets/images/logo.png",      # Primary fallback
+                "assets/icon.ico",             # Secondary fallback (app icon)
+                "assets/icons/app_icon.png",   # Tertiary fallback
+                "assets/images/icon.png",      # Additional fallback option
+                "icon.ico"                     # Root level icon as last resort
+            ]
+
+@dataclass
+class ProgressState:
+    """Progress state management for splash screen."""
+    current: float = 0.0  # 0.0 to 1.0
+    target: float = 0.0   # Target progress for smooth animation
+    message: str = "Loading..."
+    is_complete: bool = False
+    animation_speed: float = 0.02  # Progress increment per animation frame
+    last_update_time: float = 0.0  # Last time progress was updated
+
+class SplashScreen:
+    """
+    A splash screen that displays while the application is loading.
+    Enhanced with better error handling and resource management.
+    """
+    def __init__(self, config: Optional[SplashConfig] = None, image_path: Optional[str] = None, 
+                 timeout: int = 5000, min_display_time: int = 1000):
+        """
+        Initialize the splash screen.
+        
+        Args:
+            config: SplashConfig object with all settings (preferred)
+            image_path: Path to the splash image (legacy support)
+            timeout: Maximum time to display the splash screen in milliseconds (legacy support)
+            min_display_time: Minimum time to display the splash screen in milliseconds (legacy support)
+        """
+        # Use config if provided, otherwise create from legacy parameters
+        if config is None:
+            self.config = SplashConfig(
+                image_path=image_path or "assets/images/splash.png",
+                timeout=timeout,
+                min_display_time=min_display_time
+            )
+        else:
+            self.config = config
+            
+        # Override config with explicit parameters if provided (for backward compatibility)
+        if image_path is not None:
+            self.config.image_path = image_path
+        if timeout != 5000:  # Only override if explicitly changed
+            self.config.timeout = timeout
+        if min_display_time != 1000:  # Only override if explicitly changed
+            self.config.min_display_time = min_display_time
+            
+        self.start_time = time.time() * 1000  # Convert to milliseconds
+        self.progress_state = ProgressState()
+        self.progress_state.last_update_time = time.time()
+        self._animation_running = False
+        self._close_requested = False
+        
+        logger.info(f"Initializing splash screen with config: {self.config}")
+        logger.debug(f"Splash screen start time: {self.start_time}")
+        
+        # Initialize the splash window
+        self._init_window()
+        
+        # Load the splash content (image or fallback)
+        self._load_splash_content()
+        
+        # Setup progress bar
+        self._setup_progress_bar()
+        
+        # Center and show the window
+        self._center_window()
+        self._fade_in()
+        self._start_progress_animation()
+        
+        # Set timeout to close splash screen
+        self.root.after(self.config.timeout, self.close)
+    
+    def _init_window(self):
+        """Initialize the splash window with proper attributes."""
+        try:
+            self.root = tk.Tk()
+            self.root.overrideredirect(True)  # Remove window decorations
+            
+            # Set window attributes for splash screen appearance
+            self.root.attributes('-topmost', True)  # Keep on top
+            self.root.attributes('-alpha', 0.0)  # Start transparent for fade-in
+            
+            logger.debug("Splash window initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize splash window: {e}")
+            raise
+    
+    def _validate_resource_path(self, path: str) -> Optional[str]:
+        """
+        Validate and resolve a resource path with comprehensive error handling.
+        
+        Args:
+            path: Relative path to validate
+            
+        Returns:
+            Absolute path if valid, None otherwise
+        """
+        if not path:
+            logger.warning("Empty or None path provided for validation")
+            return None
+        
+        try:
+            # Step 1: Resolve the path
+            logger.debug(f"Resolving resource path: {path}")
+            resolved_path = resource_path(path)
+            logger.debug(f"Path resolved to: {resolved_path}")
+            
+            # Step 2: Check if path exists
+            if not os.path.exists(resolved_path):
+                logger.debug(f"Path does not exist: {resolved_path}")
+                
+                # Try to provide helpful debugging information
+                parent_dir = os.path.dirname(resolved_path)
+                if os.path.exists(parent_dir):
+                    try:
+                        siblings = os.listdir(parent_dir)
+                        logger.debug(f"Parent directory exists with contents: {siblings}")
+                        
+                        # Look for similar files
+                        filename = os.path.basename(path)
+                        similar_files = [f for f in siblings if filename.lower() in f.lower() or f.lower() in filename.lower()]
+                        if similar_files:
+                            logger.debug(f"Similar files found: {similar_files}")
+                    except Exception as e:
+                        logger.debug(f"Could not list parent directory contents: {e}")
+                else:
+                    logger.debug(f"Parent directory does not exist: {parent_dir}")
+                
+                return None
+            
+            # Step 3: Verify it's a file (not a directory)
+            if not os.path.isfile(resolved_path):
+                logger.warning(f"Path exists but is not a file: {resolved_path}")
+                return None
+            
+            # Step 4: Check file permissions
+            if not os.access(resolved_path, os.R_OK):
+                logger.warning(f"File exists but is not readable: {resolved_path}")
+                return None
+            
+            # Step 5: Get file information for debugging
+            try:
+                file_size = os.path.getsize(resolved_path)
+                logger.debug(f"Ô£ô Valid resource found: {resolved_path} ({file_size} bytes)")
+            except Exception as e:
+                logger.debug(f"Could not get file size for {resolved_path}: {e}")
+            
+            return resolved_path
+            
+        except ValueError as e:
+            logger.warning(f"Invalid path format '{path}': {e}")
+            return None
+            
+        except OSError as e:
+            logger.warning(f"OS error resolving path '{path}': {e}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Unexpected error resolving path '{path}': {type(e).__name__}: {e}")
+            return None
+    
+    def _load_image_with_fallbacks(self) -> Optional[ImageTk.PhotoImage]:
+        """
+        Load splash image with robust cascading fallback mechanism.
+        
+        Fallback order:
+        1. Primary splash image (splash.png)
+        2. Fallback images (logo.png, icon.ico, etc.)
+        3. Text-based fallback (handled by caller)
+        
+        Returns:
+            PhotoImage if successful, None if all image attempts fail
+        """
+        # Create list of paths to try with explicit fallback order
+        paths_to_try = [self.config.image_path] + self.config.fallback_image_paths
+        
+        logger.info(f"Starting cascading image fallback mechanism with {len(paths_to_try)} possible paths")
+        logger.debug(f"Fallback order: {' -> '.join(paths_to_try)} -> text-based fallback")
+        
+        fallback_results = []  # Track results for debugging
+        
+        for i, path in enumerate(paths_to_try):
+            fallback_level = "primary" if i == 0 else f"fallback-{i}"
+            logger.info(f"[{fallback_level}] Attempting to load image: {path}")
+            
+            # Step 1: Validate resource path
+            resolved_path = self._validate_resource_path(path)
+            if resolved_path is None:
+                error_msg = f"Path resolution failed for {path}"
+                logger.warning(f"[{fallback_level}] {error_msg}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'path_resolution',
+                    'success': False,
+                    'error': error_msg
+                })
+                continue
+            
+            # Step 2: Attempt to load image file
+            try:
+                logger.debug(f"[{fallback_level}] Opening image file: {resolved_path}")
+                img = Image.open(resolved_path)
+                logger.info(f"[{fallback_level}] Successfully opened image file")
+                logger.debug(f"[{fallback_level}] Original image size: {img.size}, mode: {img.mode}")
+                
+                # Step 3: Validate image properties
+                if img.size[0] <= 0 or img.size[1] <= 0:
+                    raise ValueError(f"Invalid image dimensions: {img.size}")
+                
+                # Step 4: Process image (resize if needed)
+                processed_img = self._process_image_for_display(img, fallback_level)
+                if processed_img is None:
+                    raise ValueError("Image processing failed")
+                
+                # Step 5: Convert to PhotoImage
+                logger.debug(f"[{fallback_level}] Converting to PhotoImage")
+                photo_image = ImageTk.PhotoImage(processed_img)
+                
+                # Success!
+                logger.info(f"[{fallback_level}] Ô£ô Image successfully loaded and processed: {resolved_path}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'complete',
+                    'success': True,
+                    'resolved_path': resolved_path,
+                    'original_size': img.size,
+                    'final_size': processed_img.size
+                })
+                
+                # Log successful fallback summary
+                self._log_fallback_success(fallback_results)
+                return photo_image
+                
+            except FileNotFoundError as e:
+                error_msg = f"Image file not found: {e}"
+                logger.warning(f"[{fallback_level}] {error_msg}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'file_access',
+                    'success': False,
+                    'error': error_msg
+                })
+                
+            except PermissionError as e:
+                error_msg = f"Permission denied accessing image: {e}"
+                logger.warning(f"[{fallback_level}] {error_msg}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'file_access',
+                    'success': False,
+                    'error': error_msg
+                })
+                
+            except (OSError, IOError) as e:
+                error_msg = f"I/O error loading image: {e}"
+                logger.warning(f"[{fallback_level}] {error_msg}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'file_io',
+                    'success': False,
+                    'error': error_msg
+                })
+                
+            except ValueError as e:
+                error_msg = f"Invalid image data: {e}"
+                logger.warning(f"[{fallback_level}] {error_msg}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'image_validation',
+                    'success': False,
+                    'error': error_msg
+                })
+                
+            except Exception as e:
+                error_msg = f"Unexpected error loading image: {type(e).__name__}: {e}"
+                logger.error(f"[{fallback_level}] {error_msg}")
+                fallback_results.append({
+                    'path': path,
+                    'level': fallback_level,
+                    'stage': 'unexpected_error',
+                    'success': False,
+                    'error': error_msg
+                })
+        
+        # All image loading attempts failed
+        logger.error("Ô£ù All image loading attempts failed, will use text-based fallback")
+        self._log_fallback_failure(fallback_results)
+        return None
+    
+    def _process_image_for_display(self, img: Image.Image, fallback_level: str) -> Optional[Image.Image]:
+        """
+        Process an image for display with proper error handling.
+        
+        Args:
+            img: PIL Image to process
+            fallback_level: Current fallback level for logging
+            
+        Returns:
+            Processed Image or None if processing fails
+        """
+        try:
+            # Ensure image is in a compatible mode
+            if img.mode not in ('RGB', 'RGBA', 'L'):
+                logger.debug(f"[{fallback_level}] Converting image from {img.mode} to RGB")
+                img = img.convert('RGB')
+            
+            # Get original dimensions
+            width, height = img.size
+            max_width, max_height = self.config.max_image_size
+            
+            logger.debug(f"[{fallback_level}] Image dimensions: {width}x{height}, max allowed: {max_width}x{max_height}")
+            
+            # Resize if needed while maintaining aspect ratio
+            if width > max_width or height > max_height:
+                ratio = min(max_width / width, max_height / height)
+                new_width = int(width * ratio)
+                new_height = int(height * ratio)
+                
+                logger.debug(f"[{fallback_level}] Resizing image: {width}x{height} -> {new_width}x{new_height} (ratio: {ratio:.3f})")
+                
+                # Use high-quality resampling
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+                logger.debug(f"[{fallback_level}] Image resized successfully")
+            else:
+                logger.debug(f"[{fallback_level}] Image size is within limits, no resizing needed")
+            
+            return img
+            
+        except Exception as e:
+            logger.error(f"[{fallback_level}] Error processing image: {e}")
+            return None
+    
+    def _log_fallback_success(self, fallback_results: list):
+        """Log successful fallback information for debugging."""
+        successful_result = fallback_results[-1]  # Last result should be successful
+        failed_attempts = len(fallback_results) - 1
+        
+        if failed_attempts > 0:
+            logger.info(f"Image loaded successfully after {failed_attempts} failed attempt(s)")
+            logger.debug("Failed attempts summary:")
+            for result in fallback_results[:-1]:
+                logger.debug(f"  - {result['level']}: {result['path']} failed at {result['stage']} - {result['error']}")
+        
+        logger.info(f"Final image: {successful_result['resolved_path']} "
+                   f"({successful_result['original_size']} -> {successful_result['final_size']})")
+    
+    def _log_fallback_failure(self, fallback_results: list):
+        """Log detailed failure information for debugging."""
+        logger.error("Detailed fallback failure analysis:")
+        logger.error(f"Total attempts: {len(fallback_results)}")
+        
+        # Group failures by stage
+        failure_stages = {}
+        for result in fallback_results:
+            stage = result['stage']
+            if stage not in failure_stages:
+                failure_stages[stage] = []
+            failure_stages[stage].append(result)
+        
+        for stage, failures in failure_stages.items():
+            logger.error(f"  {stage.replace('_', ' ').title()} failures: {len(failures)}")
+            for failure in failures:
+                logger.error(f"    - {failure['level']}: {failure['path']} - {failure['error']}")
+        
+        # Provide troubleshooting suggestions
+        logger.error("Troubleshooting suggestions:")
+        logger.error("  1. Verify image files exist in the assets/images/ directory")
+        logger.error("  2. Check file permissions for image files")
+        logger.error("  3. Ensure images are in supported formats (PNG, JPG, ICO)")
+        logger.error("  4. Verify PyInstaller is bundling assets correctly if running as executable")
+        logger.error("  5. Check that image files are not corrupted")
+    
+    def _create_text_fallback(self):
+        """
+        Create a robust text-based fallback splash screen.
+        
+        This is the final fallback when all image loading attempts fail.
+        Provides a professional-looking splash screen using only text and colors.
+        """
+        logger.info("Creating text-based fallback splash screen")
+        
+        try:
+            width, height = self.config.window_size
+            
+            # Create main container frame
+            main_frame = tk.Frame(
+                self.root,
+                bg=self.config.background_color,
+                width=width,
+                height=height
+            )
+            main_frame.pack(fill="both", expand=True)
+            main_frame.pack_propagate(False)  # Maintain fixed size
+            
+            # Create title section
+            title_frame = tk.Frame(main_frame, bg=self.config.background_color)
+            title_frame.pack(expand=True, fill="both")
+            
+            # Main application title
+            title_label = tk.Label(
+                title_frame,
+                text="LT32Pro Configurator",
+                font=("Arial", 28, "bold"),
+                bg=self.config.background_color,
+                fg=self.config.text_color,
+                pady=20
+            )
+            title_label.pack(expand=True)
+            
+            # Subtitle/version info
+            subtitle_label = tk.Label(
+                title_frame,
+                text="Device Configuration Tool",
+                font=("Arial", 14),
+                bg=self.config.background_color,
+                fg=self.config.text_color,
+                pady=(0, 10)
+            )
+            subtitle_label.pack()
+            
+            # Loading message
+            loading_label = tk.Label(
+                title_frame,
+                text="Loading Application...",
+                font=("Arial", 12),
+                bg=self.config.background_color,
+                fg=self.config.text_color,
+                pady=(20, 0)
+            )
+            loading_label.pack()
+            
+            # Store reference to main label for potential updates
+            self.splash_label = title_label
+            
+            # Set window size for text fallback
+            self.root.geometry(f"{width}x{height}")
+            
+            # Add a subtle border effect
+            self.root.configure(bg=self.config.progress_color)  # Border color
+            main_frame.configure(highlightbackground=self.config.progress_color, highlightthickness=2)
+            
+            logger.info(f"Ô£ô Text-based fallback splash created successfully ({width}x{height})")
+            logger.debug("Text fallback includes: title, subtitle, loading message, and styled border")
+            
+        except Exception as e:
+            logger.error(f"Error creating text fallback splash: {e}")
+            # Create minimal fallback as last resort
+            self._create_minimal_fallback()
+    
+    def _create_minimal_fallback(self):
+        """
+        Create the most basic fallback splash screen possible.
+        
+        This is used when even the text fallback fails.
+        """
+        logger.warning("Creating minimal fallback splash screen")
+        
+        try:
+            # Create the simplest possible splash
+            self.splash_label = tk.Label(
+                self.root,
+                text="LT32Pro Configurator\n\nLoading...",
+                font=("Arial", 16),
+                bg="#0066cc",
+                fg="white",
+                padx=50,
+                pady=50
+            )
+            self.splash_label.pack(expand=True, fill="both")
+            
+            # Set basic window size
+            self.root.geometry("400x200")
+            
+            logger.info("Ô£ô Minimal fallback splash created successfully")
+            
+        except Exception as e:
+            logger.critical(f"Failed to create even minimal fallback splash: {e}")
+            # At this point, we have to give up on the splash screen
+            raise RuntimeError("Unable to create any form of splash screen") from e
+    
+    def _load_splash_content(self):
+        """
+        Load the splash screen content with robust cascading fallback mechanism.
+        
+        Fallback sequence:
+        1. Try to load primary splash image (splash.png)
+        2. Try fallback images (logo.png, icon.ico, etc.)
+        3. Create styled text-based fallback
+        4. Create minimal text fallback (last resort)
+        """
+        logger.info("Starting splash content loading with cascading fallback mechanism")
+        
+        try:
+            # Phase 1: Attempt image loading with fallbacks
+            logger.debug("Phase 1: Attempting image loading")
+            splash_image = self._load_image_with_fallbacks()
+            
+            if splash_image is not None:
+                # Successfully loaded an image
+                logger.info("Ô£ô Phase 1 successful: Image-based splash screen created")
+                self.splash_image = splash_image
+                self.splash_label = tk.Label(self.root, image=self.splash_image, bd=0)
+                self.splash_label.pack()
+                self._log_content_success("image")
+                return
+            
+            # Phase 2: Image loading failed, create text-based fallback
+            logger.info("Phase 1 failed, proceeding to Phase 2: Text-based fallback")
+            self._create_text_fallback()
+            logger.info("Ô£ô Phase 2 successful: Text-based splash screen created")
+            self._log_content_success("text")
+            return
+                
+        except Exception as e:
+            logger.error(f"Phase 2 failed with critical error: {e}")
+            
+            # Phase 3: Last resort - minimal fallback
+            try:
+                logger.warning("Proceeding to Phase 3: Minimal fallback (last resort)")
+                self._create_minimal_fallback()
+                logger.info("Ô£ô Phase 3 successful: Minimal splash screen created")
+                self._log_content_success("minimal")
+                return
+                
+            except Exception as fallback_error:
+                logger.critical(f"Phase 3 failed: {fallback_error}")
+                logger.critical("All splash screen fallback mechanisms have failed")
+                
+                # Log system information for debugging
+                self._log_system_debug_info()
+                
+                # Re-raise with context
+                raise RuntimeError("Complete splash screen failure: all fallback mechanisms exhausted") from fallback_error
+    
+    def _log_content_success(self, content_type: str):
+        """Log successful content loading with type information."""
+        type_descriptions = {
+            'image': 'Image-based splash screen with graphics',
+            'text': 'Text-based splash screen with styled layout',
+            'minimal': 'Minimal text-only splash screen'
+        }
+        
+        description = type_descriptions.get(content_type, f'Unknown type: {content_type}')
+        logger.info(f"Splash content loaded successfully: {description}")
+        
+        # Log performance info
+        elapsed = time.time() * 1000 - self.start_time
+        logger.debug(f"Content loading completed in {elapsed:.1f}ms")
+    
+    def _log_system_debug_info(self):
+        """Log system information for debugging splash screen failures."""
+        logger.critical("System debug information:")
+        logger.critical(f"  Python version: {sys.version}")
+        logger.critical(f"  Platform: {sys.platform}")
+        logger.critical(f"  Current working directory: {os.getcwd()}")
+        logger.critical(f"  PyInstaller mode: {hasattr(sys, '_MEIPASS')}")
+        
+        if hasattr(sys, '_MEIPASS'):
+            logger.critical(f"  PyInstaller temp path: {sys._MEIPASS}")
+        
+        # Log available modules
+        try:
+            import tkinter
+            logger.critical(f"  Tkinter version: {tkinter.TkVersion}")
+        except Exception as e:
+            logger.critical(f"  Tkinter import error: {e}")
+        
+        try:
+            from PIL import Image
+            logger.critical(f"  PIL/Pillow available: {Image.__version__ if hasattr(Image, '__version__') else 'version unknown'}")
+        except Exception as e:
+            logger.critical(f"  PIL/Pillow import error: {e}")
+        
+        # Log asset directory information
+        try:
+            assets_path = resource_path("assets")
+            logger.critical(f"  Assets path: {assets_path}")
+            logger.critical(f"  Assets path exists: {os.path.exists(assets_path)}")
+            
+            if os.path.exists(assets_path):
+                try:
+                    assets_contents = os.listdir(assets_path)
+                    logger.critical(f"  Assets directory contents: {assets_contents}")
+                except Exception as e:
+                    logger.critical(f"  Error listing assets directory: {e}")
+                    
+        except Exception as e:
+            logger.critical(f"  Error checking assets path: {e}")
+    
+    def _setup_progress_bar(self):
+        """Setup the progress bar at the bottom of the splash screen."""
+        try:
+            self.progress_var = tk.DoubleVar()
+            self.progress_bar = tk.Canvas(
+                self.root,
+                height=5,
+                bg=self.config.progress_bg_color,
+                highlightthickness=0
+            )
+            self.progress_bar.pack(fill="x", side="bottom")
+            
+            # Create the progress bar rectangle (initially empty)
+            self.progress_rect = self.progress_bar.create_rectangle(
+                0, 0, 0, 5, fill=self.config.progress_color, outline=""
+            )
+            
+            logger.debug("Progress bar setup completed")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup progress bar: {e}")
+            # Continue without progress bar if it fails
+    
+    def _center_window(self):
+        """Center the splash window on the screen."""
+        try:
+            self.root.update_idletasks()
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+            
+            # Get screen dimensions
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            
+            # Calculate center position
+            x = (screen_width // 2) - (width // 2)
+            y = (screen_height // 2) - (height // 2)
+            
+            # Ensure window stays on screen
+            x = max(0, min(x, screen_width - width))
+            y = max(0, min(y, screen_height - height))
+            
+            self.root.geometry(f"{width}x{height}+{x}+{y}")
+            logger.debug(f"Window centered at position: {x},{y} with size: {width}x{height}")
+            
+        except Exception as e:
+            logger.error(f"Failed to center window: {e}")
+            # Continue without centering if it fails
+    
+    def _fade_in(self, step=None, delay=None, current=0.0):
+        """
+        Gradually fade in the splash screen with smooth timing.
+        
+        Args:
+            step: Alpha increment per step (calculated from config if None)
+            delay: Delay between steps in milliseconds (calculated from config if None)
+            current: Current alpha value
+        """
+        try:
+            # Calculate smooth fade parameters based on config
+            if step is None:
+                total_steps = self.config.fade_in_duration // 16  # ~60fps
+                step = 1.0 / max(1, total_steps)
+            if delay is None:
+                delay = 16  # ~60fps for smooth animation
+                
+            current += step
+            if current <= 1.0:
+                self.root.attributes('-alpha', current)
+                self.root.after(delay, lambda: self._fade_in(step, delay, current))
+            else:
+                self.root.attributes('-alpha', 1.0)  # Ensure fully opaque
+                logger.debug("Fade-in animation completed")
+        except Exception as e:
+            logger.error(f"Error during fade-in animation: {e}")
+            # Set to fully opaque if animation fails
+            try:
+                self.root.attributes('-alpha', 1.0)
+            except:
+                pass
+    
+    def _fade_out(self, step=None, delay=None, current=1.0):
+        """
+        Gradually fade out the splash screen with smooth timing.
+        
+        Args:
+            step: Alpha decrement per step (calculated from config if None)
+            delay: Delay between steps in milliseconds (calculated from config if None)
+            current: Current alpha value
+        """
+        try:
+            # Calculate smooth fade parameters based on config
+            if step is None:
+                total_steps = self.config.fade_out_duration // 16  # ~60fps
+                step = 1.0 / max(1, total_steps)
+            if delay is None:
+                delay = 16  # ~60fps for smooth animation
+                
+            current -= step
+            if current >= 0:
+                self.root.attributes('-alpha', current)
+                self.root.after(delay, lambda: self._fade_out(step, delay, current))
+            else:
+                logger.debug("Fade-out animation completed, destroying window")
+                self._animation_running = False
+                self.root.destroy()
+        except Exception as e:
+            logger.error(f"Error during fade-out animation: {e}")
+            # Force destroy if animation fails
+            try:
+                self._animation_running = False
+                self.root.destroy()
+            except:
+                pass
+    
+    def _start_progress_animation(self):
+        """Start the smooth progress bar animation."""
+        if not self._animation_running:
+            self._animation_running = True
+            self._animate_progress_smooth()
+    
+    def _animate_progress_smooth(self):
+        """
+        Animate the progress bar with smooth transitions and proper timing control.
+        This replaces the old time-based animation with a more responsive system.
+        """
+        try:
+            if not hasattr(self, 'root') or not self.root.winfo_exists():
+                logger.debug("Root window no longer exists, stopping progress animation")
+                self._animation_running = False
+                return
+            
+            if not hasattr(self, 'progress_bar') or self._close_requested:
+                logger.debug("Progress bar not available or close requested, stopping animation")
+                self._animation_running = False
+                return
+                
+            total_width = self.root.winfo_width()
+            if total_width <= 0:
+                # Window not ready yet, try again later
+                if self._animation_running:
+                    self.root.after(16, self._animate_progress_smooth)  # ~60fps
+                return
+            
+            # Smooth progress animation towards target
+            current_time = time.time()
+            time_delta = current_time - self.progress_state.last_update_time
+            
+            # Calculate smooth progress increment
+            if self.progress_state.current < self.progress_state.target:
+                # Animate towards target
+                progress_diff = self.progress_state.target - self.progress_state.current
+                increment = min(progress_diff, self.progress_state.animation_speed * (time_delta * 60))  # Scale by time
+                self.progress_state.current = min(self.progress_state.target, 
+                                                self.progress_state.current + increment)
+            elif self.progress_state.current > self.progress_state.target:
+                # Animate backwards if needed (rare case)
+                progress_diff = self.progress_state.current - self.progress_state.target
+                decrement = min(progress_diff, self.progress_state.animation_speed * (time_delta * 60))
+                self.progress_state.current = max(self.progress_state.target,
+                                                self.progress_state.current - decrement)
+            
+            # Update progress state
+            self.progress_state.is_complete = self.progress_state.current >= 1.0
+            self.progress_state.last_update_time = current_time
+            
+            # Update the progress bar visual
+            new_width = int(self.progress_state.current * total_width)
+            self.progress_bar.coords(self.progress_rect, 0, 0, new_width, 5)
+            
+            # Add subtle color transition as progress increases
+            if hasattr(self, 'progress_rect'):
+                # Gradually brighten the progress color as it fills
+                brightness = 0.7 + (0.3 * self.progress_state.current)  # 70% to 100% brightness
+                color_value = int(255 * brightness)
+                progress_color = f"#{color_value:02x}{color_value:02x}ff"  # Blue with varying brightness
+                self.progress_bar.itemconfig(self.progress_rect, fill=progress_color)
+            
+            logger.debug(f"Smooth progress updated: {self.progress_state.current:.3f} -> {self.progress_state.target:.3f} "
+                        f"(width: {new_width}/{total_width})")
+            
+            # Continue animation if running and not complete
+            if self._animation_running and not self._close_requested:
+                self.root.after(16, self._animate_progress_smooth)  # ~60fps for smooth animation
+            else:
+                logger.debug("Smooth progress animation stopped")
+                self._animation_running = False
+                
+        except Exception as e:
+            logger.error(f"Error during smooth progress animation: {e}")
+            self._animation_running = False
+    
+    def update_progress(self, value: float, message: str = None, animate: bool = True):
+        """
+        Update the progress bar with a specific value using smooth animation.
+        
+        Args:
+            value: Progress value between 0.0 and 1.0
+            message: Optional progress message
+            animate: Whether to animate to the new value (True) or jump immediately (False)
+        """
+        try:
+            # Validate input
+            value = max(0.0, min(1.0, value))
+            
+            if hasattr(self, 'root') and self.root.winfo_exists():
+                # Update progress state
+                if animate:
+                    # Set target for smooth animation
+                    self.progress_state.target = value
+                    # Start animation if not already running
+                    if not self._animation_running:
+                        self._start_progress_animation()
+                else:
+                    # Jump immediately to value
+                    self.progress_state.current = value
+                    self.progress_state.target = value
+                    
+                    # Update visual immediately if progress bar exists
+                    if hasattr(self, 'progress_bar'):
+                        total_width = self.root.winfo_width()
+                        if total_width > 0:
+                            new_width = int(value * total_width)
+                            self.progress_bar.coords(self.progress_rect, 0, 0, new_width, 5)
+                
+                # Update message and completion state
+                if message:
+                    self.progress_state.message = message
+                self.progress_state.is_complete = value >= 1.0
+                self.progress_state.last_update_time = time.time()
+                
+                logger.debug(f"Progress {'animated' if animate else 'immediately'} updated to: {value:.2%}" + 
+                           (f" - {message}" if message else ""))
+                
+                # Auto-close when progress reaches 100% if configured
+                if self.progress_state.is_complete and not self._close_requested:
+                    logger.debug("Progress completed, scheduling auto-close")
+                    # Small delay to let the animation finish
+                    self.root.after(200, self._auto_close_on_completion)
+                    
+        except Exception as e:
+            logger.error(f"Error updating progress: {e}")
+    
+    def _auto_close_on_completion(self):
+        """Automatically close splash screen when progress is complete."""
+        try:
+            if self.progress_state.is_complete and not self._close_requested:
+                logger.debug("Auto-closing splash screen on progress completion")
+                self.close()
+        except Exception as e:
+            logger.error(f"Error during auto-close: {e}")
+    
+    def close(self):
+        """Close the splash screen with proper timing controls and fade-out effect."""
+        try:
+            if self._close_requested:
+                logger.debug("Close already requested, ignoring duplicate close call")
+                return
+                
+            self._close_requested = True
+            
+            # Ensure minimum display time
+            elapsed = time.time() * 1000 - self.start_time
+            logger.debug(f"Closing splash screen. Elapsed time: {elapsed}ms, "
+                        f"Minimum required: {self.config.min_display_time}ms")
+            
+            if elapsed < self.config.min_display_time:
+                remaining = int(self.config.min_display_time - elapsed)
+                logger.debug(f"Waiting additional {remaining}ms before closing")
+                self.root.after(remaining, self._perform_close)
+            else:
+                logger.debug("Minimum display time met, proceeding with close")
+                self._perform_close()
+                
+        except Exception as e:
+            logger.error(f"Error closing splash screen: {e}")
+            # Force close if normal close fails
+            self._force_close()
+    
+    def _perform_close(self):
+        """Perform the actual close operation with fade-out."""
+        try:
+            # Stop progress animation
+            self._animation_running = False
+            
+            # Complete progress bar if not already complete
+            if not self.progress_state.is_complete:
+                self.update_progress(1.0, "Complete", animate=False)
+            
+            logger.debug("Starting fade-out animation")
+            self._fade_out()
+            
+        except Exception as e:
+            logger.error(f"Error performing close: {e}")
+            self._force_close()
+    
+    def _force_close(self):
+        """Force close the splash screen without animations."""
+        try:
+            self._animation_running = False
+            self._close_requested = True
+            if hasattr(self, 'root'):
+                self.root.destroy()
+            logger.debug("Splash screen force closed")
+        except Exception as e:
+            logger.error(f"Error force closing splash screen: {e}")
+    
+    def set_progress_speed(self, speed: float):
+        """
+        Set the animation speed for progress bar transitions.
+        
+        Args:
+            speed: Animation speed (0.01 = slow, 0.05 = normal, 0.1 = fast)
+        """
+        self.progress_state.animation_speed = max(0.001, min(1.0, speed))
+        logger.debug(f"Progress animation speed set to: {self.progress_state.animation_speed}")
+    
+    def get_progress_info(self) -> dict:
+        """
+        Get current progress information.
+        
+        Returns:
+            Dictionary with current progress state information
+        """
+        return {
+            'current': self.progress_state.current,
+            'target': self.progress_state.target,
+            'message': self.progress_state.message,
+            'is_complete': self.progress_state.is_complete,
+            'animation_running': self._animation_running,
+            'elapsed_time': time.time() * 1000 - self.start_time
+        }
+    
+    def increment_progress(self, amount: float, message: str = None):
+        """
+        Increment the progress by a specific amount.
+        
+        Args:
+            amount: Amount to increment (can be negative to decrement)
+            message: Optional progress message
+        """
+        new_value = self.progress_state.target + amount
+        self.update_progress(new_value, message)
+    
+    def run(self, app_start_func):
+        """
+        Run the splash screen and then start the application.
+        
+        Args:
+            app_start_func: Function to call to start the main application
+        """
+        try:
+            logger.info("Starting splash screen with application startup")
+            
+            # Start the application in a separate thread
+            app_thread = threading.Thread(
+                target=self._start_app_thread, 
+                args=(app_start_func,), 
+                daemon=True,
+                name="AppStartupThread"
+            )
+            app_thread.start()
+            logger.debug("Application startup thread started")
+            
+            # Run the splash screen on main thread
+            logger.debug("Starting splash screen main loop")
+            self.root.mainloop()
+            logger.debug("Splash screen main loop ended")
+            
+        except Exception as e:
+            logger.error(f"Error running splash screen: {e}")
+            # Try to start the app directly if splash fails
+            try:
+                logger.info("Attempting to start application directly after splash failure")
+                app_start_func()
+            except Exception as app_error:
+                logger.critical(f"Failed to start application after splash failure: {app_error}")
+                raise
+    
+    def _start_app_thread(self, app_start_func):
+        """
+        Thread function to start the application with improved progress tracking.
+        
+        Args:
+            app_start_func: Function to call to start the main application
+        """
+        try:
+            # Wait a bit to let the splash screen appear and fade in
+            logger.debug("App startup thread: waiting for splash to appear")
+            time.sleep(0.3)
+            
+            # Progressive loading simulation with smooth animation
+            self.update_progress(0.1, "Initializing application...")
+            time.sleep(0.2)
+            
+            self.update_progress(0.3, "Loading components...")
+            time.sleep(0.1)
+            
+            logger.info("App startup thread: calling application start function")
+            # Call the application start function
+            self.update_progress(0.5, "Starting application...")
+            app_start_func()
+            
+            # Simulate final loading steps
+            self.update_progress(0.8, "Finalizing startup...")
+            time.sleep(0.1)
+            
+            # Complete progress
+            self.update_progress(1.0, "Application ready")
+            logger.info("App startup thread: application started successfully")
+            
+            # The progress completion will automatically trigger close via _auto_close_on_completion
+            # But we also schedule a backup close just in case
+            if hasattr(self, 'root') and self.root.winfo_exists():
+                logger.debug("App startup thread: scheduling backup splash screen close")
+                self.root.after(500, self.close)  # Backup close after 500ms
+            else:
+                logger.warning("App startup thread: splash screen root no longer exists")
+                
+        except Exception as e:
+            logger.error(f"Error starting application in thread: {e}")
+            # Update progress to show error state
+            try:
+                self.update_progress(0.0, "Application startup failed", animate=False)
+                # Show error state briefly before closing
+                time.sleep(1.0)
+            except:
+                pass
+                
+            # Close the splash screen on error
+            if hasattr(self, 'root') and self.root.winfo_exists():
+                logger.debug("App startup thread: scheduling splash screen close due to error")
+                self.root.after(0, self.close)
+            
+            # Re-raise the exception so it can be handled by the calling code
+            raise
+    
+    def get_fallback_status(self) -> dict:
+        """
+        Get the current fallback status and configuration.
+        
+        Returns:
+            Dictionary with fallback configuration and status information
+        """
+        return {
+            'primary_image_path': self.config.image_path,
+            'fallback_image_paths': self.config.fallback_image_paths,
+            'total_fallback_options': len(self.config.fallback_image_paths) + 1,  # +1 for primary
+            'text_fallback_available': True,
+            'minimal_fallback_available': True,
+            'window_size': self.config.window_size,
+            'max_image_size': self.config.max_image_size
+        }
+    
+    def test_all_fallbacks(self) -> dict:
+        """
+        Test all fallback mechanisms and return detailed results.
+        
+        This method can be used for debugging and validation.
+        
+        Returns:
+            Dictionary with test results for each fallback option
+        """
+        logger.info("Testing all fallback mechanisms...")
+        
+        results = {
+            'primary_image': None,
+            'fallback_images': [],
+            'text_fallback': None,
+            'minimal_fallback': None,
+            'summary': {
+                'total_tested': 0,
+                'successful': 0,
+                'failed': 0
+            }
+        }
+        
+        # Test primary image
+        primary_path = self._validate_resource_path(self.config.image_path)
+        results['primary_image'] = {
+            'path': self.config.image_path,
+            'resolved_path': primary_path,
+            'available': primary_path is not None
+        }
+        results['summary']['total_tested'] += 1
+        if primary_path:
+            results['summary']['successful'] += 1
+        else:
+            results['summary']['failed'] += 1
+        
+        # Test fallback images
+        for fallback_path in self.config.fallback_image_paths:
+            resolved_path = self._validate_resource_path(fallback_path)
+            fallback_result = {
+                'path': fallback_path,
+                'resolved_path': resolved_path,
+                'available': resolved_path is not None
+            }
+            results['fallback_images'].append(fallback_result)
+            results['summary']['total_tested'] += 1
+            if resolved_path:
+                results['summary']['successful'] += 1
+            else:
+                results['summary']['failed'] += 1
+        
+        # Test text fallback (always available)
+        results['text_fallback'] = {
+            'available': True,
+            'description': 'Styled text-based splash screen'
+        }
+        results['summary']['total_tested'] += 1
+        results['summary']['successful'] += 1
+        
+        # Test minimal fallback (always available)
+        results['minimal_fallback'] = {
+            'available': True,
+            'description': 'Basic text-only splash screen'
+        }
+        results['summary']['total_tested'] += 1
+        results['summary']['successful'] += 1
+        
+        logger.info(f"Fallback test completed: {results['summary']['successful']}/{results['summary']['total_tested']} options available")
+        
+        return results
+</document_content>
+</document>
+<document index="105">
+<source>.\ui\toolbar_frame.py</source>
+<document_content>
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import messagebox
+import webbrowser
+import os
+import subprocess
+import platform
+import json
+from ui.custom_dialogs import show_info, show_error, show_warning, ask_yes_no
+
+class ToolbarFrame(ctk.CTkFrame):
+    """
+    Toolbar component providing access to configuration profiles, language switching,
+    help resources, restore defaults, and personalization options.
+    """
+    
+    def __init__(self, master, i18n, config_service, theme_service, profile_manager=None):
+        super().__init__(master)
+        self.i18n = i18n
+        self.config_service = config_service
+        self.theme_service = theme_service
+        self.profile_manager = profile_manager
+        self.app = master  # Reference to the main app
+        
+        self._create_toolbar_elements()
+    
+    def _create_toolbar_elements(self):
+        """Create all toolbar UI elements."""
+        # Create a horizontal frame for the toolbar with minimal padding
+        toolbar_container = ctk.CTkFrame(self, fg_color="transparent")
+        toolbar_container.pack(fill="x", padx=5, pady=(5, 0))
+        
+        # Left side elements (profiles, language, help)
+        left_frame = ctk.CTkFrame(toolbar_container, fg_color="transparent")
+        left_frame.pack(side="left", fill="y")
+        
+        # Configuration Profiles Dropdown
+        self.profiles_dropdown = ctk.CTkOptionMenu(
+            left_frame,
+            values=[
+                self.i18n.get("save_profile", "Save Profile"),
+                self.i18n.get("load_profile", "Load Profile")
+            ],
+            command=self._on_profile_action,
+            width=140,
+            height=28
+        )
+        self.profiles_dropdown.pack(side="left", padx=5)
+        self.profiles_dropdown.set(self.i18n.get("profiles", "Profiles"))
+        
+        # Language Selector Dropdown
+        self.language_dropdown = ctk.CTkOptionMenu(
+            left_frame,
+            values=[
+                "Portugu├¬s",
+                "English", 
+                "Espa├▒ol"
+            ],
+            command=self._on_language_change,
+            width=100,
+            height=28
+        )
+        self.language_dropdown.pack(side="left", padx=5)
+        
+        # Set the dropdown to the current language
+        language_display_map = {
+            "pt": "Portugu├¬s",
+            "en": "English",
+            "es": "Espa├▒ol"
+        }
+        # Fixed dictionary definition
+        language_display_map = {
+            "pt": "Portugu├¬s",
+            "en": "English",
+            "es": "Espa├▒ol"
+        }
+        # Set language dropdown to current language
+        current_language = self.i18n.get_current_language()
+        display_language = language_display_map.get(current_language, "Portugu├¬s")
+        self.language_dropdown.set(display_language)
+        current_language = self.i18n.get_current_language()
+        display_language = language_display_map.get(current_language, "Portugu├¬s")
+        self.language_dropdown.set(display_language)
+        
+        
+        # Right side elements (restore defaults, personalization)
+        right_frame = ctk.CTkFrame(toolbar_container, fg_color="transparent")
+        right_frame.pack(side="right", fill="y")
+        
+        # Personalization Button
+        self.personalization_button = ctk.CTkButton(
+            right_frame,
+            text=self.i18n.get("personalization", "Personalization"),
+            command=self._on_personalization,
+            width=120,
+            height=28
+        )
+        self.personalization_button.pack(side="right", padx=5)
+
+    
+    def _on_profile_action(self, choice):
+        """Handle configuration profile dropdown actions."""
+        try:
+            if choice == self.i18n.get("save_profile", "Save Profile"):
+                # Correctly call the profile manager to save the UI state
+                self._save_profile_from_ui()
+            elif choice == self.i18n.get("load_profile", "Load Profile"):
+                self._load_profile_to_ui()
+            
+            # Reset dropdown to default text
+            self.profiles_dropdown.set(self.i18n.get("profiles", "Profiles"))
+            
+        except Exception as e:
+            error_msg = f"Profile operation failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Profile Error", error_msg)
+    
+    def _on_language_change(self, choice):
+        """Handle language selection changes."""
+        try:
+            # Map display names to language codes
+            language_map = {
+                "Portugu├¬s": "pt_BR",
+                "English": "en_US",
+                "Espa├▒ol": "es_ES"
+            }
+            
+            language_code = language_map.get(choice)
+            if language_code:
+                # Update I18n service
+                self.i18n.set_language(language_code)
+                
+                # Refresh all UI elements immediately
+                self._refresh_ui_language()
+                
+                # Log the language change
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"Language changed to: {choice}\n")
+            
+        except Exception as e:
+            error_msg = f"Language change failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Language Error", error_msg)
+    
+    def _on_personalization(self):
+        """Handle personalization button click - open theme selection dialog."""
+        try:
+            # Create a simple menu with theme options
+            theme_menu = tk.Menu(self.app, tearoff=0)
+            
+            # Add theme options with translations
+            theme_translations = {
+                "Light": self.i18n.get("light_theme", "Light"),
+                "Dark": self.i18n.get("dark_theme", "Dark"),
+                "System": self.i18n.get("system_theme", "System")
+            }
+            
+            # Create a function to create theme selection commands with proper closure
+            def make_theme_command(theme_name):
+                return lambda: self._apply_theme(theme_name)
+            
+            for theme in self.theme_service.get_available_themes():
+                translated_name = theme_translations.get(theme, theme)
+                theme_menu.add_command(
+                    label=translated_name,
+                    command=make_theme_command(theme)
+                )
+            
+            # Get the position of the personalization button
+            x = self.personalization_button.winfo_rootx()
+            y = self.personalization_button.winfo_rooty() + self.personalization_button.winfo_height()
+            
+            # Show the menu at the button position
+            theme_menu.tk_popup(x, y)
+            
+        except Exception as e:
+            error_msg = f"Personalization failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Personalization Error", error_msg)
+    
+    def _apply_theme(self, theme):
+        """Apply the selected theme."""
+        try:
+            # Apply the theme (this will also save the theme preference)
+            self.theme_service.set_theme(theme)
+            
+            # Log the change
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"Theme changed to: {theme}\n")
+            
+        except Exception as e:
+            error_msg = f"Failed to set theme: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Theme Error", error_msg)
+    
+    def _get_timestamp(self):
+        """Get current timestamp in ISO format."""
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
+    def _refresh_ui_language(self):
+        """Refresh all UI elements when language changes."""
+        try:
+            # Update toolbar elements
+            self.update_language_display()
+            
+            # Update main application title
+            self.app.title(self.i18n.get("app_title"))
+            
+            # Update other UI frames if they have language update methods
+            if hasattr(self.app, 'connection_frame') and hasattr(self.app.connection_frame, 'update_language_display'):
+                self.app.connection_frame.update_language_display()
+            
+            if hasattr(self.app, 'params_frame') and hasattr(self.app.params_frame, 'update_language_display'):
+                self.app.params_frame.update_language_display()
+            
+            if hasattr(self.app, 'actions_frame') and hasattr(self.app.actions_frame, 'update_language_display'):
+                self.app.actions_frame.update_language_display()
+            
+            if hasattr(self.app, 'log_frame') and hasattr(self.app.log_frame, 'update_language_display'):
+                self.app.log_frame.update_language_display()
+            
+        except Exception as e:
+            print(f"Error refreshing UI language: {e}")
+    
+    def update_language_display(self):
+        """Update toolbar text when language changes."""
+        # This method can be called to refresh toolbar text after language changes
+        try:
+            # Update button text
+            self.restore_button.configure(text=self.i18n.get("restore_defaults", "Restore Defaults"))
+            self.personalization_button.configure(text=self.i18n.get("personalization", "Personalization"))
+            
+            # Update dropdown options
+            self.profiles_dropdown.configure(values=[
+                self.i18n.get("save_profile", "Save Profile"),
+                self.i18n.get("load_profile", "Load Profile")
+            ])
+            self.profiles_dropdown.set(self.i18n.get("profiles", "Profiles"))
+            
+            self.help_dropdown.configure(values=[
+                self.i18n.get("install_driver", "Install Driver"),
+                self.i18n.get("open_manuals", "Open Manuals")
+            ])
+            self.help_dropdown.set(self.i18n.get("help", "Help"))
+            
+            # Note: The theme menu is recreated when clicked, so its translations 
+            # will be updated automatically the next time it's opened
+            
+        except Exception as e:
+            print(f"Error updating toolbar language display: {e}")
+    
+    def _load_profile_to_ui(self):
+        """Load configuration from profile file and populate UI fields."""
+        try:
+            # Check if ProfileManager is available
+            if not hasattr(self.app, 'profile_manager'):
+                show_error(
+                    self.app,
+                    "Profile Manager Error",
+                    "Profile manager is not available. Please ensure the application is properly initialized."
+                )
+                return
+            
+            # Show file open dialog
+            from tkinter import filedialog
+            profile_path = filedialog.askopenfilename(
+                title=self.i18n.get("load_profile", "Load Profile"),
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Run the async operation in a separate thread
+            import threading
+            thread = threading.Thread(target=self._load_profile_to_ui_worker, args=(profile_path,))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Load profile to UI failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile to UI Error", error_msg)
+    
+    def _load_profile_to_ui_worker(self, profile_path):
+        """Worker method to load profile from file and populate UI fields."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Load profile from file
+            load_result = loop.run_until_complete(self.app.profile_manager.load_from_file(profile_path))
+            
+            if not load_result.success:
+                # Handle load failure
+                self.app.after(0, self._handle_load_profile_to_ui_completion, load_result)
+                return
+            
+            # Populate UI fields from the loaded profile
+            ui_field_values = {}
+            populate_result = self.app.profile_manager.populate_ui_fields(ui_field_values)
+            
+            # Update UI with the field values
+            self.app.after(0, self._update_ui_with_values, ui_field_values, populate_result)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.LOAD_FROM_FILE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_load_profile_to_ui_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+    
+    def _update_ui_with_values(self, ui_field_values, populate_result):
+        """Update UI fields with values from profile."""
+        try:
+            # Update UI fields with the values
+            if hasattr(self.app, 'params_frame'):
+                self.app.params_frame.update_fields_from_dict(ui_field_values)
+            
+            # Log success
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message("INFO: Profile loaded to UI successfully via toolbar\n")
+        except Exception as e:
+            error_msg = f"Failed to update UI with profile values: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Load Profile to UI Error", error_msg)
+    
+    def _handle_load_profile_to_ui_completion(self, result):
+        """Handle the completion of loading profile to UI."""
+        try:
+            if result.success:
+                # Show success message
+                success_msg = "Profile loaded to UI successfully!"
+                show_info(self.app, "Load Profile to UI", success_msg)
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("INFO: Profile loaded to UI successfully via toolbar\n")
+            else:
+                # Show error message
+                error_msg = "Failed to load profile to UI:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                show_error(self.app, "Load Profile to UI Failed", error_msg)
+                
+                # Log error
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    log_msg = "ERROR: Profile load to UI failed"
+                    if result.errors:
+                        log_msg += f": {result.errors[0]}"
+                    self.app.log_frame.log_message(f"{log_msg}\n")
+        
+        except Exception as e:
+            print(f"Error in completion callback: {e}")
+    
+    def _save_profile_from_ui(self):
+        """Save the current UI state to a profile file."""
+        try:
+            # Check if ProfileManager is available
+            if not hasattr(self.app, 'profile_manager'):
+                show_error(
+                    self.app,
+                    "Profile Manager Error",
+                    "Profile manager is not available. Please ensure the application is properly initialized."
+                )
+                return
+            
+            # Show file save dialog
+            from tkinter import filedialog
+            profile_path = filedialog.asksaveasfilename(
+                title=self.i18n.get("save_profile", "Save Profile"),
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Run the async operation in a separate thread
+            import threading
+            thread = threading.Thread(target=self._save_profile_from_ui_worker, args=(profile_path,))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Save profile from UI failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Save Profile Error", error_msg)
+    
+    def _save_profile_from_ui_worker(self, profile_path):
+        """Worker method to save profile from UI."""
+        try:
+            import asyncio
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Extract UI field values
+            ui_field_values = {}
+            if hasattr(self.app, 'params_frame'):
+                # Get values from UI fields
+                ui_field_values = self.app.params_frame.get_all_field_values()
+            
+            # Extract values using profile manager
+            extract_result = self.app.profile_manager.extract_ui_field_values(ui_field_values)
+            
+            if not extract_result.is_valid:
+                # Handle extraction failure
+                from models.operation_result import OperationType
+                error_result = ProfileOperationResult(
+                    operation_type=OperationType.SAVE_TO_FILE,
+                    success=False
+                )
+                error_result.add_error("Failed to extract UI field values: " + "; ".join(extract_result.errors))
+                self.app.after(0, self._handle_save_profile_completion, error_result)
+                return
+            
+            # Save the profile to file
+            save_result = loop.run_until_complete(self.app.profile_manager.save_to_file(profile_path))
+            
+            # Handle completion on the main thread
+            self.app.after(0, self._handle_save_profile_completion, save_result)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            from models.operation_result import ProfileOperationResult, OperationType
+            error_result = ProfileOperationResult(
+                operation_type=OperationType.SAVE_TO_FILE,
+                success=False
+            )
+            error_result.add_error(str(e))
+            self.app.after(0, self._handle_save_profile_completion, error_result)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+    
+    def _handle_save_profile_completion(self, result):
+        """Handle the completion of saving profile from UI."""
+        try:
+            if result.success:
+                # Show success message
+                success_msg = "Profile saved successfully!"
+                if hasattr(result, 'details') and result.details:
+                    if 'file_path' in result.details:
+                        success_msg += f"\nProfile saved to: {result.details['file_path']}"
+                show_info(self.app, "Save Profile", success_msg)
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("INFO: Profile saved from UI successfully\n")
+            else:
+                # Show error message
+                error_msg = "Failed to save profile:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                show_error(self.app, "Save Profile Failed", error_msg)
+                
+                # Log error
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    log_msg = "ERROR: Profile save from UI failed"
+                    if result.errors:
+                        log_msg += f": {result.errors[0]}"
+                    self.app.log_frame.log_message(f"{log_msg}\n")
+        
+        except Exception as e:
+            print(f"Error in completion callback: {e}")
+    
+    def _create_progress_dialog(self, title, initial_message):
+        """Create a progress dialog for long-running operations."""
+        try:
+            import tkinter as tk
+            from tkinter import ttk
+            
+            # Create progress window
+            progress_window = tk.Toplevel(self.app)
+            progress_window.title(title)
+            progress_window.geometry("400x160")
+            progress_window.resizable(False, False)
+            progress_window.transient(self.app)
+            progress_window.grab_set()
+            
+            # Center the window
+            progress_window.update_idletasks()
+            x = (progress_window.winfo_screenwidth() // 2) - (400 // 2)
+            y = (progress_window.winfo_screenheight() // 2) - (150 // 2)
+            progress_window.geometry(f"400x150+{x}+{y}")
+            
+            # Create progress elements
+            frame = tk.Frame(progress_window, padx=20, pady=20)
+            frame.pack(fill="both", expand=True)
+            
+            # Status label
+            status_label = tk.Label(frame, text=initial_message, wraplength=360)
+            status_label.pack(pady=(0, 10))
+            
+            # Progress bar
+            progress_bar = ttk.Progressbar(frame, mode='determinate', length=360)
+            progress_bar.pack(pady=(0, 10))
+            
+            # Percentage label
+            percent_label = tk.Label(frame, text="0%")
+            percent_label.pack()
+            
+            # Add methods to update progress
+            def update_progress(percentage, status_text):
+                try:
+                    if progress_window.winfo_exists():
+                        progress_bar['value'] = percentage
+                        percent_label.config(text=f"{percentage:.1f}%")
+                        status_label.config(text=status_text)
+                        progress_window.update()
+                except:
+                    pass
+            
+            progress_window.update_progress = update_progress
+            
+            # Show the dialog
+            progress_window.update()
+            
+            return progress_window
+            
+        except Exception as e:
+            print(f"Error creating progress dialog: {e}")
+            return None
+    
+    def _save_profile_from_ui(self):
+        """Save current UI values to a profile file."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'params_frame'):
+                show_error(
+                    self.app,
+                    "Save Profile Error",
+                    "Parameters frame is not available. Cannot save profile."
+                )
+                return
+            
+            # Show file save dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.asksaveasfilename(
+                title=self.i18n.get("save_profile", "Save Profile"),
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Extract values from UI
+            try:
+                # Use the extract_validated_field_values method from ParametersFrame
+                field_values, validation_result = self.app.params_frame.extract_validated_field_values()
+                
+                if not validation_result.is_valid:
+                    # Show validation errors
+                    error_msg = "Cannot save profile due to validation errors:\n\n"
+                    error_msg += "\n".join(validation_result.errors)
+                    show_error(self.app, "Validation Error", error_msg)
+                    return
+                
+                # Create a profile from the UI values
+                from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+                from datetime import datetime
+                
+                # Create metadata
+                metadata = ProfileMetadata(
+                    parameter_spec_version="1.0",
+                    created_by="LT32 PRO Configurator",
+                    device_model="LT32 PRO"
+                )
+                
+                # Convert field values to ParameterValue objects
+                parameter_values = {}
+                for param_name, value in field_values.items():
+                    parameter_values[param_name] = ParameterValue(
+                        value=value,
+                        source="user"
+                    )
+                
+                now = datetime.now()
+                profile = UniversalProfile(
+                    name=f"UI_Profile_{now.strftime('%Y%m%d_%H%M%S')}",
+                    version="1.0",
+                    created_at=now,
+                    modified_at=now,
+                    metadata=metadata,
+                    parameters=parameter_values
+                )
+                
+                # Save the profile to file using the profile's to_dict method (omit runtime metadata)
+                import json
+                profile_data = profile.to_dict(for_save=True)
+                
+                with open(profile_path, 'w', encoding='utf-8') as f:
+                    json.dump(profile_data, f, indent=2, ensure_ascii=False)
+                
+                # Show success message
+                show_info(
+                    self.app,
+                    "Profile Saved",
+                    f"Profile successfully saved to:\n{profile_path}"
+                )
+                
+                # Log success
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"Profile saved successfully to: {profile_path}\n")
+                
+            except Exception as extract_error:
+                error_msg = f"Failed to extract UI values: {str(extract_error)}"
+                show_error(self.app, "Save Profile Error", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+        except Exception as e:
+            error_msg = f"Save profile failed: {str(e)}"
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, "Save Profile Error", error_msg)
+    
+    def _load_profile_to_ui(self):
+        """Load profile from file and populate UI."""
+        try:
+            # Show file open dialog
+            from tkinter import filedialog
+            
+            profile_path = filedialog.askopenfilename(
+                title=self.i18n.get("load_profile", "Load Profile"),
+                filetypes=[
+                    ("JSON Profile Files", "*.json"),
+                    ("All Files", "*.*")
+                ]
+            )
+            
+            if not profile_path:
+                return  # User canceled
+            
+            # Load profile from file
+            try:
+                import json
+                with open(profile_path, 'r', encoding='utf-8') as f:
+                    profile_data = json.load(f)
+                
+                # Create UniversalProfile object
+                from models.universal_profile import UniversalProfile
+                from datetime import datetime
+                
+                # Use the from_dict method to properly reconstruct the profile
+                profile = UniversalProfile.from_dict(profile_data)
+                
+                # Populate UI with profile values
+                if hasattr(self.app, 'params_frame'):
+                    populate_result = self.app.params_frame.populate_ui_from_profile(profile)
+                    
+                    if populate_result.is_valid:
+                        title = self.i18n.get("profile_loaded_title", "Profile Loaded")
+                        message = self.i18n.get("profile_loaded_successfully", "Profile successfully loaded from {file_path}").format(file_path=profile_path)
+                        # Diagnostic log to verify localization values at runtime
+                        print(f"DEBUG: show_info will be called with title='{title}' message='{message}' (lang={self.i18n.get_current_language()})")
+                        show_info(self.app, title, message)
+                        
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message(f"Profile loaded successfully from: {profile_path}\n")
+                    else:
+                        # Show warnings if there were issues
+                        warning_msg = self.i18n.get("profile_operation_warning", "Profile loaded with warnings:\n\n")
+                        warning_msg += "\n".join(populate_result.errors)
+                        show_warning(self.app, self.i18n.get("profile_operation", "Profile Operation"), warning_msg)
+                else:
+                    show_error(
+                        self.app,
+                        self.i18n.get("profile_error", "Load Profile Error"),
+                        self.i18n.get("profile_manager_not_available", "Parameters frame is not available. Cannot load profile.")
+                    )
+                
+            except Exception as load_error:
+                error_msg = self.i18n.get("profile_error_file_corrupted", "Failed to load profile file: {error}").format(error=str(load_error))
+                show_error(self.app, self.i18n.get("profile_error", "Load Profile Error"), error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+                
+        except Exception as e:
+            error_msg = self.i18n.get("profile_operation_failed", "Load profile failed: {error}").format(error=str(e))
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+            show_error(self.app, self.i18n.get("profile_error", "Load Profile Error"), error_msg)
+    
+    def _handle_profile_operation_completion(self, result):
+        """Handle the completion of profile operations."""
+        try:
+            if result.success:
+                show_info(
+                    self.app,
+                    "Operation Successful",
+                    "Profile operation completed successfully."
+                )
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("Profile operation completed successfully\n")
+            else:
+                error_msg = "Profile operation failed:\n\n"
+                if hasattr(result, 'errors') and result.errors:
+                    error_msg += "\n".join(result.errors)
+                else:
+                    error_msg += "Unknown error occurred"
+                
+                show_error(self.app, "Operation Failed", error_msg)
+                
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"ERROR: Profile operation failed\n")
+        
+        except Exception as e:
+            print(f"Error in profile operation completion callback: {e}")
+
+    def _update_ui_with_values(self, ui_field_values, populate_result):
+        """Update UI with loaded values."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or not self.app.parameters_frame:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: Parameters frame not available for UI update\n")
+                return
+            
+            # Get the current profile from profile manager
+            if hasattr(self.app, 'profile_manager') and self.app.profile_manager:
+                current_profile = self.app.profile_manager.get_current_profile()
+                if current_profile:
+                    # Use the parameters frame's populate method
+                    populate_result = self.app.parameters_frame.populate_ui_from_profile(current_profile)
+                    
+                    if populate_result.is_valid:
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message("INFO: UI updated successfully with loaded values\n")
+                    else:
+                        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                            self.app.log_frame.log_message(f"WARNING: UI update completed with warnings: {populate_result.errors}\n")
+                else:
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message("WARNING: No current profile available for UI update\n")
+            else:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: Profile manager not available for UI update\n")
+                    
+        except Exception as e:
+            error_msg = f"Error updating UI with values: {e}"
+            print(error_msg)
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+
+    def _update_ui_with_loaded_profile(self, profile):
+        """Update UI with loaded profile values."""
+        try:
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or not self.app.parameters_frame:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: Parameters frame not available for UI update\n")
+                return
+            
+            # Use the parameters frame's populate method directly
+            if profile:
+                populate_result = self.app.parameters_frame.populate_ui_from_profile(profile)
+                
+                if populate_result.is_valid:
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message("INFO: UI updated successfully with loaded values\n")
+                else:
+                    if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                        self.app.log_frame.log_message(f"WARNING: UI update completed with warnings: {populate_result.errors}\n")
+            else:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message("WARNING: No profile available for UI update\n")
+                    
+        except Exception as e:
+            error_msg = f"Error updating UI with loaded profile: {e}"
+            print(error_msg)
+            if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                self.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+</document_content>
+</document>
+<document index="106">
+<source>.\ui\ultra_simple_progress_dialog.py</source>
+<document_content>
+"""
+Ultra Simple Progress Dialog - Minimal, crash-resistant progress dialog.
+
+This is a simplified version that avoids complex widget management and threading issues.
+"""
+
+import tkinter as tk
+from tkinter import ttk
+import threading
+import time
+from typing import Callable, Optional
+from dataclasses import dataclass
+
+
+@dataclass
+class UltraSimpleProgressInfo:
+    """Ultra simple progress information."""
+    progress_percentage: float = 0.0
+    status_message: str = ""
+    current_parameter: int = 0
+    total_parameters: int = 0
+    is_complete: bool = False
+    has_error: bool = False
+    error_message: str = ""
+
+
+class UltraSimpleProgressDialog:
+    """Ultra simple, crash-resistant progress dialog using basic Tkinter."""
+    
+    def __init__(self, parent, operation_type: str = "device_operation"):
+        self.parent = parent
+        self.operation_type = operation_type
+        self.is_cancelled = False
+        self.is_closed = False
+        self.cancel_callback = None
+        self.dialog = None
+        
+        # Create dialog in main thread
+        self._create_dialog()
+        
+    def _create_dialog(self):
+        """Create the ultra simple dialog matching application style."""
+        try:
+            # Create toplevel window
+            self.dialog = tk.Toplevel(self.parent)
+            self.dialog.title("Opera├º├úo do Dispositivo")
+            self.dialog.geometry("500x200")
+            self.dialog.resizable(False, False)
+            
+            # Set dark theme colors to match application
+            self.dialog.configure(bg='#2b2b2b')
+            
+            # Center the dialog
+            self._center_dialog()
+            
+            # Make modal
+            self.dialog.transient(self.parent)
+            self.dialog.grab_set()
+            
+            # Create main container with padding
+            main_frame = tk.Frame(self.dialog, bg='#2b2b2b', padx=30, pady=30)
+            main_frame.pack(fill="both", expand=True)
+            
+            # Title with icon area (simplified)
+            title_frame = tk.Frame(main_frame, bg='#2b2b2b')
+            title_frame.pack(fill="x", pady=(0, 20))
+            
+            # Title label to match the application style
+            title_label = tk.Label(
+                title_frame,
+                text="Salvando Configura├º├úo do Dispositivo" if self.operation_type == 'device_to_profile' else "Carregando Configura├º├úo para Dispositivo",
+                font=("Segoe UI", 14, "bold"),
+                fg='white',
+                bg='#2b2b2b'
+            )
+            title_label.pack()
+            
+            # Status message
+            self.status_label = tk.Label(
+                main_frame,
+                text="Connecting to device and reading current configuration",
+                font=("Segoe UI", 10),
+                fg='#cccccc',
+                bg='#2b2b2b',
+                wraplength=440,
+                justify='center'
+            )
+            self.status_label.pack(pady=(0, 20))
+            
+            # Progress bar using simple Frame-based approach
+            progress_frame = tk.Frame(main_frame, bg='#2b2b2b')
+            progress_frame.pack(fill="x", pady=(0, 15))
+            
+            # Create progress bar container
+            self.progress_container = tk.Frame(
+                progress_frame,
+                bg='#404040',
+                height=8,
+                relief='flat',
+                bd=0
+            )
+            self.progress_container.pack(fill="x")
+            
+            # Create progress bar fill
+            self.progress_fill = tk.Frame(
+                self.progress_container,
+                bg='#0078d4',
+                height=8,
+                relief='flat',
+                bd=0
+            )
+            self.progress_fill.place(x=0, y=0, width=0, height=8)
+            
+            # Percentage label
+            self.percentage_label = tk.Label(
+                main_frame,
+                text="0%",
+                font=("Segoe UI", 11),
+                fg='#cccccc',
+                bg='#2b2b2b'
+            )
+            self.percentage_label.pack(pady=(0, 20))
+            
+            # Cancel button with application styling
+            self.cancel_button = tk.Button(
+                main_frame,
+                text="Cancelar",
+                command=self._on_cancel,
+                font=("Segoe UI", 9),
+                bg='#404040',
+                fg='white',
+                activebackground='#505050',
+                activeforeground='white',
+                relief='flat',
+                borderwidth=0,
+                padx=20,
+                pady=8
+            )
+            self.cancel_button.pack()
+            
+            # Handle window close
+            self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+            
+        except Exception as e:
+            print(f"Error creating dialog: {e}")
+            self.dialog = None
+            
+    def _center_dialog(self):
+        """Center the dialog on parent."""
+        try:
+            self.dialog.update_idletasks()
+            
+            # Get parent position and size
+            parent_x = self.parent.winfo_x()
+            parent_y = self.parent.winfo_y()
+            parent_width = self.parent.winfo_width()
+            parent_height = self.parent.winfo_height()
+            
+            # Calculate center position
+            dialog_width = 500
+            dialog_height = 200
+            x = parent_x + (parent_width - dialog_width) // 2
+            y = parent_y + (parent_height - dialog_height) // 2
+            
+            self.dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        except Exception:
+            pass
+            
+    def update_progress(self, progress_info: UltraSimpleProgressInfo):
+        """Update progress - thread safe."""
+        if self.is_closed or not self.dialog:
+            return
+            
+        # Schedule update on main thread immediately
+        try:
+            self.dialog.after_idle(self._do_update, progress_info)
+        except Exception:
+            pass
+            
+    def _do_update(self, progress_info: UltraSimpleProgressInfo):
+        """Perform the actual update on main thread."""
+        try:
+            if self.is_closed or not self.dialog:
+                return
+                
+            # Update status message
+            status_text = progress_info.status_message
+            if progress_info.total_parameters > 0 and progress_info.current_parameter > 0:
+                status_text += f"\nPar├ómetro {progress_info.current_parameter}/{progress_info.total_parameters}"
+                
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.config(text=status_text)
+            
+            # Update progress bar
+            if hasattr(self, 'progress_container') and hasattr(self, 'progress_fill'):
+                # Get container width
+                container_width = 440  # Fixed width for reliability
+                progress_width = max(1, int((progress_info.progress_percentage / 100.0) * container_width))
+                
+                # Update the progress fill frame
+                self.progress_fill.place(width=progress_width)
+                
+                # Change color based on progress
+                if progress_info.progress_percentage >= 100:
+                    self.progress_fill.config(bg='#00aa00')  # Green when complete
+                else:
+                    self.progress_fill.config(bg='#0078d4')  # Blue for progress
+            
+            # Update percentage label
+            percentage_text = f"{int(progress_info.progress_percentage)}%"
+            if hasattr(self, 'percentage_label') and self.percentage_label:
+                self.percentage_label.config(text=percentage_text)
+            
+            # Handle completion
+            if progress_info.is_complete:
+                if progress_info.has_error:
+                    self._show_error(progress_info.error_message)
+                else:
+                    self._show_success()
+                    
+        except Exception as e:
+            print(f"Update error: {e}")
+            
+    def _show_success(self):
+        """Show success state."""
+        try:
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.config(text="Opera├º├úo conclu├¡da com sucesso!")
+            if hasattr(self, 'cancel_button') and self.cancel_button:
+                self.cancel_button.config(text="Fechar", bg="lightgreen")
+        except Exception:
+            pass
+            
+    def _show_error(self, error_message: str):
+        """Show error state."""
+        try:
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.config(text=f"Opera├º├úo falhou: {error_message}")
+            if hasattr(self, 'cancel_button') and self.cancel_button:
+                self.cancel_button.config(text="Fechar", bg="lightcoral")
+        except Exception:
+            pass
+            
+    def set_cancel_callback(self, callback: Callable):
+        """Set cancel callback."""
+        self.cancel_callback = callback
+        
+    def _on_cancel(self):
+        """Handle cancel."""
+        if self.cancel_callback and not self.is_cancelled:
+            self.is_cancelled = True
+            try:
+                self.cancel_callback()
+            except Exception:
+                pass
+        self.close()
+        
+    def _on_close(self):
+        """Handle window close."""
+        self._on_cancel()
+        
+    def show(self):
+        """Show dialog."""
+        try:
+            if self.dialog and not self.is_closed:
+                self.dialog.deiconify()
+                self.dialog.lift()
+        except Exception:
+            pass
+            
+    def hide(self):
+        """Hide dialog."""
+        try:
+            if self.dialog and not self.is_closed:
+                self.dialog.withdraw()
+        except Exception:
+            pass
+            
+    def close(self):
+        """Close dialog."""
+        if self.is_closed:
+            return
+            
+        self.is_closed = True
+        
+        try:
+            if self.dialog:
+                self.dialog.grab_release()
+                self.dialog.destroy()
+                self.dialog = None
+        except Exception:
+            pass
+            
+        # Clear references
+        self.status_label = None
+        self.progress_bar = None
+        self.progress_var = None
+        self.percentage_label = None
+        self.cancel_button = None
+
+
+def create_ultra_simple_progress_info(current_param: int, total_params: int, 
+                                     status_message: str = "Processando...") -> UltraSimpleProgressInfo:
+    """Create ultra simple progress info."""
+    progress_percentage = (current_param / total_params * 100) if total_params > 0 else 0
+    
+    return UltraSimpleProgressInfo(
+        progress_percentage=progress_percentage,
+        status_message=status_message,
+        current_parameter=current_param,
+        total_parameters=total_params
+    )
+</document_content>
+</document>
+<document index="107">
+<source>.\ui\unified_progress_dialog.py</source>
+<document_content>
+"""
+Unified Progress Dialog - Single progress dialog for all profile operations.
+
+This module provides a unified progress dialog that replaces multiple progress dialog types
+with translation support, clean minimal interface, and non-modal operation support.
+"""
+
+import customtkinter as ctk
+import threading
+import time
+from typing import Callable, Optional, Dict, Any
+from dataclasses import dataclass
+
+
+@dataclass
+class UnifiedProgressInfo:
+    """Unified progress information for all profile operations."""
+    operation_type: str  # 'load_from_device', 'load_to_device', 'load_to_ui', 'save_from_ui'
+    current_step: int    # Current step number (1-based)
+    total_steps: int     # Total number of steps
+    progress_percentage: float  # Overall progress (0.0 to 1.0)
+    status_message: str  # Current status message
+    current_parameter: str = ""  # Current parameter being processed
+    parameter_count: int = 0  # Current parameter index
+    total_parameters: int = 0  # Total parameters to process
+    can_cancel: bool = True  # Whether operation can be cancelled
+    is_complete: bool = False  # Whether operation is complete
+    is_cancelled: bool = False  # Whether operation was cancelled
+    has_error: bool = False  # Whether operation has error
+    error_message: str = ""  # Error message if any
+
+
+class UnifiedProgressDialog:
+    """Unified progress dialog for all profile operations with translation support."""
+    
+    def __init__(self, parent, operation_type: str, i18n_service=None):
+        """
+        Initialize the unified progress dialog.
+        
+        Args:
+            parent: Parent window
+            operation_type: Type of operation ('load_from_device', 'load_to_device', 'load_to_ui', 'save_from_ui')
+            i18n_service: Translation service instance
+        """
+        self.parent = parent
+        self.operation_type = operation_type
+        self.i18n = i18n_service
+        self.is_cancelled = False
+        self.is_closed = False
+        self.completion_called = False  # Flag to prevent multiple completion callbacks
+        self.cancel_callback = None
+        self.completion_callback = None
+        
+        # Operation timeout handling
+        self.operation_timeout = 300.0  # 5 minutes default
+        self.operation_start_time = None
+        self.timeout_after_id = None
+        
+        # Create the dialog
+        self._create_dialog()
+        
+    def _create_dialog(self):
+        """Create the unified progress dialog with clean, minimal interface."""
+        try:
+            # Create toplevel window
+            self.dialog = ctk.CTkToplevel(self.parent)
+            
+            # Set title based on operation type
+            title = self._get_operation_title()
+            self.dialog.title(title)
+            
+            # Set dialog properties
+            self.dialog.geometry("480x360")
+            self.dialog.resizable(False, False)
+            self.dialog.transient(self.parent)
+            self.dialog.grab_set()
+            
+            # Apply consistent theming
+            self._apply_theming()
+            
+            # Center the dialog
+            self._center_dialog()
+            
+            # Create UI elements
+            self._create_ui()
+            
+            # Handle window close event
+            self.dialog.protocol("WM_DELETE_WINDOW", self._on_window_close)
+            
+        except Exception as e:
+            print(f"Error creating unified progress dialog: {e}")
+            self.dialog = None
+            
+    def _get_operation_title(self) -> str:
+        """Get localized title based on operation type."""
+        title_keys = {
+            'load_from_device': 'load_from_device',
+            'load_to_device': 'load_profile_to_device', 
+            'load_to_ui': 'load_profile',
+            'save_from_ui': 'save_profile'
+        }
+        
+        title_defaults = {
+            'load_from_device': 'Load Profile from Device',
+            'load_to_device': 'Load Profile to Device',
+            'load_to_ui': 'Load Profile to UI',
+            'save_from_ui': 'Save Profile from UI'
+        }
+        
+        key = title_keys.get(self.operation_type, 'profile_operation')
+        default = title_defaults.get(self.operation_type, 'Profile Operation')
+        
+        return self._get_translated_text(key, default)
+        
+    def _get_translated_text(self, key: str, default: str) -> str:
+        """Get translated text using i18n service or return default."""
+        if self.i18n:
+            return self.i18n.get(key, default)
+        return default
+        
+    def _apply_theming(self):
+        """Apply consistent theming with the main application."""
+        # Get theme from parent if available
+        if hasattr(self.parent, 'theme_service'):
+            try:
+                current_theme = self.parent.theme_service.get_current_theme()
+                ctk.set_appearance_mode(current_theme)
+            except Exception:
+                ctk.set_appearance_mode("dark")
+        else:
+            ctk.set_appearance_mode("dark")
+            
+        # Set consistent color theme
+        ctk.set_default_color_theme("blue")
+        
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        try:
+            # Update parent to get accurate dimensions
+            self.parent.update_idletasks()
+            
+            # Get parent position and size
+            parent_x = self.parent.winfo_x()
+            parent_y = self.parent.winfo_y()
+            parent_width = self.parent.winfo_width()
+            parent_height = self.parent.winfo_height()
+            
+            # Calculate center position
+            dialog_width = 480
+            dialog_height = 360
+            x = parent_x + (parent_width - dialog_width) // 2
+            y = parent_y + (parent_height - dialog_height) // 2
+            
+            # Ensure dialog stays within screen bounds
+            screen_width = self.dialog.winfo_screenwidth()
+            screen_height = self.dialog.winfo_screenheight()
+            
+            x = max(0, min(x, screen_width - dialog_width))
+            y = max(0, min(y, screen_height - dialog_height))
+            
+            self.dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+            
+        except Exception:
+            # Fallback positioning
+            self.dialog.geometry("480x360+400+200")
+            
+    def _create_ui(self):
+        """Create the clean, minimal UI elements."""
+        # Configure main dialog grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        self.dialog.grid_rowconfigure(0, weight=1)
+        
+        # Create main frame
+        main_frame = ctk.CTkFrame(self.dialog, corner_radius=10)
+        main_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        main_frame.grid_columnconfigure(0, weight=1)
+        
+        # Header section
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=20, pady=(20, 15), sticky="ew")
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        # Operation icon
+        icon_text = self._get_operation_icon()
+        icon_label = ctk.CTkLabel(
+            header_frame,
+            text=icon_text,
+            width=40,
+            height=40,
+            fg_color=("#1f538d", "#1f538d"),
+            corner_radius=20,
+            text_color="white",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        icon_label.grid(row=0, column=0, padx=(0, 15), pady=0, sticky="w")
+        
+        # Operation title
+        title_text = self._get_operation_title()
+        self.title_label = ctk.CTkLabel(
+            header_frame,
+            text=title_text,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=("gray10", "gray90")
+        )
+        self.title_label.grid(row=0, column=1, padx=0, pady=0, sticky="w")
+        
+        # Status message
+        self.status_label = ctk.CTkLabel(
+            main_frame,
+            text=self._get_translated_text("initializing", "Initializing..."),
+            font=ctk.CTkFont(size=13),
+            text_color=("gray20", "gray80"),
+            wraplength=420,
+            justify="left"
+        )
+        self.status_label.grid(row=1, column=0, padx=20, pady=(0, 15), sticky="w")
+        
+        # Progress section
+        progress_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        progress_frame.grid(row=2, column=0, padx=20, pady=(0, 15), sticky="ew")
+        progress_frame.grid_columnconfigure(0, weight=1)
+        
+        # Progress bar
+        self.progress_bar = ctk.CTkProgressBar(
+            progress_frame,
+            height=16,
+            corner_radius=8,
+            progress_color=("#1f538d", "#1f538d")
+        )
+        self.progress_bar.grid(row=0, column=0, pady=(0, 8), sticky="ew")
+        self.progress_bar.set(0)
+        
+        # Progress details frame
+        progress_details = ctk.CTkFrame(progress_frame, fg_color="transparent")
+        progress_details.grid(row=1, column=0, sticky="ew")
+        progress_details.grid_columnconfigure(0, weight=1)
+        progress_details.grid_columnconfigure(1, weight=0)
+        
+        # Progress text (step and parameter info)
+        self.progress_text = ctk.CTkLabel(
+            progress_details,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray30", "gray70")
+        )
+        self.progress_text.grid(row=0, column=0, sticky="w")
+        
+        # Percentage display
+        self.percentage_label = ctk.CTkLabel(
+            progress_details,
+            text="0%",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=("#1f538d", "#1f538d")
+        )
+        self.percentage_label.grid(row=0, column=1, sticky="e")
+        
+        # Current parameter display
+        self.parameter_label = ctk.CTkLabel(
+            main_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+            wraplength=420,
+            justify="left"
+        )
+        self.parameter_label.grid(row=3, column=0, padx=20, pady=(0, 20), sticky="w")
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=4, column=0, padx=20, pady=(0, 20), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        
+        # Cancel button
+        cancel_text = self._get_translated_text("cancel", "Cancel")
+        self.cancel_button = ctk.CTkButton(
+            button_frame,
+            text=cancel_text,
+            command=self._on_cancel,
+            width=100,
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray40")
+        )
+        self.cancel_button.grid(row=0, column=0, pady=0, sticky="e")
+        
+        # Close button (initially hidden)
+        close_text = self._get_translated_text("close", "Close")
+        self.close_button = ctk.CTkButton(
+            button_frame,
+            text=close_text,
+            command=self._on_close,
+            width=100,
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=("#1f538d", "#1f538d"),
+            hover_color=("#144870", "#144870")
+        )
+        # Don't grid the close button initially
+        
+    def _get_operation_icon(self) -> str:
+        """Get icon for the operation type."""
+        icons = {
+            'load_from_device': '­ƒô▒',
+            'load_to_device': '­ƒôñ',
+            'load_to_ui': '­ƒôé',
+            'save_from_ui': '­ƒÆ¥'
+        }
+        return icons.get(self.operation_type, 'ÔÜÖ')
+        
+    def update_progress(self, progress_info: UnifiedProgressInfo):
+        """
+        Update the progress dialog with new information - thread safe.
+        
+        Args:
+            progress_info: Progress information
+        """
+        if self.is_closed or not self.dialog:
+            return
+            
+        # Schedule update on main thread
+        try:
+            if self.dialog.winfo_exists():
+                self.dialog.after_idle(self._do_update, progress_info)
+        except Exception:
+            # Dialog may have been destroyed
+            pass
+            
+    def update_translations(self):
+        """Update all translatable text in the dialog."""
+        if self.is_closed or not self.dialog:
+            return
+            
+        try:
+            if self.dialog.winfo_exists():
+                self.dialog.after_idle(self._do_update_translations)
+        except Exception:
+            pass
+            
+    def _do_update_translations(self):
+        """Update translations on main thread."""
+        try:
+            if self.is_closed or not self.dialog:
+                return
+                
+            # Update dialog title
+            title = self._get_operation_title()
+            self.dialog.title(title)
+            
+            # Update title label
+            if hasattr(self, 'title_label') and self.title_label:
+                self.title_label.configure(text=title)
+                
+            # Update button text
+            if hasattr(self, 'cancel_button') and self.cancel_button:
+                cancel_text = self._get_translated_text("cancel", "Cancel")
+                self.cancel_button.configure(text=cancel_text)
+                
+            if hasattr(self, 'close_button') and self.close_button:
+                close_text = self._get_translated_text("close", "Close")
+                self.close_button.configure(text=close_text)
+                
+            # Update status label if it has translatable text
+            if hasattr(self, 'status_label') and self.status_label:
+                current_text = self.status_label.cget("text")
+                
+                # Check for various translatable status messages
+                translatable_patterns = {
+                    # Initializing messages
+                    ("Initializing...", "Inicializando...", "Inicializando..."): ("initializing", "Initializing..."),
+                    # Processing step messages
+                    ("Processing step", "Processando passo", "Procesando paso"): ("processing_step", "Processing step"),
+                    # Connection messages
+                    ("Connecting to device", "Conectando ao dispositivo", "Conectando al dispositivo"): ("connecting_to_device", "Connecting to device..."),
+                    # Reading messages
+                    ("Reading profile file", "Lendo arquivo de perfil", "Leyendo archivo de perfil"): ("reading_profile_file", "Reading profile file..."),
+                    # Finalizing messages
+                    ("Finalizing operation", "Finalizando opera├º├úo", "Finalizando operaci├│n"): ("finalizing_operation", "Finalizing operation..."),
+                    ("Writing profile file", "Escrevendo arquivo de perfil", "Escribiendo archivo de perfil"): ("writing_profile_file", "Writing profile file..."),
+                    ("Applying configuration", "Aplicando configura├º├úo", "Aplicando configuraci├│n"): ("applying_configuration", "Applying configuration..."),
+                }
+                
+                # Check if current text matches any translatable pattern
+                for patterns, (key, default) in translatable_patterns.items():
+                    if any(pattern in current_text for pattern in patterns):
+                        # Extract any dynamic parts (like step numbers)
+                        import re
+                        step_match = re.search(r'(\d+)', current_text)
+                        if step_match and key == "processing_step":
+                            step_num = step_match.group(1)
+                            translated_text = f"{self._get_translated_text(key, default)} {step_num}..."
+                        else:
+                            translated_text = self._get_translated_text(key, default)
+                        
+                        self.status_label.configure(text=translated_text)
+                        break
+                    
+        except Exception as e:
+            print(f"Translation update error: {e}")
+            
+    def _do_update(self, progress_info: UnifiedProgressInfo):
+        """Perform the actual update on main thread."""
+        try:
+            if self.is_closed or not self.dialog:
+                return
+                
+            # Start timeout monitoring on first progress update
+            if self.operation_start_time is None and progress_info.current_step > 0:
+                self._start_timeout_monitoring()
+                
+            # Update status message
+            if progress_info.status_message:
+                self.status_label.configure(text=progress_info.status_message)
+                
+            # Update progress bar
+            progress_value = max(0, min(1, progress_info.progress_percentage))
+            self.progress_bar.set(progress_value)
+            
+            # Update percentage display
+            percentage = int(progress_value * 100)
+            self.percentage_label.configure(text=f"{percentage}%")
+            
+            # Update progress text with step and parameter info
+            progress_parts = []
+            if progress_info.total_steps > 0:
+                step_text = self._get_translated_text("step", "Step")
+                progress_parts.append(f"{step_text} {progress_info.current_step}/{progress_info.total_steps}")
+                
+            if progress_info.total_parameters > 0 and progress_info.parameter_count > 0:
+                param_text = self._get_translated_text("parameter", "Parameter")
+                progress_parts.append(f"{param_text} {progress_info.parameter_count}/{progress_info.total_parameters}")
+                
+            self.progress_text.configure(text=" ÔÇó ".join(progress_parts))
+            
+            # Update current parameter display
+            if progress_info.current_parameter:
+                param_text = self._get_translated_text("processing_parameter", "Processing parameter")
+                parameter_display = f"{param_text}: {progress_info.current_parameter}"
+                self.parameter_label.configure(text=parameter_display)
+            else:
+                self.parameter_label.configure(text="")
+                
+            # Handle completion
+            if progress_info.is_complete:
+                self._handle_completion(progress_info)
+                
+            # Handle cancellation
+            if progress_info.is_cancelled:
+                self._handle_cancellation()
+                
+        except Exception as e:
+            print(f"Progress update error: {e}")
+            
+    def _handle_completion(self, progress_info: UnifiedProgressInfo):
+        """Handle operation completion."""
+        # Stop timeout monitoring
+        self._stop_timeout_monitoring()
+        
+        # Update UI for completion
+        if progress_info.has_error:
+            # Show error state
+            error_text = self._get_translated_text("operation_failed", "Operation failed")
+            if progress_info.error_message:
+                error_text += f": {progress_info.error_message}"
+            self.status_label.configure(text=error_text)
+            
+            # Change progress bar color to red
+            self.progress_bar.configure(progress_color=("#cc0000", "#cc0000"))
+            
+        else:
+            # Show success state
+            success_text = self._get_translated_text("operation_completed", "Operation completed successfully")
+            self.status_label.configure(text=success_text)
+            
+            # Change progress bar color to green
+            self.progress_bar.configure(progress_color=("#00aa00", "#00aa00"))
+            self.progress_bar.set(1.0)
+            self.percentage_label.configure(text="100%")
+            
+        # Hide cancel button and show close button
+        self.cancel_button.grid_remove()
+        self.close_button.grid(row=0, column=0, pady=0, sticky="e")
+        
+        # Call completion callback if set (only once)
+        if self.completion_callback and not self.completion_called:
+            self.completion_called = True
+            try:
+                self.completion_callback(progress_info)
+            except Exception as e:
+                print(f"Completion callback error: {e}")
+                
+    def _handle_cancellation(self):
+        """Handle operation cancellation."""
+        # Stop timeout monitoring
+        self._stop_timeout_monitoring()
+        
+        # Update UI for cancellation
+        cancelled_text = self._get_translated_text("operation_cancelled", "Operation cancelled")
+        self.status_label.configure(text=cancelled_text)
+        
+        # Change progress bar color to orange
+        self.progress_bar.configure(progress_color=("#ff8c00", "#ff8c00"))
+        
+        # Hide cancel button and show close button
+        self.cancel_button.grid_remove()
+        self.close_button.grid(row=0, column=0, pady=0, sticky="e")
+        
+    def _start_timeout_monitoring(self):
+        """Start monitoring for operation timeout."""
+        self.operation_start_time = time.time()
+        self._check_timeout()
+        
+    def _check_timeout(self):
+        """Check if operation has timed out."""
+        if self.is_closed or not self.dialog:
+            return
+            
+        if self.operation_start_time:
+            elapsed = time.time() - self.operation_start_time
+            if elapsed > self.operation_timeout:
+                # Operation timed out
+                timeout_text = self._get_translated_text("operation_timeout", "Operation timed out")
+                self.status_label.configure(text=timeout_text)
+                
+                # Trigger cancellation
+                self._on_cancel()
+                return
+                
+        # Schedule next timeout check
+        self.timeout_after_id = self.dialog.after(5000, self._check_timeout)
+        
+    def _stop_timeout_monitoring(self):
+        """Stop timeout monitoring."""
+        if self.timeout_after_id:
+            try:
+                self.dialog.after_cancel(self.timeout_after_id)
+            except Exception:
+                pass
+            self.timeout_after_id = None
+            
+    def set_cancel_callback(self, callback: Callable):
+        """Set callback function for cancel operation."""
+        self.cancel_callback = callback
+        
+    def set_completion_callback(self, callback: Callable):
+        """Set callback function for operation completion."""
+        self.completion_callback = callback
+        
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        if not self.is_cancelled and self.cancel_callback:
+            self.is_cancelled = True
+            try:
+                self.cancel_callback()
+            except Exception as e:
+                print(f"Cancel callback error: {e}")
+        self.close_dialog()
+        
+    def _on_close(self):
+        """Handle close button click."""
+        self.close_dialog()
+        
+    def _on_window_close(self):
+        """Handle window close event."""
+        if not self.is_cancelled:
+            self._on_cancel()
+        else:
+            self.close_dialog()
+            
+    def show(self):
+        """Show the dialog."""
+        try:
+            if self.dialog and not self.is_closed:
+                self.dialog.deiconify()
+                self.dialog.lift()
+                self.dialog.focus()
+        except Exception:
+            pass
+            
+    def hide(self):
+        """Hide the dialog."""
+        try:
+            if self.dialog and not self.is_closed:
+                self.dialog.withdraw()
+        except Exception:
+            pass
+            
+    def close_dialog(self):
+        """Close the dialog safely."""
+        if self.is_closed:
+            return
+            
+        self.is_closed = True
+        
+        # Stop timeout monitoring
+        self._stop_timeout_monitoring()
+        
+        try:
+            if self.dialog:
+                self.dialog.grab_release()
+                self.dialog.destroy()
+                self.dialog = None
+        except Exception:
+            pass
+            
+        # Clear references
+        self.status_label = None
+        self.progress_bar = None
+        self.progress_text = None
+        self.percentage_label = None
+        self.parameter_label = None
+        self.cancel_button = None
+        self.close_button = None
+
+
+def create_unified_progress_dialog(parent, operation_type: str, i18n_service=None) -> UnifiedProgressDialog:
+    """
+    Factory function to create a unified progress dialog.
+    
+    Args:
+        parent: Parent window
+        operation_type: Type of operation ('load_from_device', 'load_to_device', 'load_to_ui', 'save_from_ui')
+        i18n_service: Translation service instance
+        
+    Returns:
+        UnifiedProgressDialog instance
+    """
+    return UnifiedProgressDialog(parent, operation_type, i18n_service)
+</document_content>
+</document>
+<document index="108">
+<source>.\utils\__init__.py</source>
+<document_content>
+
+</document_content>
+</document>
+<document index="109">
+<source>.\utils\helpers.py</source>
+<document_content>
+# -*- coding: utf-8 -*-
+
+import sys
+import os
+import logging
+
+# Set up logging for helpers
+logger = logging.getLogger(__name__)
+
+def resource_path(relative_path):
+    """ 
+    Get absolute path to an asset, which works for development and for PyInstaller.
+    Enhanced with better error handling and debugging information.
+    
+    Args:
+        relative_path: Relative path to the resource
+        
+    Returns:
+        Absolute path to the resource
+        
+    Raises:
+        ValueError: If relative_path is None or empty
+        OSError: If there are issues with path resolution
+    """
+    if not relative_path:
+        raise ValueError("relative_path cannot be None or empty")
+    
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        if hasattr(sys, '_MEIPASS'):
+            base_path = sys._MEIPASS
+            logger.debug(f"Using PyInstaller base path: {base_path}")
+        else:
+            base_path = os.path.abspath(".")
+            logger.debug(f"Using development base path: {base_path}")
+        
+        # Join the paths
+        full_path = os.path.join(base_path, relative_path)
+        
+        # Normalize the path (resolve .. and . components)
+        normalized_path = os.path.normpath(full_path)
+        
+        logger.debug(f"Resource path resolution: {relative_path} -> {normalized_path}")
+        
+        return normalized_path
+        
+    except Exception as e:
+        logger.error(f"Error resolving resource path for '{relative_path}': {e}")
+        raise OSError(f"Failed to resolve resource path: {relative_path}") from e
+
+def validate_resource_exists(relative_path):
+    """
+    Validate that a resource exists and return its absolute path.
+    
+    Args:
+        relative_path: Relative path to validate
+        
+    Returns:
+        Absolute path if resource exists, None otherwise
+    """
+    try:
+        full_path = resource_path(relative_path)
+        
+        if os.path.exists(full_path):
+            logger.debug(f"Resource exists: {full_path}")
+            return full_path
+        else:
+            logger.debug(f"Resource does not exist: {full_path}")
+            return None
+            
+    except Exception as e:
+        logger.warning(f"Error validating resource '{relative_path}': {e}")
+        return None
+
+def get_resource_info(relative_path):
+    """
+    Get detailed information about a resource.
+    
+    Args:
+        relative_path: Relative path to analyze
+        
+    Returns:
+        Dictionary with resource information
+    """
+    info = {
+        'relative_path': relative_path,
+        'absolute_path': None,
+        'exists': False,
+        'is_file': False,
+        'is_directory': False,
+        'size': None,
+        'error': None
+    }
+    
+    try:
+        full_path = resource_path(relative_path)
+        info['absolute_path'] = full_path
+        
+        if os.path.exists(full_path):
+            info['exists'] = True
+            info['is_file'] = os.path.isfile(full_path)
+            info['is_directory'] = os.path.isdir(full_path)
+            
+            if info['is_file']:
+                try:
+                    info['size'] = os.path.getsize(full_path)
+                except OSError as e:
+                    info['error'] = f"Could not get file size: {e}"
+                    
+    except Exception as e:
+        info['error'] = str(e)
+        logger.error(f"Error getting resource info for '{relative_path}': {e}")
+    
+    return info
+</document_content>
+</document>
+<document index="110">
+<source>.\utils\ui_responsiveness_helper.py</source>
+<document_content>
+"""
+UI Responsiveness Helper
+
+This module provides utilities to keep the UI responsive during long operations.
+"""
+
+import threading
+import time
+from typing import Callable, Optional
+
+
+class UIResponsivenessHelper:
+    """Helper class to maintain UI responsiveness during operations."""
+    
+    @staticmethod
+    def run_with_ui_updates(operation_func: Callable, 
+                           ui_update_func: Optional[Callable] = None,
+                           update_interval: float = 0.1):
+        """
+        Run an operation while keeping the UI responsive.
+        
+        Args:
+            operation_func: Function to run in background
+            ui_update_func: Function to call for UI updates
+            update_interval: How often to update UI (seconds)
+        """
+        result = {'completed': False, 'result': None, 'error': None}
+        
+        def worker():
+            try:
+                result['result'] = operation_func()
+            except Exception as e:
+                result['error'] = str(e)
+            finally:
+                result['completed'] = True
+        
+        # Start operation in background thread
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        
+        # Keep UI responsive while waiting
+        while not result['completed']:
+            if ui_update_func:
+                try:
+                    ui_update_func()
+                except:
+                    pass  # Ignore UI update errors
+            time.sleep(update_interval)
+        
+        # Wait for thread to complete
+        thread.join(timeout=1.0)
+        
+        if result['error']:
+            raise Exception(result['error'])
+        
+        return result['result']
+    
+    @staticmethod
+    def safe_ui_call(ui_func: Callable, *args, **kwargs):
+        """Safely call a UI function, ignoring errors."""
+        try:
+            return ui_func(*args, **kwargs)
+        except Exception as e:
+            print(f"UI call error (ignored): {e}")
+            return None
+
+</document_content>
+</document>
+<document index="111">
+<source>.\utils\widget_parent_resolver.py</source>
+<document_content>
+"""
+Widget Parent Resolution Utility
+
+This module provides utilities for safely resolving parent widgets from various
+UI element types, including custom UI elements that don't follow standard tkinter
+patterns.
+"""
+
+from typing import Any, Optional, List, Dict
+from dataclasses import dataclass
+import logging
+import traceback
+import sys
+from datetime import datetime
+
+
+@dataclass
+class ParentResolutionResult:
+    """Result of parent widget resolution attempt"""
+    parent: Optional[Any]
+    method_used: str
+    success: bool
+    fallback_available: bool
+
+
+@dataclass
+class WidgetIntrospectionInfo:
+    """Information about widget structure and available attributes"""
+    widget_type: str
+    available_attributes: List[str]
+    parent_access_methods: List[str]
+    hierarchy_depth: int
+
+
+def get_widget_parent(widget: Any) -> Optional[Any]:
+    """
+    Safely get the parent container of a widget using multiple strategies.
+    
+    This function attempts various methods to find the parent widget, handling
+    different UI element types including custom elements that don't follow
+    standard tkinter patterns.
+    
+    Args:
+        widget: The widget to find the parent for
+        
+    Returns:
+        Parent widget or None if not found
+    """
+    if widget is None:
+        return None
+    
+    # Strategy 1: Try standard tkinter master attribute
+    try:
+        if hasattr(widget, 'master'):
+            parent = widget.master
+            if parent is not None and parent != "" and parent is not False:
+                return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 2: Try winfo_parent() for tkinter widgets
+    try:
+        if hasattr(widget, 'winfo_parent'):
+            parent_name = widget.winfo_parent()
+            if parent_name and parent_name != "":
+                # Get the actual parent widget from the name
+                if hasattr(widget, 'nametowidget'):
+                    parent = widget.nametowidget(parent_name)
+                    if parent is not None:
+                        return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 3: Try custom _parent attribute
+    try:
+        if hasattr(widget, '_parent'):
+            parent = widget._parent
+            if parent is not None and parent != "" and parent is not False:
+                return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 4: Try container attribute (for parameter UI elements)
+    try:
+        if hasattr(widget, 'container'):
+            parent = widget.container
+            if parent is not None and parent != "" and parent is not False:
+                return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 5: Try container_frame attribute (for BaseUIElement derivatives)
+    try:
+        if hasattr(widget, 'container_frame'):
+            parent = widget.container_frame
+            if parent is not None and parent != "" and parent is not False:
+                return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 6: Try parent attribute (alternative naming)
+    try:
+        if hasattr(widget, 'parent'):
+            parent = widget.parent
+            if parent is not None and parent != "" and parent is not False:
+                return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 7: For custom UI elements, try accessing the actual tkinter widget
+    try:
+        if hasattr(widget, 'widget'):
+            actual_widget = widget.widget
+            if actual_widget is not None and hasattr(actual_widget, 'master'):
+                parent = actual_widget.master
+                if parent is not None and parent != "" and parent is not False:
+                    return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # Strategy 8: Try winfo_parent on the wrapped widget
+    try:
+        if hasattr(widget, 'widget'):
+            actual_widget = widget.widget
+            if actual_widget is not None and hasattr(actual_widget, 'winfo_parent'):
+                parent_name = actual_widget.winfo_parent()
+                if parent_name and parent_name != "":
+                    if hasattr(actual_widget, 'nametowidget'):
+                        parent = actual_widget.nametowidget(parent_name)
+                        if parent is not None:
+                            return parent
+    except (AttributeError, Exception):
+        pass
+    
+    # No parent found
+    return None
+
+
+def get_widget_parent_with_details(widget: Any) -> ParentResolutionResult:
+    """
+    Get widget parent with detailed information about the resolution process.
+    
+    Args:
+        widget: The widget to find the parent for
+        
+    Returns:
+        ParentResolutionResult with details about the resolution attempt
+    """
+    if widget is None:
+        return ParentResolutionResult(
+            parent=None,
+            method_used="none",
+            success=False,
+            fallback_available=False
+        )
+    
+    # Try each strategy and record which one worked
+    def _safe_get_attr(w, attr):
+        """Safely get attribute and check for valid values"""
+        if not hasattr(w, attr):
+            return None
+        value = getattr(w, attr, None)
+        if value is not None and value != "" and value is not False:
+            return value
+        return None
+    
+    strategies = [
+        ("master", lambda w: _safe_get_attr(w, 'master')),
+        ("winfo_parent", _try_winfo_parent),
+        ("_parent", lambda w: _safe_get_attr(w, '_parent')),
+        ("container", lambda w: _safe_get_attr(w, 'container')),
+        ("container_frame", lambda w: _safe_get_attr(w, 'container_frame')),
+        ("parent", lambda w: _safe_get_attr(w, 'parent')),
+        ("widget.master", _try_widget_master),
+        ("widget.winfo_parent", _try_widget_winfo_parent),
+    ]
+    
+    for method_name, strategy_func in strategies:
+        try:
+            parent = strategy_func(widget)
+            if parent is not None:
+                return ParentResolutionResult(
+                    parent=parent,
+                    method_used=method_name,
+                    success=True,
+                    fallback_available=True
+                )
+        except Exception:
+            continue
+    
+    return ParentResolutionResult(
+        parent=None,
+        method_used="none",
+        success=False,
+        fallback_available=False
+    )
+
+
+def _try_winfo_parent(widget: Any) -> Optional[Any]:
+    """Try to get parent using winfo_parent method"""
+    if not hasattr(widget, 'winfo_parent'):
+        return None
+    
+    parent_name = widget.winfo_parent()
+    if not parent_name or parent_name == "":
+        return None
+    
+    if hasattr(widget, 'nametowidget'):
+        parent = widget.nametowidget(parent_name)
+        if parent is not None:
+            return parent
+    
+    return None
+
+
+def _try_widget_master(widget: Any) -> Optional[Any]:
+    """Try to get parent from wrapped widget's master attribute"""
+    if not hasattr(widget, 'widget'):
+        return None
+    
+    actual_widget = widget.widget
+    if actual_widget is None:
+        return None
+    
+    if hasattr(actual_widget, 'master'):
+        parent = actual_widget.master
+        if parent is not None and parent != "" and parent is not False:
+            return parent
+    
+    return None
+
+
+def _try_widget_winfo_parent(widget: Any) -> Optional[Any]:
+    """Try to get parent from wrapped widget's winfo_parent method"""
+    if not hasattr(widget, 'widget'):
+        return None
+    
+    actual_widget = widget.widget
+    if actual_widget is None:
+        return None
+    
+    return _try_winfo_parent(actual_widget)
+
+
+def inspect_widget_attributes(widget: Any) -> WidgetIntrospectionInfo:
+    """
+    Analyze widget structure and available attributes for debugging.
+    
+    Args:
+        widget: The widget to inspect
+        
+    Returns:
+        WidgetIntrospectionInfo with analysis results
+    """
+    if widget is None:
+        return WidgetIntrospectionInfo(
+            widget_type="None",
+            available_attributes=[],
+            parent_access_methods=[],
+            hierarchy_depth=0
+        )
+    
+    widget_type = type(widget).__name__
+    available_attributes = [attr for attr in dir(widget) if not attr.startswith('__')]
+    
+    # Check which parent access methods are available
+    parent_access_methods = []
+    
+    if hasattr(widget, 'master'):
+        parent_access_methods.append('master')
+    if hasattr(widget, 'winfo_parent'):
+        parent_access_methods.append('winfo_parent')
+    if hasattr(widget, '_parent'):
+        parent_access_methods.append('_parent')
+    if hasattr(widget, 'container'):
+        parent_access_methods.append('container')
+    if hasattr(widget, 'container_frame'):
+        parent_access_methods.append('container_frame')
+    if hasattr(widget, 'parent'):
+        parent_access_methods.append('parent')
+    if hasattr(widget, 'widget'):
+        parent_access_methods.append('widget (wrapped)')
+        # Check wrapped widget
+        try:
+            wrapped = widget.widget
+            if wrapped and hasattr(wrapped, 'master'):
+                parent_access_methods.append('widget.master')
+            if wrapped and hasattr(wrapped, 'winfo_parent'):
+                parent_access_methods.append('widget.winfo_parent')
+        except:
+            pass
+    
+    # Calculate hierarchy depth
+    hierarchy_depth = _calculate_hierarchy_depth(widget)
+    
+    return WidgetIntrospectionInfo(
+        widget_type=widget_type,
+        available_attributes=available_attributes,
+        parent_access_methods=parent_access_methods,
+        hierarchy_depth=hierarchy_depth
+    )
+
+
+def _calculate_hierarchy_depth(widget: Any, max_depth: int = 10) -> int:
+    """Calculate widget hierarchy depth"""
+    depth = 0
+    current = widget
+    
+    while current and depth < max_depth:
+        parent = get_widget_parent(current)
+        if parent is None or parent == current:
+            break
+        current = parent
+        depth += 1
+    
+    return depth
+
+
+def get_widget_hierarchy_info(widget: Any, max_levels: int = 5) -> Dict[str, Any]:
+    """
+    Get detailed information about widget hierarchy for debugging.
+    
+    Args:
+        widget: The widget to analyze
+        max_levels: Maximum levels to traverse up the hierarchy
+        
+    Returns:
+        Dictionary with hierarchy information
+    """
+    hierarchy = []
+    current = widget
+    level = 0
+    
+    while current and level < max_levels:
+        info = inspect_widget_attributes(current)
+        hierarchy.append({
+            'level': level,
+            'widget_type': info.widget_type,
+            'available_methods': info.parent_access_methods,
+            'widget_id': id(current)
+        })
+        
+        parent = get_widget_parent(current)
+        if parent is None or parent == current:
+            break
+        
+        current = parent
+        level += 1
+    
+    return {
+        'hierarchy': hierarchy,
+        'total_levels': level,
+        'root_found': level < max_levels
+    }
+
+
+def log_widget_access_debug(widget: Any, context: str = "") -> None:
+    """
+    Log detailed debugging information about widget access attempts.
+    
+    Args:
+        widget: The widget being accessed
+        context: Additional context for the log message
+    """
+    logger = logging.getLogger(__name__)
+    
+    if widget is None:
+        logger.warning(f"Widget access debug [{context}]: Widget is None")
+        return
+    
+    info = inspect_widget_attributes(widget)
+    resolution_result = get_widget_parent_with_details(widget)
+    
+    logger.debug(f"Widget access debug [{context}]:")
+    logger.debug(f"  Widget type: {info.widget_type}")
+    logger.debug(f"  Available parent methods: {info.parent_access_methods}")
+    logger.debug(f"  Resolution success: {resolution_result.success}")
+    logger.debug(f"  Method used: {resolution_result.method_used}")
+    logger.debug(f"  Parent found: {resolution_result.parent is not None}")
+    
+    if not resolution_result.success:
+        logger.warning(f"Failed to resolve parent for {info.widget_type} widget in context: {context}")
+        hierarchy_info = get_widget_hierarchy_info(widget)
+        logger.debug(f"  Hierarchy info: {hierarchy_info}")
+
+
+def log_widget_access_failure(widget: Any, context: str, exception: Exception = None, 
+                             fallback_used: bool = False, fallback_description: str = "") -> None:
+    """
+    Log detailed information about widget access failures with comprehensive error details.
+    
+    Args:
+        widget: The widget that failed to be accessed
+        context: Context where the failure occurred
+        exception: The exception that occurred (if any)
+        fallback_used: Whether a fallback strategy was used
+        fallback_description: Description of the fallback strategy used
+    """
+    logger = logging.getLogger(__name__)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Create detailed error report
+    error_report = [
+        f"=== Widget Access Failure Report [{timestamp}] ===",
+        f"Context: {context}",
+        f"Fallback Used: {fallback_used}",
+    ]
+    
+    if fallback_used and fallback_description:
+        error_report.append(f"Fallback Strategy: {fallback_description}")
+    
+    # Widget information
+    if widget is not None:
+        try:
+            info = inspect_widget_attributes(widget)
+            error_report.extend([
+                f"Widget Type: {info.widget_type}",
+                f"Available Attributes: {len(info.available_attributes)} attributes",
+                f"Parent Access Methods: {info.parent_access_methods}",
+                f"Hierarchy Depth: {info.hierarchy_depth}",
+            ])
+            
+            # Try to get more detailed widget information
+            widget_details = _get_detailed_widget_info(widget)
+            if widget_details:
+                error_report.append(f"Widget Details: {widget_details}")
+                
+        except Exception as info_error:
+            error_report.append(f"Failed to get widget info: {str(info_error)}")
+    else:
+        error_report.append("Widget: None")
+    
+    # Exception information
+    if exception:
+        error_report.extend([
+            f"Exception Type: {type(exception).__name__}",
+            f"Exception Message: {str(exception)}",
+        ])
+        
+        # Add traceback if available
+        if hasattr(exception, '__traceback__') and exception.__traceback__:
+            tb_lines = traceback.format_tb(exception.__traceback__)
+            error_report.append("Traceback:")
+            error_report.extend([f"  {line.strip()}" for line in tb_lines])
+    
+    # Resolution attempt details
+    if widget is not None:
+        try:
+            resolution_result = get_widget_parent_with_details(widget)
+            error_report.extend([
+                f"Resolution Attempted: {resolution_result.method_used}",
+                f"Resolution Success: {resolution_result.success}",
+                f"Fallback Available: {resolution_result.fallback_available}",
+            ])
+        except Exception as res_error:
+            error_report.append(f"Failed to get resolution details: {str(res_error)}")
+    
+    error_report.append("=" * 50)
+    
+    # Log the complete error report
+    full_report = "\n".join(error_report)
+    
+    if fallback_used:
+        logger.warning(f"Widget access failure with fallback in context '{context}':\n{full_report}")
+    else:
+        logger.error(f"Widget access failure in context '{context}':\n{full_report}")
+    
+    # Also print to console for immediate visibility during development
+    print(f"WIDGET ACCESS FAILURE [{context}]: {exception if exception else 'Unknown error'}")
+    if fallback_used:
+        print(f"  Fallback strategy used: {fallback_description}")
+
+
+def log_widget_access_warning(widget: Any, context: str, warning_message: str, 
+                             fallback_strategy: str = "") -> None:
+    """
+    Log warning messages for widget access issues that don't prevent functionality.
+    
+    Args:
+        widget: The widget being accessed
+        context: Context where the warning occurred
+        warning_message: The warning message
+        fallback_strategy: Description of fallback strategy being used
+    """
+    logger = logging.getLogger(__name__)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    warning_details = [
+        f"Widget Access Warning [{timestamp}]",
+        f"Context: {context}",
+        f"Warning: {warning_message}",
+    ]
+    
+    if fallback_strategy:
+        warning_details.append(f"Fallback Strategy: {fallback_strategy}")
+    
+    if widget is not None:
+        try:
+            info = inspect_widget_attributes(widget)
+            warning_details.extend([
+                f"Widget Type: {info.widget_type}",
+                f"Available Methods: {info.parent_access_methods}",
+            ])
+        except Exception:
+            warning_details.append("Widget Info: Unable to retrieve")
+    
+    full_warning = " | ".join(warning_details)
+    logger.warning(full_warning)
+    
+    # Print abbreviated warning to console
+    print(f"WARNING [{context}]: {warning_message}")
+    if fallback_strategy:
+        print(f"  Using fallback: {fallback_strategy}")
+
+
+def log_widget_hierarchy_analysis(widget: Any, context: str = "", max_levels: int = 5) -> None:
+    """
+    Log detailed widget hierarchy analysis for debugging complex widget structures.
+    
+    Args:
+        widget: The widget to analyze
+        context: Context for the analysis
+        max_levels: Maximum hierarchy levels to analyze
+    """
+    logger = logging.getLogger(__name__)
+    
+    if widget is None:
+        logger.debug(f"Hierarchy analysis [{context}]: Widget is None")
+        return
+    
+    try:
+        hierarchy_info = get_widget_hierarchy_info(widget, max_levels)
+        
+        analysis_report = [
+            f"=== Widget Hierarchy Analysis [{context}] ===",
+            f"Total Levels Found: {hierarchy_info['total_levels']}",
+            f"Root Found: {hierarchy_info['root_found']}",
+            "Hierarchy Details:",
+        ]
+        
+        for level_info in hierarchy_info['hierarchy']:
+            level = level_info['level']
+            widget_type = level_info['widget_type']
+            methods = level_info['available_methods']
+            widget_id = level_info['widget_id']
+            
+            analysis_report.append(
+                f"  Level {level}: {widget_type} (ID: {widget_id}) - Methods: {methods}"
+            )
+        
+        analysis_report.append("=" * 50)
+        
+        full_analysis = "\n".join(analysis_report)
+        logger.debug(full_analysis)
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze widget hierarchy for context '{context}': {str(e)}")
+
+
+def _get_detailed_widget_info(widget: Any) -> str:
+    """
+    Get detailed information about a widget for error reporting.
+    
+    Args:
+        widget: The widget to analyze
+        
+    Returns:
+        String with detailed widget information
+    """
+    details = []
+    
+    try:
+        # Basic widget information
+        details.append(f"Type: {type(widget).__name__}")
+        details.append(f"ID: {id(widget)}")
+        
+        # Try to get widget name/title if available
+        for attr in ['_name', 'name', 'title', '_title']:
+            if hasattr(widget, attr):
+                try:
+                    value = getattr(widget, attr)
+                    if value:
+                        details.append(f"{attr}: {value}")
+                        break
+                except Exception:
+                    continue
+        
+        # Check for common widget properties
+        for prop in ['width', 'height', 'x', 'y']:
+            if hasattr(widget, prop):
+                try:
+                    value = getattr(widget, prop)
+                    details.append(f"{prop}: {value}")
+                except Exception:
+                    continue
+        
+        # Check if widget is visible/mapped
+        for visibility_attr in ['winfo_viewable', 'winfo_ismapped', 'winfo_exists']:
+            if hasattr(widget, visibility_attr):
+                try:
+                    value = getattr(widget, visibility_attr)()
+                    details.append(f"{visibility_attr}: {value}")
+                except Exception:
+                    continue
+        
+        return " | ".join(details) if details else "No details available"
+        
+    except Exception as e:
+        return f"Error getting details: {str(e)}"
+
+
+def ensure_application_continues(operation_name: str, critical: bool = False) -> callable:
+    """
+    Decorator to ensure application continues functioning even when UI enhancements fail.
+    
+    Args:
+        operation_name: Name of the operation being performed
+        critical: Whether this operation is critical to application functionality
+        
+    Returns:
+        Decorator function
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                # Log the error with full details
+                context = f"{operation_name}_operation"
+                
+                # Get widget from args if available
+                widget = None
+                if args and hasattr(args[0], '__class__'):
+                    # First arg might be self, second might be widget
+                    if len(args) > 1:
+                        widget = args[1]
+                    elif len(args) > 0 and hasattr(args[0], 'widget'):
+                        widget = args[0].widget
+                
+                log_widget_access_failure(
+                    widget=widget,
+                    context=context,
+                    exception=e,
+                    fallback_used=True,
+                    fallback_description="Operation skipped to maintain application stability"
+                )
+                
+                # Also report to error handling service if available
+                try:
+                    from services.widget_error_handling_service import widget_error_service, ErrorSeverity
+                    widget_error_service.report_widget_error(
+                        widget=widget,
+                        context=context,
+                        exception=e,
+                        severity=ErrorSeverity.CRITICAL if critical else ErrorSeverity.WARNING,
+                        fallback_used=True,
+                        fallback_description="Operation skipped to maintain application stability",
+                        user_impact="UI enhancement unavailable but core functionality preserved"
+                    )
+                except ImportError:
+                    pass  # Error service not available
+                
+                if critical:
+                    # For critical operations, re-raise the exception
+                    raise
+                else:
+                    # For non-critical operations, return None and continue
+                    print(f"Non-critical operation '{operation_name}' failed but application continues")
+                    return None
+        
+        return wrapper
+    return decorator
+</document_content>
+</document>
+</documents>

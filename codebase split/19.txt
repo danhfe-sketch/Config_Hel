@@ -1,0 +1,4328 @@
+        if self.log_entries:
+            for timestamp, message in self.log_entries:
+                if not message.strip():
+                    continue
+                
+                # Extract category from the message
+                if message.startswith("APP:"):
+                    category = "APP"
+                    content = message[4:].strip()
+                elif message.startswith("DEV:"):
+                    category = "DEV"
+                    content = message[4:].strip()
+                elif message.startswith("INFO:"):
+                    category = "INFO"
+                    content = message[5:].strip()
+                elif message.startswith("ERROR:"):
+                    category = "ERROR"
+                    content = message[6:].strip()
+                elif message.startswith("WARNING:"):
+                    category = "WARNING"
+                    content = message[8:].strip()
+                elif message.startswith("DEBUG:"):
+                    category = "DEBUG"
+                    content = message[6:].strip()
+                else:
+                    category = "SYSTEM"
+                    content = message.strip()
+                
+                # Format with full date and time
+                full_timestamp = f"{datetime.datetime.now().strftime('%Y-%m-%d')} {timestamp}"
+                formatted_line = f"[{full_timestamp}] [{category}] {content}"
+                formatted_lines.append(formatted_line)
+        else:
+            # Fallback to parsing the text content if log_entries is not available
+            current_time = datetime.datetime.now()
+            
+            for line in lines:
+                if not line.strip():
+                    continue
+                
+                # Extract category from the formatted log line
+                category_match = re.match(r'\[(APP|DEV|INFO|ERROR|WARNING|DEBUG|SYSTEM)\]\s+(.*)', line)
+                if category_match:
+                    category = category_match.group(1)
+                    message = category_match.group(2).strip()
+                else:
+                    category = "SYSTEM"
+                    message = line.strip()
+                
+                # Add timestamp to each line
+                timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Format the line with timestamp and category
+                formatted_line = f"[{timestamp}] [{category}] {message}"
+                formatted_lines.append(formatted_line)
+                
+                # Increment time slightly for sequential entries
+                current_time += datetime.timedelta(milliseconds=100)
+        
+        return '\n'.join(formatted_lines)
+
+    def send_free_command(self, event=None):
+        """Sends the command from the free command entry and updates history."""
+        command = self.command_entry.get().strip()
+        if command and self.serial_service.is_connected:
+            self.serial_service.send_command(command)
+            
+            # Adiciona ao hist├│rico se for in├®dito (agora limitado a 8 comandos)
+            if command not in self.historico_comandos:
+                self.historico_comandos.insert(0, command)
+                self.historico_comandos = self.historico_comandos[:8]
+                self._atualizar_botoes_historico()
+                
+            # Apaga o texto ap├│s o disparo
+            self.command_entry.delete(0, "end")
+
+    def _atualizar_botoes_historico(self):
+        """Limpa o frame de hist├│rico e recria os bot├Áes com tamanho seguro."""
+        for btn in self.botoes_historico:
+            btn.destroy()
+        self.botoes_historico.clear()
+        
+        for cmd in self.historico_comandos:
+            # Trunca o nome do bot├úo se for muito longo para evitar alargamento da tela
+            texto_exibicao = cmd if len(cmd) <= 12 else cmd[:10] + ".."
+            
+            btn = ctk.CTkButton(
+                self.frame_historico, 
+                text=texto_exibicao, 
+                width=30, 
+                height=20, 
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#34495E", 
+                hover_color="#1A252F",
+                command=lambda c=cmd: self._reenviar_do_historico(c)
+            )
+            btn.pack(side="left", padx=(0, 4))
+            self.botoes_historico.append(btn)
+
+    def _reenviar_do_historico(self, comando_selecionado):
+        """Insere o comando selecionado do hist├│rico no campo e o envia."""
+        self.command_entry.delete(0, 'end')
+        self.command_entry.insert(0, comando_selecionado)
+        self.send_free_command()
+    
+    def update_language_display(self):
+        """Updates all UI elements with the current language."""
+        # Update title
+        self.title_label.configure(text=self.i18n.get("serial_log"))
+        
+        # Update buttons
+        self.copy_button.configure(text=self.i18n.get("copy_log"))
+        self.export_button.configure(text=self.i18n.get("export_log"))
+        self.clear_button.configure(text=self.i18n.get("clear_log", "Clear"))
+        
+        # Update free command section
+        self.command_label.configure(text=self.i18n.get("free_command"))
+        self.send_command_button.configure(text=self.i18n.get("send"))
+</document_content>
+</document>
+<document index="93">
+<source>.\ui\parameter_factory.py</source>
+<document_content>
+"""
+Parameter Factory - Factory pattern for creating different parameter input types.
+
+This module provides a factory pattern for generating numeric inputs, dropdowns, 
+and radio button groups with consistent validation and command generation interfaces.
+"""
+
+import customtkinter as ctk
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Callable, Any
+from services.validation_service import ValidationService, ValidationResult
+from services.device_command_mapper import DeviceCommandMapper
+
+
+@dataclass
+class ParameterDefinition:
+    """Definition of a parameter with its properties and behavior."""
+    name: str
+    param_type: str  # 'numeric', 'dropdown', 'radio'
+    display_label: str
+    help_text: str
+    at_command_template: str
+    validation_rules: Dict
+    group: str = "general"
+    default_value: Any = None
+
+
+class BaseParameter(ABC):
+    """Base class for all parameter types with common validation and command generation."""
+    
+    def __init__(self, definition: ParameterDefinition, validation_service: ValidationService, 
+                 i18n_service, send_command_callback: Callable[[str], None]):
+        self.definition = definition
+        self.validation_service = validation_service
+        self.i18n = i18n_service
+        self.send_command_callback = send_command_callback
+        self.widget = None
+        self.error_label = None
+        self.send_button = None
+        
+    @abstractmethod
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create the UI widget for this parameter."""
+        pass
+    
+    @abstractmethod
+    def get_value(self) -> Any:
+        """Get the current value from the widget."""
+        pass
+    
+    @abstractmethod
+    def set_value(self, value: Any) -> None:
+        """Set the value in the widget."""
+        pass
+    
+    def validate(self) -> ValidationResult:
+        """Validate the current parameter value."""
+        value = self.get_value()
+        return self.validation_service.validate_parameter(self.definition.name, value)
+    
+    def send_command(self) -> None:
+        """Validate and send the AT command for this parameter."""
+        validation_result = self.validate()
+        
+        if not validation_result.is_valid:
+            self._show_error(validation_result.error_message)
+            return
+        
+        self._clear_error()
+        value = self.get_value()
+        
+        if value is not None and str(value).strip():
+            try:
+                # Get the command mapper from the factory
+                command_mapper = getattr(self, 'command_mapper', None)
+                
+                # If we have access to the command mapper, use it with validation
+                if command_mapper:
+                    command = command_mapper.get_command(self.definition.name, value, 
+                                                       confirm_destructive=True, validate_command=True)
+                else:
+                    # Handle special cases for server parameters
+                    if self.definition.name in ['server_ip', 'server_port']:
+                        # Server parameters should not be sent individually
+                        # They are handled by the ServerParameterGroup
+                        self._show_error("Use the group 'Send' button to configure server settings")
+                        return
+                    else:
+                        # Fall back to the template if no command mapper is available
+                        command = self.definition.at_command_template.format(value=value)
+                
+                self.send_command_callback(command)
+                
+                # Show success message if command was sent successfully
+                self._log_success(f"Command sent successfully: {self.definition.name}")
+                
+            except ValueError as e:
+                error_msg = str(e)
+                
+                # Check if this is a validation error and provide better feedback
+                if "Command validation failed" in error_msg:
+                    # Extract the core error message and suggestions
+                    if "Suggestions:" in error_msg:
+                        parts = error_msg.split("Suggestions:")
+                        core_error = parts[0].replace("Command validation failed for " + self.definition.name + ":", "").strip()
+                        suggestions = parts[1].strip()
+                        
+                        # Show the core error in the UI
+                        self._show_error(f"Validation failed: {core_error}")
+                        
+                        # Log suggestions for the user
+                        if hasattr(self, '_log_message'):
+                            self._log_message(f"Suggestions for {self.definition.name}: {suggestions}")
+                    else:
+                        core_error = error_msg.replace("Command validation failed for " + self.definition.name + ":", "").strip()
+                        self._show_error(f"Validation failed: {core_error}")
+                else:
+                    self._show_error(str(e))
+                return
+                
+            except KeyError as e:
+                # Handle missing format keys
+                missing_key = str(e).strip("'")
+                self._show_error(f"Missing required parameter: {missing_key}")
+                return
+    
+    def _show_error(self, message: str) -> None:
+        """Show validation error message."""
+        if self.error_label:
+            self.error_label.configure(text=message, text_color="red")
+    
+    def _clear_error(self) -> None:
+        """Clear validation error message."""
+        if self.error_label:
+            self.error_label.configure(text="", text_color="gray")
+    
+    def _log_success(self, message: str) -> None:
+        """Log a success message."""
+        # Try to access the app's log frame if available
+        try:
+            # This is a bit of a hack, but we need to access the app somehow
+            import tkinter as tk
+            root = self.widget
+            while root and not isinstance(root, tk.Tk):
+                root = root.master
+            
+            if root and hasattr(root, 'app') and hasattr(root.app, 'log_frame'):
+                root.app.log_frame.log_message(f"SUCCESS: {message}\n")
+        except:
+            pass  # Ignore errors in logging
+    
+    def _log_message(self, message: str) -> None:
+        """Log a general message."""
+        # Try to access the app's log frame if available
+        try:
+            # This is a bit of a hack, but we need to access the app somehow
+            import tkinter as tk
+            root = self.widget
+            while root and not isinstance(root, tk.Tk):
+                root = root.master
+            
+            if root and hasattr(root, 'app') and hasattr(root.app, 'log_frame'):
+                root.app.log_frame.log_message(f"INFO: {message}\n")
+        except:
+            pass  # Ignore errors in logging
+    
+    def update_language_display(self, i18n_service) -> None:
+        """Update the parameter widget's language display."""
+        # Update the i18n service reference
+        self.i18n = i18n_service
+        
+        # Update send button text if it exists
+        if self.send_button:
+            self.send_button.configure(text=self.i18n.get("send", "Send"))
+        
+        # Update parameter label if it exists
+        if hasattr(self, 'param_label'):
+            self.param_label.configure(text=self.i18n.get(self.definition.display_label, self.definition.display_label))
+    
+    def add_update_indicator(self, value_changed: bool = True) -> None:
+        """
+        Add visual indicator to show this parameter was updated from device.
+        
+        Args:
+            value_changed: True if the value changed, False if it was the same
+        """
+        try:
+            if self.widget:
+                if value_changed:
+                    # Green border for changed values
+                    original_border_color = self.widget.cget("border_color")
+                    self.widget.configure(border_color="#00ff00", border_width=2)
+                    
+                    # Schedule removal after 3 seconds
+                    if hasattr(self, '_master_widget'):
+                        self._master_widget.after(3000, lambda: self._remove_update_indicator(original_border_color))
+                else:
+                    # Blue border for unchanged values
+                    original_border_color = self.widget.cget("border_color")
+                    self.widget.configure(border_color="#0066cc", border_width=1)
+                    
+                    # Schedule removal after 2 seconds
+                    if hasattr(self, '_master_widget'):
+                        self._master_widget.after(2000, lambda: self._remove_update_indicator(original_border_color))
+                        
+        except Exception as e:
+            print(f"WARNING: Failed to add update indicator: {str(e)}")
+    
+    def _remove_update_indicator(self, original_border_color) -> None:
+        """Remove the visual update indicator."""
+        try:
+            if self.widget:
+                self.widget.configure(border_color=original_border_color, border_width=0)
+        except Exception as e:
+            print(f"WARNING: Failed to remove update indicator: {str(e)}")
+    
+    def _create_base_frame(self, parent) -> ctk.CTkFrame:
+        """Create the base frame with label, input, and send button."""
+        frame = ctk.CTkFrame(parent)
+        frame.grid_columnconfigure(1, weight=1)  # Make input column expandable
+        
+        # Store reference to master widget for scheduling callbacks
+        self._master_widget = parent
+        
+        # Parameter label - store reference for language updates
+        self.param_label = ctk.CTkLabel(frame, text=self.i18n.get(self.definition.display_label, self.definition.display_label))
+        self.param_label.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        
+        # Error label (initially empty)
+        self.error_label = ctk.CTkLabel(frame, text="", text_color="red", font=ctk.CTkFont(size=10))
+        self.error_label.grid(row=2, column=0, columnspan=3, padx=10, pady=(0, 5), sticky="w")
+        
+        return frame
+
+
+class NumericParameter(BaseParameter):
+    """Numeric parameter with entry field and range validation."""
+    
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create numeric input widget with validation."""
+        frame = self._create_base_frame(parent)
+        
+        # Entry field
+        self.widget = ctk.CTkEntry(frame, width=150)
+        self.widget.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        # Set default value if provided
+        if self.definition.default_value is not None:
+            self.widget.insert(0, str(self.definition.default_value))
+        
+        # Send button
+        # self.send_button = ctk.CTkButton(
+        #     frame, 
+        #     text=self.i18n.get("send", "Send"), 
+        #     width=60, 
+        #     command=self.send_command
+        # )
+        # self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
+        
+        # Add validation on focus out and key release
+        self.widget.bind("<FocusOut>", self._on_focus_out)
+        self.widget.bind("<KeyRelease>", self._on_key_release)
+        
+        return frame
+    
+    def get_value(self) -> Optional[int]:
+        """Get numeric value from entry field."""
+        if not self.widget:
+            return None
+        
+        text = self.widget.get().strip()
+        if not text:
+            return None
+        
+        try:
+            if self.definition.validation_rules.get('integer', True):
+                return int(text)
+            else:
+                return float(text)
+        except ValueError:
+            return None
+    
+    def set_value(self, value: Any) -> None:
+        """Set numeric value in entry field."""
+        if self.widget:
+            self.widget.delete(0, ctk.END)
+            if value is not None:
+                self.widget.insert(0, str(value))
+    
+    def _on_focus_out(self, event) -> None:
+        """Validate on focus out."""
+        validation_result = self.validate()
+        if not validation_result.is_valid:
+            self._show_error(validation_result.error_message)
+        else:
+            self._clear_error()
+            
+    def _on_key_release(self, event) -> None:
+        """Validate on key release."""
+        # Only validate if the field is not empty
+        text = self.widget.get().strip()
+        if text:
+            # For numeric parameters, check if the input is a valid number
+            try:
+                # Try to convert to int or float based on the validation rules
+                if self.definition.validation_rules.get('integer', True):
+                    int(text)
+                else:
+                    float(text)
+            except ValueError:
+                # If conversion fails, show an error message
+                display_name = self.i18n.get(self.definition.display_label, self.definition.display_label)
+                error_message = self.i18n.get('validation_numeric_required', '{param_name} must be a numeric value').format(param_name=display_name)
+                self._show_error(error_message)
+                return
+            
+            # Perform regular validation
+            validation_result = self.validate()
+            if not validation_result.is_valid:
+                self._show_error(validation_result.error_message)
+            else:
+                self._clear_error()
+
+
+class TextParameter(BaseParameter):
+    """Text parameter with entry field."""
+    
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create text input widget with validation."""
+        frame = self._create_base_frame(parent)
+        
+        # Entry field
+        self.widget = ctk.CTkEntry(frame, width=150)
+        self.widget.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        # Set default value if provided
+        if self.definition.default_value is not None:
+            self.widget.insert(0, str(self.definition.default_value))
+        
+        # Send button
+        # self.send_button = ctk.CTkButton(
+        #     frame, 
+        #     text=self.i18n.get("send", "Send"), 
+        #     width=60, 
+        #     command=self.send_command
+        # )
+        # self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
+        
+        # Add validation on focus out and key release
+        self.widget.bind("<FocusOut>", self._on_focus_out)
+        self.widget.bind("<KeyRelease>", self._on_key_release)
+        
+        return frame
+    
+    def get_value(self) -> Optional[str]:
+        """Get text value from entry field."""
+        if not self.widget:
+            return None
+        
+        text = self.widget.get().strip()
+        if not text:
+            return None
+        
+        return text
+    
+    def set_value(self, value: Any) -> None:
+        """Set text value in entry field."""
+        if self.widget:
+            self.widget.delete(0, ctk.END)
+            if value is not None:
+                self.widget.insert(0, str(value))
+    
+    def _on_focus_out(self, event) -> None:
+        """Validate on focus out."""
+        validation_result = self.validate()
+        if not validation_result.is_valid:
+            self._show_error(validation_result.error_message)
+        else:
+            self._clear_error()
+            
+    def _on_key_release(self, event) -> None:
+        """Validate on key release."""
+        # Only validate if the field is not empty
+        if self.widget.get().strip():
+            validation_result = self.validate()
+            if not validation_result.is_valid:
+                self._show_error(validation_result.error_message)
+            else:
+                self._clear_error()
+
+
+class DropdownParameter(BaseParameter):
+    """Dropdown parameter with predefined options."""
+    
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create dropdown widget with validation."""
+        frame = self._create_base_frame(parent)
+        
+        # Get allowed values from validation rules
+        allowed_values = self.definition.validation_rules.get('allowed_values', [])
+        
+        # Dropdown
+        self.widget = ctk.CTkComboBox(
+            frame, 
+            values=allowed_values,
+            state="readonly"
+        )
+        self.widget.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        # Set default value if provided
+        if self.definition.default_value is not None and self.definition.default_value in allowed_values:
+            self.widget.set(self.definition.default_value)
+        elif allowed_values:
+            self.widget.set(allowed_values[0])
+        
+        # Send button
+        self.send_button = ctk.CTkButton(
+            frame, 
+            text=self.i18n.get("send", "Send"), 
+            width=60, 
+            command=self.send_command
+        )
+        self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
+        
+        return frame
+    
+    def get_value(self) -> Optional[str]:
+        """Get selected value from dropdown."""
+        if not self.widget:
+            return None
+        return self.widget.get()
+    
+    def set_value(self, value: Any) -> None:
+        """Set selected value in dropdown."""
+        if self.widget and value is not None:
+            self.widget.set(str(value))
+
+
+class RadioParameter(BaseParameter):
+    """Radio button group parameter with exclusive selection."""
+    
+    def __init__(self, definition: ParameterDefinition, validation_service: ValidationService, 
+                 i18n_service, send_command_callback: Callable[[str], None]):
+        super().__init__(definition, validation_service, i18n_service, send_command_callback)
+        self.radio_var = None
+        self.radio_buttons = []
+    
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create radio button group widget."""
+        frame = self._create_base_frame(parent)
+        
+        # Get allowed values from validation rules
+        allowed_values = self.definition.validation_rules.get('allowed_values', [])
+        
+        # Create radio button variable
+        self.radio_var = ctk.StringVar(value=allowed_values[0] if allowed_values else "")
+        
+        # Create radio buttons in a horizontal layout
+        radio_frame = ctk.CTkFrame(frame)
+        radio_frame.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        for i, value in enumerate(allowed_values):
+            radio_button = ctk.CTkRadioButton(
+                radio_frame,
+                text=self.i18n.get(value.lower(), value),
+                variable=self.radio_var,
+                value=value
+            )
+            radio_button.grid(row=0, column=i, padx=5, pady=5, sticky="w")
+            self.radio_buttons.append(radio_button)
+        
+        # Set default value if provided
+        if self.definition.default_value is not None and self.definition.default_value in allowed_values:
+            self.radio_var.set(self.definition.default_value)
+        
+        # Send button
+        self.send_button = ctk.CTkButton(
+            frame, 
+            text=self.i18n.get("send", "Send"), 
+            width=60, 
+            command=self.send_command
+        )
+        self.send_button.grid(row=0, column=2, padx=(5, 10), pady=5)
+        
+        return frame
+    
+    def get_value(self) -> Optional[str]:
+        """Get selected radio button value."""
+        if not self.radio_var:
+            return None
+        return self.radio_var.get()
+    
+    def set_value(self, value: Any) -> None:
+        """Set selected radio button value."""
+        if self.radio_var and value is not None:
+            self.radio_var.set(str(value))
+    
+    def update_language_display(self, i18n_service) -> None:
+        """Update radio button labels for language changes."""
+        super().update_language_display(i18n_service)
+        
+        # Update radio button text
+        allowed_values = self.definition.validation_rules.get('allowed_values', [])
+        for i, (button, value) in enumerate(zip(self.radio_buttons, allowed_values)):
+            button.configure(text=self.i18n.get(value.lower(), value))
+
+
+class ParameterGroup:
+    """Group of related parameters for logical organization."""
+    
+    def __init__(self, name: str, display_label: str, i18n_service):
+        self.name = name
+        self.display_label = display_label
+        self.i18n = i18n_service
+        self.parameters: List[BaseParameter] = []
+        self.frame = None
+    
+    def add_parameter(self, parameter: BaseParameter) -> None:
+        """Add a parameter to this group."""
+        self.parameters.append(parameter)
+    
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create the group frame with all parameters."""
+        self.frame = ctk.CTkFrame(parent)
+        self.frame.grid_columnconfigure(0, weight=1)
+        
+        # Group title
+        title = ctk.CTkLabel(
+            self.frame, 
+            text=self.i18n.get(self.display_label, self.display_label), 
+            font=ctk.CTkFont(weight="bold")
+        )
+        title.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
+        
+        # Add parameters
+        for i, parameter in enumerate(self.parameters):
+            param_widget = parameter.create_widget(self.frame)
+            param_widget.grid(row=i+1, column=0, padx=10, pady=5, sticky="ew")
+        
+        return self.frame
+    
+    def get_values(self) -> Dict[str, Any]:
+        """Get all parameter values in this group."""
+        return {param.definition.name: param.get_value() for param in self.parameters}
+    
+    def set_values(self, values: Dict[str, Any]) -> None:
+        """Set parameter values in this group."""
+        for parameter in self.parameters:
+            if parameter.definition.name in values:
+                parameter.set_value(values[parameter.definition.name])
+    
+    def update_language_display(self, i18n_service) -> None:
+        """Update the group's language display."""
+        # Update the i18n service reference
+        self.i18n = i18n_service
+        
+        # Update group title if frame exists
+        if self.frame:
+            # Find the title label (first child that's a CTkLabel with bold font)
+            for child in self.frame.winfo_children():
+                if isinstance(child, ctk.CTkLabel):
+                    try:
+                        if child.cget("font").cget("weight") == "bold":
+                            child.configure(text=self.i18n.get(self.display_label, self.display_label))
+                            break
+                    except:
+                        # If font checking fails, assume it's the title label if it's the first one
+                        child.configure(text=self.i18n.get(self.display_label, self.display_label))
+                        break
+        
+        # Update all parameters in this group
+        for parameter in self.parameters:
+            if hasattr(parameter, 'update_language_display'):
+                parameter.update_language_display(i18n_service)
+
+
+class ServerParameterGroup(ParameterGroup):
+    """A special parameter group for server settings that includes a single send button."""
+    def create_widget(self, parent) -> ctk.CTkFrame:
+        """Create the group frame with all parameters and a single send button."""
+        super().create_widget(parent)
+
+        # Add a single send button for the entire group
+        send_button = ctk.CTkButton(
+            self.frame, 
+            text=self.i18n.get("send", "Send"), 
+            width=60, 
+            command=self.send_group_command
+        )
+        send_button.grid(row=len(self.parameters) + 1, column=0, padx=10, pady=10, sticky="ew")
+
+        return self.frame
+
+    def send_group_command(self) -> None:
+        """Validate and send combined server command with IP and port."""
+        all_valid = True
+        server_ip = None
+        server_port = None
+        
+        # Validate all parameters and collect values
+        for parameter in self.parameters:
+            validation_result = parameter.validate()
+            if not validation_result.is_valid:
+                all_valid = False
+                parameter._show_error(validation_result.error_message)
+            else:
+                parameter._clear_error()
+                # Collect parameter values
+                if parameter.definition.name == 'server_ip':
+                    server_ip = parameter.get_value()
+                elif parameter.definition.name == 'server_port':
+                    server_port = parameter.get_value()
+
+        if all_valid and server_ip and server_port:
+            # Send combined server command with both IP and port
+            # Format: ATSMS:SERVER,0,IP,PORT,0#
+            combined_command = f"ATSMS:SERVER,0,{server_ip},{server_port},0#"
+            
+            # Use the send command callback from the first parameter
+            if self.parameters:
+                self.parameters[0].send_command_callback(combined_command)
+                
+            # Log success message
+            if hasattr(self.parameters[0], '_log_success'):
+                self.parameters[0]._log_success(f"Server configuration sent: {server_ip}:{server_port}")
+        elif all_valid:
+            # Show error if missing values
+            error_msg = "Both server IP and port are required"
+            for parameter in self.parameters:
+                parameter._show_error(error_msg)
+
+
+class ParameterFactory:
+    """Factory class for creating parameter instances based on definitions."""
+    
+    def __init__(self, validation_service: ValidationService, i18n_service, 
+                 send_command_callback: Callable[[str], None]):
+        self.validation_service = validation_service
+        self.i18n_service = i18n_service
+        self.send_command_callback = send_command_callback
+        self.command_mapper = DeviceCommandMapper(validation_service, i18n_service)
+        self.parameter_definitions = self._init_parameter_definitions()
+    
+    def _create_parameter_from_definition(self, definition: ParameterDefinition) -> BaseParameter:
+        """Create a parameter instance based on its definition."""
+        parameter_classes = {
+            'numeric': NumericParameter,
+            'text': TextParameter,
+            'dropdown': DropdownParameter,
+            'radio': RadioParameter
+        }
+        
+        parameter_class = parameter_classes.get(definition.param_type)
+        if not parameter_class:
+            raise ValueError(f"Unknown parameter type: {definition.param_type}")
+        
+        parameter = parameter_class(
+            definition, 
+            self.validation_service, 
+            self.i18n_service, 
+            self.send_command_callback
+        )
+        
+        # Inject command mapper for parameters that need it
+        parameter.command_mapper = self.command_mapper
+        
+        return parameter
+    
+    def create_group(self, name: str, display_label: str, 
+                    parameter_definitions: Optional[List[ParameterDefinition]] = None) -> ParameterGroup:
+        """Create a parameter group with optional parameters."""
+        if name == "server":
+            group = ServerParameterGroup(name, display_label, self.i18n_service)
+        else:
+            group = ParameterGroup(name, display_label, self.i18n_service)
+        
+        if parameter_definitions:
+            for definition in parameter_definitions:
+                parameter = self.create_parameter(definition)
+                group.add_parameter(parameter)
+        
+        return group
+    
+    def _init_parameter_definitions(self) -> Dict[str, ParameterDefinition]:
+        """Initialize parameter definitions from validation rules and command templates."""
+        definitions = {}
+        
+        # Define parameter configurations with their UI properties
+        param_configs = {
+            'server_ip': {
+                'param_type': 'text',
+                'display_label': 'server_url_ip',
+                'help_text': 'Enter server URL or IP address',
+                'at_command_template': 'ATSMS:SERVER,0,{value},{port},0#',  # Requires port context
+                'group': 'server'
+            },
+            'server_port': {
+                'param_type': 'numeric',
+                'display_label': 'server_port',
+                'help_text': 'Enter server port number',
+                'at_command_template': 'ATSMS:SERVER,0,{ip},{value},0#',  # Requires ip context
+                'group': 'server'
+            },
+            'gt06_protocol': {
+                'param_type': 'dropdown',
+                'display_label': 'gt06_protocol',
+                'help_text': 'Select GT06 protocol version',
+                'at_command_template': 'ATSMS:PROTOCOL,{value}#',
+                'group': 'protocol'
+            },
+            'tcp_ack_config': {
+                'param_type': 'radio',
+                'display_label': 'tcp_ack_config',
+                'help_text': 'Configure TCP+ACK response',
+                'at_command_template': 'ATSMS:TCPACK,{value}#',
+                'group': 'protocol'
+            },
+            'vibration': {
+                'param_type': 'numeric',
+                'display_label': 'vibration',
+                'help_text': 'Set vibration sensitivity (0-255)',
+                'at_command_template': 'ATSMS:VIBRATION,{value}#',
+                'group': 'sensors'
+            },
+            'sensitivity': {
+                'param_type': 'numeric',
+                'display_label': 'sensitivity',
+                'help_text': 'Set sensitivity level (1-10)',
+                'at_command_template': 'ATSMS:SENSITIVITY,{value}#',
+                'group': 'sensors'
+            },
+            'curve_sensor': {
+                'param_type': 'dropdown',
+                'display_label': 'curve_sensor',
+                'help_text': 'Select curve sensor mode',
+                'at_command_template': 'ATSMS:CURVE,{value}#',
+                'group': 'sensors'
+            },
+            'ignition_type': {
+                'param_type': 'radio',
+                'display_label': 'ignition_type',
+                'help_text': 'Select ignition detection type',
+                'at_command_template': 'ATSMS:IGNITION,{value}#',
+                'group': 'sensors'
+            },
+            'timer_ign_on': {
+                'param_type': 'numeric',
+                'display_label': 'timer_ign_on',
+                'help_text': 'Timer when ignition is on (seconds)',
+                'at_command_template': 'ATSMS:TIMER,ON,{value}#',
+                'group': 'timers'
+            },
+            'timer_ign_off': {
+                'param_type': 'numeric',
+                'display_label': 'timer_ign_off',
+                'help_text': 'Timer when ignition is off (seconds)',
+                'at_command_template': 'ATSMS:TIMER,OFF,{value}#',
+                'group': 'timers'
+            },
+            'heartbeat_ign_on': {
+                'param_type': 'numeric',
+                'display_label': 'heartbeat_ign_on',
+                'help_text': 'Heartbeat interval when ignition is on (seconds)',
+                'at_command_template': 'ATSMS:HEARTBEAT,ON,{value}#',
+                'group': 'timers'
+            },
+            'heartbeat_ign_off': {
+                'param_type': 'numeric',
+                'display_label': 'heartbeat_ign_off',
+                'help_text': 'Heartbeat interval when ignition is off (seconds)',
+                'at_command_template': 'ATSMS:HEARTBEAT,OFF,{value}#',
+                'group': 'timers'
+            },
+            'heartbeat_interval': {
+                'param_type': 'dropdown',
+                'display_label': 'heartbeat_interval',
+                'help_text': 'Select heartbeat interval',
+                'at_command_template': 'ATSMS:HEARTBEAT,{value}#',
+                'group': 'timers'
+            },
+            'lock_type': {
+                'param_type': 'radio',
+                'display_label': 'lock_type',
+                'help_text': 'Select lock type',
+                'at_command_template': 'ATSMS:LOCK,{value}#',
+                'group': 'security'
+            }
+        }
+        
+        # Create ParameterDefinition objects
+        for param_name, config in param_configs.items():
+            # Get validation rules from validation service
+            validation_rules = self.validation_service.validation_rules.get(param_name, {})
+            
+            # Create parameter definition
+            definitions[param_name] = ParameterDefinition(
+                name=param_name,
+                param_type=config['param_type'],
+                display_label=config['display_label'],
+                help_text=config['help_text'],
+                at_command_template=config['at_command_template'],
+                validation_rules=validation_rules,
+                group=config['group']
+            )
+        
+        return definitions
+    
+    def get_parameter_definition(self, param_name: str) -> Optional[ParameterDefinition]:
+        """Get parameter definition by name."""
+        return self.parameter_definitions.get(param_name)
+    
+    def create_parameter(self, param_name: str) -> Optional[BaseParameter]:
+        """Create a parameter instance by name."""
+        definition = self.get_parameter_definition(param_name)
+        if not definition:
+            return None
+        
+        return self._create_parameter_from_definition(definition)
+    
+    def get_all_groups(self) -> List[str]:
+        """Get all unique group names from parameter definitions."""
+        groups = set()
+        for definition in self.parameter_definitions.values():
+            groups.add(definition.group)
+        return sorted(list(groups))
+    
+    def get_parameters_by_group(self, group_name: str) -> List[str]:
+        """Get all parameter names that belong to a specific group."""
+        parameters = []
+        for param_name, definition in self.parameter_definitions.items():
+            if definition.group == group_name:
+                parameters.append(param_name)
+        return parameters
+
+
+
+
+
+
+</document_content>
+</document>
+<document index="94">
+<source>.\ui\parameters_frame.py</source>
+<document_content>
+import customtkinter as ctk
+import re
+import traceback
+from ipaddress import ip_address
+from tkinter import messagebox
+from typing import Any, Dict, List
+from typing import Any, Dict
+from ui.parameter_factory import ParameterFactory
+from ui.custom_dialogs import show_error, show_info
+from ui.validation_mixin import ValidationMixin, ValidationResult
+from services.validation_service import ValidationService
+from services.parameter_specification import get_all_sections_ordered, get_parameter_specification
+from services.parameter_specification_factory import ParameterSpecificationFactory
+from services.profile_ui_populator import ProfileUIPopulator
+from components.apn_validation_component import APNValidationComponent
+from utils.widget_parent_resolver import (
+    get_widget_parent, get_widget_parent_with_details, log_widget_access_debug,
+    log_widget_access_failure, log_widget_access_warning, log_widget_hierarchy_analysis,
+    ensure_application_continues
+)
+
+class ParametersFrame(ctk.CTkScrollableFrame, ValidationMixin):
+    def __init__(self, master, i18n):
+        super().__init__(master, label_text=i18n.get("parameters"))
+        ValidationMixin.__init__(self)  # Initialize validation mixin
+        self.i18n = i18n
+        self.serial_service = master.serial_service  # Get serial service from master
+        
+        # Initialize validation service and parameter specification factory
+        self.validation_service = ValidationService(i18n)
+        self.parameter_specification_factory = ParameterSpecificationFactory(i18n, self.validation_service, self.serial_service)
+        
+        # Initialize ProfileUIPopulator
+        from services.parameter_specification_parser import ParameterSpecificationParser
+        spec_parser = ParameterSpecificationParser("Parameter UI List.md")
+        self.profile_ui_populator = ProfileUIPopulator(spec_parser)
+        
+        # Initialize APN validation component
+        self.apn_validation_component = APNValidationComponent()
+        
+        # Store section widgets created by the specification factory
+        self.section_widgets = {}
+        
+        # Legacy parameter widgets for backward compatibility
+        self.parameter_widgets = {}
+        self.parameter_sections = {}
+        self.section_frames = {}
+
+        # Configure responsive grid
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Create all parameter sections using specification factory
+        self._create_parameter_sections_from_specification()
+        
+        # Set section widgets reference for command sending
+        self.parameter_specification_factory.set_section_widgets_reference(self.section_widgets)
+        
+        # Initialize conditional field visibility
+        self.parameter_specification_factory.initialize_conditional_field_visibility(self.section_widgets)
+        
+        # Set up enhanced APN validation using ValidationMixin
+        self._setup_enhanced_apn_validation_with_mixin()
+        
+        # NOVO: Configura a visibilidade condicional dos campos de igni├º├úo
+        self._setup_ignition_conditional_visibility()
+
+        self._validation_colors = {
+            'error': '#ff4444',      # Red for errors
+            'warning': '#ffaa00',    # Orange for warnings  
+            'info': '#2196F3',        # Blue for info
+            'success': '#00aa44',    # Green for success
+            'normal': '#565b5e',      # Default border color
+            'focus': '#1f538d',      # Focus color
+            'critical': '#cc0000'    # Dark red for critical errors
+        }
+
+    def _setup_ignition_conditional_visibility(self):
+        """Configura a visibilidade condicional dos campos de tens├úo da igni├º├úo."""
+        try:
+            # Pega o widget completo da igni├º├úo
+            ignition_param = self.parameter_widgets.get('ignition.ignition_type')
+            if not ignition_param or ignition_param['type'] != 'complex':
+                return
+
+            fields = ignition_param['fields']
+            dropdown_field = None
+            voltage_frames = []
+            
+            for field_name, field_data in fields.items():
+                element = field_data['element']
+                widget = getattr(element, 'widget', None)
+                
+                # Identifica o Dropdown de Modo
+                if isinstance(widget, ctk.CTkComboBox):
+                    dropdown_field = widget
+                    
+                    # Intercepta o comando original para n├úo quebrar o envio da configura├º├úo pro rastreador
+                    original_command = dropdown_field.cget("command")
+                    def combined_command(choice, cmd=original_command, frames=voltage_frames, dd=dropdown_field):
+                        self._toggle_ignition_voltage_fields(dd, frames)
+                        if cmd:
+                            cmd(choice)
+                    dropdown_field.configure(command=combined_command)
+                    
+                    # Adiciona um "olheiro" invis├¡vel para reagir quando o rastreador for lido automaticamente
+                    if hasattr(dropdown_field, '_variable') and dropdown_field._variable:
+                        dropdown_field._variable.trace_add('write', lambda *args: self._toggle_ignition_voltage_fields(dropdown_field, voltage_frames))
+                    
+                # Identifica os campos num├®ricos (Tens├úo Ligar/Desligar)
+                elif isinstance(widget, ctk.CTkEntry):
+                    voltage_frames.append(getattr(element, 'container_frame', element))
+
+            # Aciona uma primeira vez ao abrir o aplicativo
+            if dropdown_field and voltage_frames:
+                self.after(200, lambda: self._toggle_ignition_voltage_fields(dropdown_field, voltage_frames))
+                
+        except Exception as e:
+            print(f"WARNING: Falha ao configurar visibilidade condicional da igni├º├úo: {e}")
+
+    def _toggle_ignition_voltage_fields(self, dropdown_field, voltage_frames):
+        """Auxiliar que esconde ou mostra os campos de tens├úo baseando-se no texto selecionado."""
+        try:
+            current_val = dropdown_field.get().lower()
+            # S├│ exibe os campos extras se a op├º├úo selecionada falar sobre "bateria" ou "battery"
+            if "bateria" in current_val or "battery" in current_val or "tens" in current_val:
+                for frame in voltage_frames:
+                    frame.grid()
+            else:
+                for frame in voltage_frames:
+                    frame.grid_remove()
+        except Exception:
+            pass
+    
+    def populate_ui_from_profile(self, profile):
+        """
+        Populate UI elements with values from a profile.
+        
+        Args:
+            profile: UniversalProfile containing parameter values
+            
+        Returns:
+            ValidationResult: Result of the population operation
+        """
+        # Check if profile_ui_populator is available
+        if not hasattr(self, 'profile_ui_populator') or not self.profile_ui_populator:
+            from models.validation_result import ValidationResult
+            result = ValidationResult(is_valid=False)
+            result.add_error("ProfileUIPopulator not available")
+            return result
+        
+        # Check if section_widgets is available and populated
+        if not hasattr(self, 'section_widgets') or not self.section_widgets:
+            from models.validation_result import ValidationResult
+            result = ValidationResult(is_valid=False)
+            result.add_error("Section widgets not available")
+            return result
+        
+        # Use the ProfileUIPopulator to populate UI from profile
+        result = self.profile_ui_populator.update_ui_elements_from_profile(profile, self.section_widgets)
+        return result
+    
+    def extract_validated_field_values(self):
+        """
+        Extract validated values from all UI elements.
+        
+        Returns:
+            Tuple[Dict[str, Any], ValidationResult]: Extracted values and validation result
+        """
+        # Create a mapping of parameter names to UI elements
+        ui_elements = {}
+        
+        # Collect all UI elements from section widgets
+        for section_name, section_widget in self.section_widgets.items():
+            for param_name, param_widget in section_widget.parameters.items():
+                if param_widget.widget_type == 'simple':
+                    # For simple parameters, add the main UI element
+                    full_param_name = f"{section_name}.{param_name}"
+                    ui_elements[full_param_name] = param_widget.ui_elements['main']
+                elif param_widget.widget_type == 'complex':
+                    # For complex parameters, add each field's UI element
+                    for field_name, field_element in param_widget.ui_elements.items():
+                        full_field_name = f"{section_name}.{param_name}.{field_name}"
+                        ui_elements[full_field_name] = field_element
+        
+        # Use the ProfileUIPopulator to extract validated values
+        return self.profile_ui_populator.extract_validated_field_values(ui_elements)
+    
+    def apply_visibility_conditions(self, context: Dict[str, Any]):
+        """
+        Apply visibility conditions to UI elements based on context values.
+        
+        Args:
+            context: Current parameter values for evaluating conditions
+        """
+        # Create a mapping of parameter names to UI elements
+        ui_elements = {}
+        
+        # Collect all UI elements from section widgets
+        for section_name, section_widget in self.section_widgets.items():
+            for param_name, param_widget in section_widget.parameters.items():
+                full_param_name = f"{section_name}.{param_name}"
+                if param_widget.widget_type == 'simple':
+                    ui_elements[full_param_name] = param_widget.ui_elements['main']
+                elif param_widget.widget_type == 'complex':
+                    # For complex parameters, add each field element
+                    for field_name, field_element in param_widget.ui_elements.items():
+                        field_full_name = f"{full_param_name}.{field_name}"
+                        ui_elements[field_full_name] = field_element
+        
+        # Use the ProfileUIPopulator to apply visibility conditions
+        self.profile_ui_populator.apply_visibility_conditions(ui_elements, context)
+    
+    def get_field_dependencies(self, param_name: str) -> List[str]:
+        """
+        Get field dependencies for a parameter based on visibility conditions.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            List[str]: List of parameter names this parameter depends on
+        """
+        return self.profile_ui_populator.get_field_dependencies(param_name)
+
+    def _validate_apn_field_comprehensive(self, value: str) -> ValidationResult:
+        """Validate the APN field with comprehensive rules."""
+        apn_values = self._get_apn_values_from_section()
+        user = apn_values.get('user', '').strip()
+        password = apn_values.get('password', '').strip()
+        
+        # Se o campo APN estiver vazio, n├úo engatilha erro na digita├º├úo inicial
+        if not value.strip():
+            return ValidationResult(is_valid=True)
+            
+        result = self.apn_validation_component.validate_apn_configuration(value, user, password)
+        
+        # Intercepta o erro e for├ºa a tradu├º├úo, limpando as sugest├Áes em ingl├¬s
+        if not result.is_valid:
+            if result.error_message:
+                result.error_message = self.i18n.get("invalid_apn_config_error", "Configura├º├úo de APN inv├ílida. Verifique os campos.")
+            result.suggestions = [self.i18n.get("apn_suggestion_server", "Verifique o formato do servidor APN.")]
+            if hasattr(result, 'fixes'):
+                result.fixes = []
+        return result
+
+    def _validate_apn_user_field_comprehensive(self, value: str) -> ValidationResult:
+        """Validate the APN username field."""
+        apn_values = self._get_apn_values_from_section()
+        apn = apn_values.get('apn', '').strip()
+        password = apn_values.get('password', '').strip()
+        
+        # PERD├âO DE DIGITA├ç├âO: Se preencheu usu├írio, mas a senha ainda est├í vazia,
+        # assumimos que ele ainda vai digitar a senha no pr├│ximo campo. Retorna v├ílido por enquanto.
+        if value.strip() and not password:
+            return ValidationResult(is_valid=True)
+            
+        result = self.apn_validation_component.validate_apn_configuration(apn, value, password)
+        
+        # Intercepta o erro e for├ºa a tradu├º├úo, limpando as sugest├Áes em ingl├¬s
+        if not result.is_valid:
+            if result.error_message:
+                result.error_message = self.i18n.get("invalid_apn_config_error", "Configura├º├úo de APN inv├ílida. Verifique os campos.")
+            result.suggestions = [self.i18n.get("apn_suggestion_user", "Se usar usu├írio, a senha tamb├®m ├® necess├íria.")]
+            if hasattr(result, 'fixes'):
+                result.fixes = []
+        return result
+
+    def _validate_apn_password_field_comprehensive(self, value: str) -> ValidationResult:
+        """Validate the APN password field."""
+        apn_values = self._get_apn_values_from_section()
+        apn = apn_values.get('apn', '').strip()
+        user = apn_values.get('user', '').strip()
+        
+        # PERD├âO DE DIGITA├ç├âO: Se preencheu senha, mas o usu├írio ainda est├í vazio,
+        # assumimos que ele ainda vai preencher no campo acima. Retorna v├ílido por enquanto.
+        if value.strip() and not user:
+            return ValidationResult(is_valid=True)
+            
+        result = self.apn_validation_component.validate_apn_configuration(apn, user, value)
+        
+        # Intercepta o erro e for├ºa a tradu├º├úo, limpando as sugest├Áes em ingl├¬s
+        if not result.is_valid:
+            if result.error_message:
+                result.error_message = self.i18n.get("invalid_apn_config_error", "Configura├º├úo de APN inv├ílida. Verifique os campos.")
+            result.suggestions = [self.i18n.get("apn_suggestion_pass", "Se usar senha, o usu├írio tamb├®m ├® necess├írio.")]
+            if hasattr(result, 'fixes'):
+                result.fixes = []
+        return result
+
+    def _create_parameter_sections_from_specification(self):
+        """Create all parameter sections using the specification factory."""
+        # Use the specification factory to create all sections
+        self.section_widgets = self.parameter_specification_factory.create_all_sections(self)
+        
+        # Create legacy parameter_widgets mapping for backward compatibility
+        self._create_legacy_parameter_mapping()
+
+    def _setup_enhanced_apn_validation_with_mixin(self):
+        """Set up enhanced APN validation using ValidationMixin for APN-related fields.
+
+        This method finds the APN parameter (usually 'apn_settings' under
+        'network_parameters'), extracts the individual field UI elements, stores
+        them in `self.apn_widgets` and registers them with
+        `setup_real_time_validation` from the ValidationMixin so that real-time
+        validation, tooltips and progressive feedback work.
+        """
+        try:
+            # Default storage for APN widgets
+            self.apn_widgets = {}
+
+            # Find network parameters section and apn_settings parameter
+            network_section = self.section_widgets.get('network_parameters') if hasattr(self, 'section_widgets') else None
+            if not network_section:
+                return
+
+            apn_param = network_section.parameters.get('apn_settings') if hasattr(network_section, 'parameters') else None
+            if not apn_param:
+                return
+
+            # apn_param.ui_elements contains BaseUIElement instances for each field
+            for field_name, ui_element in apn_param.ui_elements.items():
+                # Prefer the underlying input widget if available
+                widget = None
+                if hasattr(ui_element, 'widget') and ui_element.widget is not None:
+                    widget = ui_element.widget
+                elif hasattr(ui_element, 'container_frame') and ui_element.container_frame is not None:
+                    widget = ui_element.container_frame
+                else:
+                    # Fallback to the ui_element object itself
+                    widget = ui_element
+
+                # Store reference for other APN-related logic
+                self.apn_widgets[field_name] = widget
+
+                # Register validation callbacks for each APN-related field
+                if field_name == 'apn':
+                    try:
+                        # Use a named field key so the mixin can track state
+                        self.setup_real_time_validation('apn', widget, lambda v, s=self: s._validate_apn_field_comprehensive(v), debounce_ms=500)
+                    except Exception:
+                        # Non-critical: continue if binding fails
+                        pass
+                elif field_name == 'user':
+                    try:
+                        self.setup_real_time_validation('apn_user', widget, lambda v, s=self: s._validate_apn_user_field_comprehensive(v), debounce_ms=400)
+                    except Exception:
+                        pass
+                elif field_name == 'password':
+                    try:
+                        self.setup_real_time_validation('apn_password', widget, lambda v, s=self: s._validate_apn_password_field_comprehensive(v), debounce_ms=400)
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            # Do not crash the application on validation setup failures
+            print(f"WARNING: Failed to setup APN validation mixin: {e}")
+    
+    def _create_legacy_parameter_mapping(self):
+        """Create legacy parameter_widgets mapping for backward compatibility."""
+        for section_name, section_widget in self.section_widgets.items():
+            # Create legacy section mapping
+            self.parameter_sections[section_name] = {
+                'config': section_widget.config,
+                'frame': section_widget.container_frame,
+                'title': section_widget.title_widget,
+                'parameters': {}
+            }
+            self.section_frames[section_name] = section_widget.container_frame
+            
+            # Create legacy parameter mapping
+            for param_name, param_widget in section_widget.parameters.items():
+                legacy_param_key = f"{section_name}.{param_name}"
+                
+                # Convert new parameter widget to legacy format
+                legacy_param_widget = {
+                    'config': param_widget.config,
+                    'frame': param_widget.container_frame,
+                    'type': param_widget.widget_type
+                }
+                
+                if param_widget.widget_type == 'simple':
+                    legacy_param_widget['element'] = param_widget.ui_elements['main']
+                    legacy_param_widget['label'] = None  # UI element handles its own label
+                elif param_widget.widget_type == 'complex':
+                    legacy_param_widget['title'] = param_widget.title_widget
+                    legacy_param_widget['fields'] = {}
+                    
+                    for field_name, ui_element in param_widget.ui_elements.items():
+                        legacy_param_widget['fields'][field_name] = {
+                            'config': param_widget.config.fields[field_name],
+                            'element': ui_element,
+                            'label': None  # UI element handles its own label
+                        }
+                
+                self.parameter_widgets[legacy_param_key] = legacy_param_widget
+                self.parameter_sections[section_name]['parameters'][param_name] = legacy_param_widget
+    
+
+
+
+    
+    def _send_command_callback(self, command: str):
+        """Callback for parameter factory to send commands."""
+        if self.serial_service:
+            self.serial_service.send_command(command)
+    
+    def get_all_parameter_values(self):
+        """Get all parameter values from the specification-based widgets."""
+        return self.parameter_specification_factory.get_all_parameter_values(self.section_widgets)
+    
+    def set_all_parameter_values(self, values):
+        """Set parameter values in the specification-based widgets."""
+        self.parameter_specification_factory.set_all_parameter_values(values, self.section_widgets)
+    
+    def _get_parameter_value(self, parameter_widget):
+        """Get value from a parameter widget based on its type (legacy compatibility)."""
+        if parameter_widget['type'] == 'simple':
+            return parameter_widget['element'].get_value()
+        elif parameter_widget['type'] == 'complex':
+            values = {}
+            for field_name, field_data in parameter_widget['fields'].items():
+                values[field_name] = field_data['element'].get_value()
+            return values
+        return None
+    
+    def _set_parameter_value(self, parameter_widget, value):
+        """Set value for a parameter widget based on its type (legacy compatibility)."""
+        if parameter_widget['type'] == 'simple':
+            parameter_widget['element'].set_value(value)
+        elif parameter_widget['type'] == 'complex' and isinstance(value, dict):
+            for field_name, field_value in value.items():
+                if field_name in parameter_widget['fields']:
+                    parameter_widget['fields'][field_name]['element'].set_value(field_value)
+    
+    def highlight_updated_parameter(self, param_name: str, value_changed: bool = True):
+        """
+        Highlight a parameter that was updated from device configuration.
+        
+        Args:
+            param_name: Name of the parameter to highlight
+            value_changed: True if the value changed, False if it was the same
+        """
+        try:
+            if param_name in self.parameter_widgets:
+                parameter_widget = self.parameter_widgets[param_name]
+                
+                # Get the container frame to highlight
+                container_frame = None
+                if parameter_widget['type'] == 'simple':
+                    ui_element = parameter_widget['element']
+                    if hasattr(ui_element, 'container_frame'):
+                        container_frame = ui_element.container_frame
+                elif parameter_widget['type'] == 'complex':
+                    container_frame = parameter_widget['frame']
+                
+                if container_frame and hasattr(container_frame, 'configure'):
+                    if value_changed:
+                        # Green border for changed values
+                        original_border_color = container_frame.cget("border_color")
+                        container_frame.configure(border_color="#00ff00", border_width=2)
+                        
+                        # Schedule removal after 3 seconds
+                        self.after(3000, lambda: self._remove_parameter_highlight(container_frame, original_border_color))
+                    else:
+                        # Blue border for unchanged values
+                        original_border_color = container_frame.cget("border_color")
+                        container_frame.configure(border_color="#0066cc", border_width=1)
+                        
+                        # Schedule removal after 2 seconds
+                        self.after(2000, lambda: self._remove_parameter_highlight(container_frame, original_border_color))
+                        
+        except Exception as e:
+            print(f"WARNING: Failed to highlight parameter {param_name}: {str(e)}")
+    
+    def _remove_parameter_highlight(self, widget, original_border_color):
+        """Remove the highlight from a parameter widget."""
+        try:
+            if hasattr(widget, 'configure'):
+                border_color = original_border_color if original_border_color else "gray"
+                widget.configure(border_color=border_color, border_width=0)
+        except Exception as e:
+            print(f"WARNING: Failed to remove parameter highlight: {str(e)}")
+    
+    def get_parameter_widget(self, param_name: str):
+        """Get a specific parameter widget by name."""
+        return self.parameter_widgets.get(param_name)
+    
+    def get_section_widget(self, section_name: str):
+        """Get a specific section widget by name."""
+        return self.parameter_sections.get(section_name)
+
+    def _send_command_if_value(self, command_template: str, value: str):
+        """Helper to send a command if the value is not empty."""
+        if value:
+            self.serial_service.send_command(command_template.format(value=value))
+    
+
+    
+    def _get_apn_values_from_section(self):
+        """Get APN values from the network parameters section."""
+        return self.parameter_specification_factory.get_parameter_value(
+            'network_parameters', 'apn_settings', self.section_widgets
+        )
+    
+    def send_moving_alert_command(self, param_values: dict):
+        """Sends the MOVING alert command to the device."""
+        try:
+            if not self.serial_service.is_connected:
+                show_error(
+                    self,
+                    self.i18n.get("error"),
+                    self.i18n.get("not_connected_error")
+                )
+                return
+
+            # Default values
+            enabled = param_values.get('enabled', False)
+            radius = param_values.get('radius', 1000)  # Default 1000m
+            
+            # CORRE├ç├âO DO BUG DO ZERO: Detecta inteligentemente a op├º├úo correta
+            alert_type_text = str(param_values.get('alert_type', '')).upper()
+            notification_mode = 1 if 'SMS' in alert_type_text else 0
+            
+            # Validate radius
+            if radius is None or not isinstance(radius, int):
+                radius = 1000
+            radius = max(100, min(1000, radius))  # Clamp between 100-1000
+            
+            # Format command
+            if not enabled:
+                command = "ATSMS:MOVING,OFF#"
+            else:
+                command = f"ATSMS:MOVING,ON,{radius},{notification_mode}#"
+            
+            print(f"DEBUG: Sending moving alert command: {command}")
+            self.serial_service.send_command(command, 'moving_alert', bypass_validation=True)
+            
+            # CORRE├ç├âO DO POP-UP: Adicionado o alerta que o dev original esqueceu
+            if self.serial_service.is_connected:
+                show_info(
+                    self,
+                    self.i18n.get("success", "Sucesso"),
+                    self.i18n.get("moving_alert_sent", "Alerta de movimento enviado com sucesso!")
+                )
+            
+        except Exception as e:
+            show_error(
+                self,
+                self.i18n.get("error"),
+                f"{self.i18n.get('send_command_error')}: {str(e)}"
+            )
+
+    def send_apn_command(self):
+        """Validates and sends the complete APN configuration command with enhanced validation."""
+        if not self.serial_service.is_connected:
+            show_error(
+                self,
+                self.i18n.get("error"),
+                self.i18n.get("not_connected_error")
+            )
+            return
+
+        # Check if form submission should be prevented due to validation errors
+        if self.prevent_form_submission_on_validation_errors():
+            validation_errors = self.get_validation_errors()
+            error_messages = []
+            
+            for field_name, error_message in validation_errors.items():
+                field_display = field_name.replace('_', ' ').title()
+                error_messages.append(f"{field_display}: {error_message}")
+            
+            show_error(
+                self,
+                self.i18n.get("validation_errors", "Validation Errors"),
+                "Please fix the following validation errors before sending:\n\n" + "\n".join(error_messages)
+            )
+            return
+
+        # Get APN values from the network parameters section
+        apn_values = self._get_apn_values_from_section()
+        if not apn_values:
+            show_error(
+                self,
+                self.i18n.get("error"),
+                self.i18n.get("apn_server_required")
+            )
+            return
+
+        server = apn_values.get('apn', '').strip()
+        user = apn_values.get('user', '').strip()
+        password = apn_values.get('password', '').strip()
+
+        # APN server is mandatory if any APN setting is being sent.
+        if not server:
+            show_error(
+                self,
+                self.i18n.get("error"),
+                self.i18n.get("apn_server_required")
+            )
+            return
+
+        # Final comprehensive validation using the APN validation component
+        validation_result = self.apn_validation_component.validate_apn_configuration(server, user, password)
+        if not validation_result.is_valid:
+            show_error(
+                self,
+                self.i18n.get("invalid_apn_server_title", "Invalid APN Configuration"),
+                validation_result.error_message + 
+                (f"\n\nSuggestions:\nÔÇó " + "\nÔÇó ".join(validation_result.suggestions) if validation_result.suggestions else "")
+            )
+            return
+
+        # Construct the command. User and password can be empty.
+        command = f"ATSMS:APN,{server},{user},{password}#"
+        # Direct UI send - bypass command validation to avoid blocking
+        # well-formed APN commands initiated by the user.
+        self.serial_service.send_command(command, command_type='apn', bypass_validation=True)
+
+        # Show success feedback
+        show_info(
+            self,
+            self.i18n.get("success", "Success"),
+            f"APN configuration sent successfully:\nAPN: {server}\nUser: {user if user else '(none)'}"
+        )
+
+    def send_trans_mode_command(self):
+        """Sends the Transmission Mode command to the device (always TCP)."""
+        # Always use TCP (0) for transmission mode
+        self._send_command_if_value("ATSMS:SZCS#PROTOCOL={value}#", "0")
+    
+    def update_language_display(self):
+        """Updates all UI elements with the current language."""
+        # Update frame label
+        self.configure(label_text=self.i18n.get("parameters"))
+        
+        # Update all sections and parameters using the specification factory
+        self.parameter_specification_factory.update_language_display(self.section_widgets)
+    
+    def update_apn_fields(self, server=None, user=None, password=None):
+        """
+        Update APN fields with values read from the device.
+        
+        Args:
+            server: APN server value
+            user: APN user value
+            password: APN password value
+        """
+        print(f"DEBUG: update_apn_fields called with server={server}, user={user}, password={password}")
+        
+        # Build APN values dictionary
+        apn_values = {}
+        if server is not None:
+            apn_values['apn'] = server
+            print(f"Updated APN server to {server}")
+        if user is not None:
+            apn_values['user'] = user
+            print(f"Updated APN user to {user}")
+        if password is not None:
+            apn_values['password'] = password
+            print(f"Updated APN password to {password}")
+        
+        if apn_values:
+            # Update APN settings in the network parameters section
+            self.parameter_specification_factory.set_parameter_value(
+                'network_parameters', 'apn_settings', apn_values, self.section_widgets
+            )
+            self.highlight_updated_parameter("network_parameters.apn_settings", True)
+    
+    def update_parameter_value(self, param_name, value):
+        """
+        Update a parameter value.
+        
+        Args:
+            param_name: Name of the parameter to update (format: section_name.param_name)
+            value: Value to set
+        """
+        print(f"DEBUG: update_parameter_value called with param_name={param_name}, value={value}")
+        
+        # Parse section and parameter name
+        if '.' in param_name:
+            section_name, param_name_only = param_name.split('.', 1)
+            self.parameter_specification_factory.set_parameter_value(
+                section_name, param_name_only, value, self.section_widgets
+            )
+            print(f"Updated parameter {param_name} to {value}")
+            
+            # Highlight the parameter to show it was updated
+            self.highlight_updated_parameter(param_name, True)
+        else:
+            print(f"Invalid parameter name format: {param_name}")
+
+    def update_fields_from_dict(self, ui_field_values: Dict[str, Any]):
+        """
+        Update UI fields from a dictionary of profile-derived values.
+
+        Keys can be simple parameter names (e.g., 'apn_settings') or complex
+        field names (e.g., 'apn_settings.user'). Values are applied to the
+        corresponding widgets using the specification factory.
+        """
+        try:
+            factory = self.parameter_specification_factory
+            section_widgets = self.section_widgets
+            mapping = self._get_ui_parameter_mapping()
+
+            for key, value in ui_field_values.items():
+                try:
+                    # Handle complex field keys like 'param.field'
+                    if '.' in key:
+                        base_param, field_name = key.split('.', 1)
+                        section_info = mapping.get(base_param)
+                        if not section_info:
+                            print(f"WARNING: No UI mapping found for parameter {base_param}")
+                            continue
+                        section_name = section_info['section']
+                        param_key = section_info['parameter']
+
+                        # Get current complex value, update only the field, then set
+                        current_value = {}
+                        try:
+                            current_value = factory.get_parameter_value(section_name, param_key, section_widgets) or {}
+                        except Exception:
+                            current_value = {}
+                        if not isinstance(current_value, dict):
+                            current_value = {}
+                        current_value[field_name] = value
+                        factory.set_parameter_value(section_name, param_key, current_value, section_widgets)
+                        self.highlight_updated_parameter(f"{section_name}.{param_key}", True)
+                    else:
+                        # Simple parameter
+                        section_info = mapping.get(key)
+                        if not section_info:
+                            print(f"WARNING: No UI mapping found for parameter {key}")
+                            continue
+                        section_name = section_info['section']
+                        param_key = section_info['parameter']
+                        factory.set_parameter_value(section_name, param_key, value, section_widgets)
+                        self.highlight_updated_parameter(f"{section_name}.{param_key}", True)
+                except Exception as e:
+                    print(f"ERROR: Failed to apply UI value for '{key}': {e}")
+        except Exception as e:
+            print(f"ERROR: update_fields_from_dict failed: {e}")
+    
+    def get_section_names(self):
+        """Get all section names in order."""
+        return [section['config'].name for section in sorted(
+            self.parameter_sections.values(), 
+            key=lambda x: x['config'].order
+        )]
+    
+    def get_parameter_names_in_section(self, section_name):
+        """Get all parameter names in a specific section."""
+        if section_name in self.parameter_sections:
+            return list(self.parameter_sections[section_name]['parameters'].keys())
+        return []
+    
+    def is_parameter_visible(self, param_name):
+        """Check if a parameter is currently visible (for conditional parameters)."""
+        if param_name in self.parameter_widgets:
+            param_widget = self.parameter_widgets[param_name]
+            return param_widget['frame'].winfo_viewable()
+        return False
+
+    def update_parameter_fields(self, parsed_parameters: dict):
+        """
+        Update parameter fields from parsed device responses.
+        
+        Args:
+            parsed_parameters: Dictionary of parameter names to parsed values
+        """
+        try:
+            print(f"DEBUG: update_parameter_fields called with {len(parsed_parameters)} parameters")
+            
+            # Use the parameter specification factory to update fields
+            if hasattr(self, 'parameter_specification_factory') and hasattr(self, 'section_widgets'):
+                factory = self.parameter_specification_factory
+                section_widgets = self.section_widgets
+                
+                # Map parameter names to section/parameter structure
+                parameter_mapping = self._get_ui_parameter_mapping()
+                
+                for param_name, parsed_values in parsed_parameters.items():
+                    try:
+                        # Special handling for MOVING alerts
+                        if param_name.lower() in ['moving', 'moving_alert']:
+                            print(f"DEBUG: Processing movement alert: {param_name} = {parsed_values}")
+                            
+                        # Get section and parameter name from mapping
+                        section_info = parameter_mapping.get(param_name.lower())  # Case insensitive lookup
+                        if not section_info:
+                            print(f"WARNING: No UI mapping found for parameter {param_name}")
+                            continue
+                        
+                        section_name = section_info['section']
+                        param_key = section_info['parameter']
+                        
+                        # Diagnostic logs for UI update flow
+                        print(f"DEBUG: ui.update_parameter_fields - param='{param_name}', parsed_values_keys={list(parsed_values.keys()) if isinstance(parsed_values, dict) else parsed_values}")
+                        try:
+                            print(f"DEBUG: ui.update_parameter_fields - ui_selection present: {'ui_selection' in parsed_values if isinstance(parsed_values, dict) else False}")
+                        except Exception as _e:
+                            print(f"DEBUG: ui.update_parameter_fields - failed to check ui_selection presence: {_e}")
+                        print(f"DEBUG: ui.update_parameter_fields - section_info resolved to: {section_info}")
+                        print(f"DEBUG: Updating {section_name}.{param_key} with values: {parsed_values}")
+                        
+                        # No need to handle notification mode/text conversion here
+                        # The response parser now returns the correct alert_type field
+                        
+                        # Update the parameter value using the factory
+                        factory.set_parameter_value(section_name, param_key, parsed_values, section_widgets)
+                        
+                        # Highlight the updated parameter
+                        full_param_name = f"{section_name}.{param_key}"
+                        self.highlight_updated_parameter(full_param_name, True)
+                        
+                        print(f"DEBUG: Successfully updated {param_name}")
+                        
+                    except Exception as e:
+                        print(f"ERROR: Failed to update parameter {param_name}: {str(e)}")
+                
+                print(f"DEBUG: Completed updating {len(parsed_parameters)} parameters")
+            else:
+                print("WARNING: Parameter specification factory or section widgets not available")
+                # Fallback to legacy update methods
+                self._update_parameters_legacy(parsed_parameters)
+                
+        except Exception as e:
+            print(f"ERROR: Failed to update parameter fields: {str(e)}")
+
+    def _get_ui_parameter_mapping(self) -> dict:
+        """
+        Get mapping of parameter names to their UI section and parameter keys.
+        
+        Returns:
+            Dictionary mapping parameter names to section info
+        """
+        return {
+            # Network Parameters
+            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
+            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
+            'network_settings': {'section': 'network_parameters', 'parameter': 'network_settings'},
+            
+            # Time Parameters
+            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
+            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
+            
+            # Service Parameters
+            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
+            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
+            
+            # Ignition Parameters
+            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
+            
+            # Speed Parameters
+            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
+            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
+            'blind_area_speed': {'section': 'speed', 'parameter': 'blind_area_speed'},
+            
+            # Power Saving Parameters
+            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
+            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
+            
+            # Angle Parameters
+            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
+            
+            # Battery Alert Parameters
+            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
+            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
+            'backup_battery_protection_voltage': {'section': 'battery_alerts', 'parameter': 'backup_battery_protection_voltage'},
+
+            # Vibration Sensor Parameters
+            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
+            'vibration_window': {'section': 'vibration_sensor', 'parameter': 'vibration_window'},
+            
+            # Jammer Detection Parameters
+            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
+            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
+            
+            # Miscellaneous Parameters
+            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
+            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
+            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'},
+            'source_off_type': {'section': 'output_control', 'parameter': 'source_off_type'},
+            'relay_control': {'section': 'output_control', 'parameter': 'relay_control'},
+            'sends_control': {'section': 'gps_control', 'parameter': 'sends_control'},
+
+            # Movement Alerts
+            'moving_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
+            'moving': {'section': 'movement_alerts', 'parameter': 'moving_alert'},  # Map both MOVING and moving_alert to same UI
+            'motion_sensor_alert': {'section': 'movement_alerts', 'parameter': 'motion_sensor_alert'},
+            'distance_movement_action': {'section': 'movement_alerts', 'parameter': 'distance_movement_action'},
+            # Alerts
+            'acc_on_alert': {'section': 'alerts', 'parameter': 'acc_on_alert'},
+            'acc_off_alert': {'section': 'alerts', 'parameter': 'acc_off_alert'},
+            'movement_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'}  # Also map movement_alert to same UI for backward compatibility
+        }
+
+    def _update_parameters_legacy(self, parsed_parameters: dict):
+        """
+        Update parameters using legacy methods as fallback.
+        
+        Args:
+            parsed_parameters: Dictionary of parameter names to parsed values
+        """
+        try:
+            print("DEBUG: Using legacy parameter update methods")
+            
+            # Handle specific parameter types with legacy methods
+            if 'apn_settings' in parsed_parameters:
+                apn_data = parsed_parameters['apn_settings']
+                self.update_apn_fields(
+                    server=apn_data.get('apn', ''),
+                    user=apn_data.get('user', ''),
+                    password=apn_data.get('password', '')
+                )
+            
+            # Add more legacy parameter updates as needed
+            for param_name, values in parsed_parameters.items():
+                if isinstance(values, dict):
+                    for field_name, field_value in values.items():
+                        full_param_name = f"{param_name}.{field_name}"
+                        self.update_parameter_value(full_param_name, field_value)
+                else:
+                    self.update_parameter_value(param_name, values)
+                    
+        except Exception as e:
+            print(f"ERROR: Failed to update parameters using legacy methods: {str(e)}")
+
+    def get_parameter_update_summary(self) -> dict:
+        """
+        Get a summary of recent parameter updates.
+        
+        Returns:
+            Dictionary with update summary information
+        """
+        try:
+            # This would integrate with the configuration reader service
+            # to get update statistics and information
+            if hasattr(self.master, 'configuration_reader_service'):
+                config_reader = self.master.configuration_reader_service
+                if hasattr(config_reader, 'get_update_statistics'):
+                    return config_reader.get_update_statistics()
+            
+            return {
+                'total_updates': 0,
+                'changed_updates': 0,
+                'unchanged_updates': 0,
+                'last_update': None,
+                'error': 'Configuration reader service not. available'
+            }
+            
+        except Exception as e:
+            return {'error': f'Failed to get update summary: {str(e)}'}
+
+    def export_parameter_updates(self, file_path: str = None) -> str:
+        """
+        Export parameter update log.
+        
+        Args:
+            file_path: Optional file path to save the log
+            
+        Returns:
+            Log content as string or error message
+        """
+        try:
+            if hasattr(self.master, 'configuration_reader_service'):
+                config_reader = self.master.configuration_reader_service
+                if hasattr(config_reader, 'export_parameter_update_log'):
+                    return config_reader.export_parameter_update_log(file_path)
+            
+            return "ERROR: Configuration reader service not available for export"
+            
+        except Exception as e:
+            return f"ERROR: Failed to export parameter updates: {str(e)}"
+    
+    def update_parameters_with_batch_processing(self, parameters: dict):
+        """
+        Update parameters using batch processing for optimal responsiveness.
+        
+        Args:
+            parameters: Dictionary of parameter names to values
+            
+        Requirements: 7.1, 7.2, 7.4, 7.5
+        """
+        try:
+            print(f"DEBUG: Using batch processing for {len(parameters)} parameters")
+            
+            # Import here to avoid circular imports
+            from services.ui_responsiveness_service import UIResponsivenessService, UpdatePriority
+            
+            # Create UI responsiveness service if not available
+            if not hasattr(self, '_ui_responsiveness_service'):
+                self._ui_responsiveness_service = UIResponsivenessService(self)
+            
+            # Process parameters in batches with visual feedback
+            def progress_callback(current, total):
+                print(f"DEBUG: Batch update progress: {current}/{total}")
+            
+            # Queue parameters for batch processing
+            self._ui_responsiveness_service.queue_multiple_parameter_updates(
+                parameters, UpdatePriority.NORMAL, True
+            )
+            
+            # Process the queue
+            result = self._ui_responsiveness_service.process_update_queue()
+            
+            # Log results
+            print(f"DEBUG: Batch processing completed: {result.successful_updates}/{result.total_updates} successful in {result.update_duration_ms:.1f}ms")
+            
+            if result.update_duration_ms > 100:
+                print(f"WARNING: Batch processing exceeded 100ms target: {result.update_duration_ms:.1f}ms")
+            
+            if result.errors:
+                print(f"WARNING: Batch processing had {len(result.errors)} errors")
+                for error in result.errors[:3]:  # Show first 3 errors
+                    print(f"  - {error}")
+                    
+        except Exception as e:
+            print(f"ERROR: Batch processing failed: {str(e)}")
+            # Fallback to individual updates
+            print("DEBUG: Falling back to individual parameter updates")
+    
+    def enable_ui_responsiveness_monitoring(self):
+        """
+        Enable UI responsiveness monitoring and optimization.
+        
+        This method sets up performance monitoring for UI updates to ensure
+        they meet the 100ms responsiveness requirement.
+        
+        Requirements: 7.1, 7.5
+        """
+        try:
+            from services.ui_responsiveness_service import UIResponsivenessService
+            
+            if not hasattr(self, '_ui_responsiveness_service'):
+                self._ui_responsiveness_service = UIResponsivenessService(self)
+                print("DEBUG: UI responsiveness monitoring enabled")
+            
+            # Set up periodic performance reporting
+            def report_performance():
+                if hasattr(self, '_ui_responsiveness_service'):
+                    performance = self._ui_responsiveness_service.get_performance_summary()
+                    if performance['total_batches'] > 0:
+                        print(f"UI Performance: avg {performance['avg_duration_ms']:.1f}ms, "
+                              f"{performance['avg_updates_per_second']:.1f} updates/sec")
+                
+                # Schedule next report
+                self.after(30000, report_performance)  # Every 30 seconds
+            
+            # Start performance reporting
+            self.after(30000, report_performance)
+            
+        except Exception as e:
+            print(f"ERROR: Failed to enable UI responsiveness monitoring: {str(e)}")
+</document_content>
+</document>
+<document index="95">
+<source>.\ui\profile_confirmation_dialog.py</source>
+<document_content>
+"""
+Profile Confirmation Dialog - Specialized dialog for confirming profile operations.
+
+This module provides a confirmation dialog specifically designed for profile operations
+including device-to-profile and profile-to-device operations.
+"""
+
+import customtkinter as ctk
+import os
+from typing import Callable, Dict, Any, Optional
+
+
+class ProfileConfirmationDialog:
+    """Confirmation dialog specifically for profile operations."""
+    
+    def __init__(self, parent, title: str, operation_type: str, profile_info: Dict[str, Any] = None):
+        """
+        Initialize the profile confirmation dialog.
+        
+        Args:
+            parent: Parent window
+            title: Dialog title
+            operation_type: Type of operation ('device_to_profile' or 'profile_to_device')
+            profile_info: Optional dictionary with profile information
+        """
+        self.parent = parent
+        self.operation_type = operation_type
+        self.result = False
+        
+        # Get i18n service from parent if available
+        self.i18n = parent.i18n_service if hasattr(parent, 'i18n_service') else None
+        
+        # Create the dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x400")  # Increased height to accommodate new layout
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Ensure dialog uses the same theme as the application
+        # The main app uses dark theme with blue color theme
+        # Get current theme from parent's theme service if available
+        if hasattr(parent, 'theme_service'):
+            current_theme = parent.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            # Fallback to dark theme if theme service not available
+            ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_ui(profile_info)
+        
+        # Handle window close event
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        
+        # Wait for the dialog to be closed
+        self.dialog.wait_window()
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        if hasattr(self.parent, 'winfo_x') and hasattr(self.parent, 'winfo_y'):
+            x = self.parent.winfo_x() + (self.parent.winfo_width() // 2) - 250
+            y = self.parent.winfo_y() + (self.parent.winfo_height() // 2) - 200
+            self.dialog.geometry(f"+{x}+{y}")
+    
+    def _create_ui(self, profile_info: Dict[str, Any] = None):
+        """Create the dialog UI elements."""
+        # Configure grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        
+        # Create main frame to hold all content with consistent padding
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        main_frame.grid_columnconfigure(0, weight=1)
+        
+        # Add icon and title in a header frame
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Icon (using a label with a circle as a placeholder)
+        icon_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            width=30,
+            height=30,
+            fg_color="#3B8ED0",  # Blue circle
+            corner_radius=15,
+            text_color=None
+        )
+        icon_label.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="w")
+        
+        # Operation title
+        if self.i18n:
+            operation_titles = {
+                'device_to_profile': self.i18n.get('load_from_device', 'Load Profile from Device'),
+                'profile_to_device': self.i18n.get('load_profile_to_device', 'Load Profile to Device')
+            }
+        else:
+            operation_titles = {
+                'device_to_profile': 'Load Profile from Device',
+                'profile_to_device': 'Load Profile to Device'
+            }
+        title_text = operation_titles.get(self.operation_type, 'Profile Operation')
+        
+        self.title_label = ctk.CTkLabel(
+            header_frame, 
+            text=title_text,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.title_label.grid(row=0, column=1, padx=0, pady=0, sticky="w")
+        
+        # Profile information section
+        info_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        info_frame.grid(row=1, column=0, padx=10, pady=(10, 5), sticky="ew")
+        info_frame.grid_columnconfigure(0, weight=1)
+        
+        # Warning icon
+        warning_icon = ctk.CTkLabel(
+            info_frame,
+            text="!",
+            width=30,
+            height=30,
+            fg_color="#FFA500",  # Orange warning color
+            corner_radius=15,
+            text_color="black",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        warning_icon.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="nw")
+        
+        # Profile information text frame
+        profile_info_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        profile_info_frame.grid(row=0, column=1, sticky="ew")
+        
+        # Profile information label
+        profile_info_text = "Profile Information:"
+        if self.i18n:
+            profile_info_text = self.i18n.get('profile_information', 'Profile Information:')
+            
+        profile_info_label = ctk.CTkLabel(
+            profile_info_frame,
+            text=profile_info_text,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        profile_info_label.grid(row=0, column=0, sticky="w")
+        
+        # Profile details
+        profile_name = profile_info.get('name', '[Profile Name]') if profile_info else '[Profile Name]'
+        profile_created = profile_info.get('created', '[Date]') if profile_info else '[Date]'
+        profile_device_imei = profile_info.get('device_imei', '[IMEI]') if profile_info else '[IMEI]'
+        profile_parameter_count = profile_info.get('parameter_count', 0) if profile_info else 0
+        
+        profile_details = ctk.CTkLabel(
+            profile_info_frame,
+            text=f"Name: {profile_name}\n"
+                 f"Created: {profile_created}\n"
+                 f"Original Device IMEI: {profile_device_imei}\n"
+                 f"Parameters: {profile_parameter_count}",
+            font=ctk.CTkFont(size=12),
+            justify="left"
+        )
+        profile_details.grid(row=1, column=0, sticky="w")
+        
+        # Description text
+        description_str = "This will deploy the profile configuration to the connected device.\n\n" \
+                         "The device must be connected and responding.\n" \
+                         "Existing device settings will be overwritten."
+        
+        if self.i18n:
+            description_str = self.i18n.get('profile_deploy_description',
+                "This will deploy the profile configuration to the connected device.\n\n" \
+                "The device must be connected and responding.\n" \
+                "Existing device settings will be overwritten.")
+        
+        description_text = ctk.CTkLabel(
+            main_frame,
+            text=description_str,
+            font=ctk.CTkFont(size=12),
+            justify="left",
+            wraplength=450
+        )
+        description_text.grid(row=2, column=0, padx=10, pady=(20, 20), sticky="w")
+        
+        # Continue question
+        continue_text = "Continue?"
+        if self.i18n:
+            continue_text = self.i18n.get('continue_question', 'Continue?')
+            
+        continue_label = ctk.CTkLabel(
+            main_frame,
+            text=continue_text,
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        continue_label.grid(row=3, column=0, padx=10, pady=(10, 10), sticky="w")
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=4, column=0, padx=10, pady=(10, 0), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=0)
+        button_frame.grid_columnconfigure(2, weight=0)
+        
+        # Cancel button (No)
+        cancel_text = "N├úo"
+        if self.i18n:
+            cancel_text = self.i18n.get('no', 'N├úo')
+            
+        self.cancel_button = ctk.CTkButton(
+            button_frame,
+            text=cancel_text,
+            command=self._on_cancel,
+            width=80
+        )
+        self.cancel_button.grid(row=0, column=2, padx=(10, 0), pady=0, sticky="e")
+        
+        # Confirm button (Yes)
+        confirm_text = "Sim"
+        if self.i18n:
+            confirm_text = self.i18n.get('yes', 'Sim')
+            
+        self.confirm_button = ctk.CTkButton(
+            button_frame,
+            text=confirm_text,
+            command=self._on_confirm,
+            width=80
+        )
+        self.confirm_button.grid(row=0, column=1, padx=(0, 0), pady=0, sticky="e")
+    
+    def _on_confirm(self):
+        """Handle confirm button click."""
+        self.result = True
+        self.dialog.destroy()
+    
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        self.result = False
+        self.dialog.destroy()
+
+
+def show_profile_confirmation_dialog(parent, title: str, operation_type: str, profile_info: Dict[str, Any] = None) -> bool:
+    """
+    Show a profile confirmation dialog and return the result.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        operation_type: Type of operation ('device_to_profile' or 'profile_to_device')
+        profile_info: Optional dictionary with profile information
+        
+    Returns:
+        True if confirmed, False if cancelled
+    """
+    dialog = ProfileConfirmationDialog(parent, title, operation_type, profile_info)
+    return dialog.result
+</document_content>
+</document>
+<document index="96">
+<source>.\ui\profile_connection_error_dialog.py</source>
+<document_content>
+"""
+Profile Connection Error Dialog - Specialized dialog for showing connection errors.
+
+This module provides an error dialog specifically designed for connection errors
+during profile operations.
+"""
+
+import customtkinter as ctk
+from typing import Callable
+
+
+class ProfileConnectionErrorDialog:
+    """Connection error dialog specifically for profile operations."""
+    
+    def __init__(self, parent, title: str, error_message: str):
+        """
+        Initialize the profile connection error dialog.
+        
+        Args:
+            parent: Parent window
+            title: Dialog title
+            error_message: Error message to display
+        """
+        self.parent = parent
+        
+        # Get i18n service from parent if available
+        self.i18n = parent.i18n_service if hasattr(parent, 'i18n_service') else None
+        
+        # Create the dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x350")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Ensure dialog uses the same theme as the application
+        # The main app uses dark theme with blue color theme
+        # Get current theme from parent's theme service if available
+        if hasattr(parent, 'theme_service'):
+            current_theme = parent.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            # Fallback to dark theme if theme service not available
+            ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_ui(error_message)
+        
+        # Handle window close event
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Wait for the dialog to be closed
+        self.dialog.wait_window()
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        if hasattr(self.parent, 'winfo_x') and hasattr(self.parent, 'winfo_y'):
+            x = self.parent.winfo_x() + (self.parent.winfo_width() // 2) - 250
+            y = self.parent.winfo_y() + (self.parent.winfo_height() // 2) - 175
+            self.dialog.geometry(f"+{x}+{y}")
+    
+    def _create_ui(self, error_message: str):
+        """Create the dialog UI elements."""
+        # Configure grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        
+        # Create main frame to hold all content with consistent padding
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        main_frame.grid_columnconfigure(0, weight=1)
+        
+        # Add icon and title in a header frame
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Icon (using a label with a circle as a placeholder)
+        icon_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            width=30,
+            height=30,
+            fg_color="#3B8ED0",  # Blue circle
+            corner_radius=15,
+            text_color=None
+        )
+        icon_label.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="w")
+        
+        # Dialog title
+        title_text = "Connection Error"
+        if self.i18n:
+            title_text = self.i18n.get('connection_error', 'Connection Error')
+            
+        self.title_label = ctk.CTkLabel(
+            header_frame, 
+            text=title_text,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.title_label.grid(row=0, column=1, padx=0, pady=0, sticky="w")
+        
+        # Error information section
+        info_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        info_frame.grid(row=1, column=0, padx=10, pady=(20, 10), sticky="ew")
+        info_frame.grid_columnconfigure(1, weight=1)
+        
+        # Error icon
+        error_icon = ctk.CTkLabel(
+            info_frame,
+            text="!",
+            width=60,
+            height=60,
+            fg_color="#F39C12",  # Orange warning color
+            corner_radius=30,
+            text_color="white",
+            font=ctk.CTkFont(size=30, weight="bold")
+        )
+        error_icon.grid(row=0, column=0, padx=(0, 20), pady=0, sticky="nw")
+        
+        # Error message
+        error_label = ctk.CTkLabel(
+            info_frame,
+            text=error_message,
+            font=ctk.CTkFont(size=14),
+            justify="left",
+            wraplength=380
+        )
+        error_label.grid(row=0, column=1, sticky="w")
+        
+        # Connection instructions
+        instructions_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        instructions_frame.grid(row=2, column=0, padx=10, pady=(20, 10), sticky="ew")
+        
+        instructions_text = "To connect to a device:"
+        if self.i18n:
+            instructions_text = self.i18n.get('connect_device_instructions', 'To connect to a device:')
+            
+        instructions_label = ctk.CTkLabel(
+            instructions_frame,
+            text=instructions_text,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            justify="left"
+        )
+        instructions_label.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        
+        steps_text = "1. Connect the device to your computer via USB\n" \
+                    "2. Select the correct COM port in the Connection panel\n" \
+                    "3. Click the Connect button\n" \
+                    "4. Wait for the connection status to show 'Connected'"
+        
+        if self.i18n:
+            steps_text = self.i18n.get('connect_device_steps',
+                "1. Connect the device to your computer via USB\n" \
+                "2. Select the correct COM port in the Connection panel\n" \
+                "3. Click the Connect button\n" \
+                "4. Wait for the connection status to show 'Connected'")
+            
+        steps_label = ctk.CTkLabel(
+            instructions_frame,
+            text=steps_text,
+            font=ctk.CTkFont(size=12),
+            justify="left"
+        )
+        steps_label.grid(row=1, column=0, sticky="w")
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=3, column=0, padx=10, pady=(20, 0), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        
+        # OK button
+        ok_text = "OK"
+        if self.i18n:
+            ok_text = self.i18n.get('ok', 'OK')
+            
+        self.ok_button = ctk.CTkButton(
+            button_frame,
+            text=ok_text,
+            command=self._on_close,
+            width=80
+        )
+        self.ok_button.grid(row=0, column=0, sticky="e")
+    
+    def _on_close(self):
+        """Handle close button click."""
+        self.dialog.destroy()
+
+
+def show_profile_connection_error_dialog(parent, title: str, error_message: str):
+    """
+    Show a profile connection error dialog.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        error_message: Error message to display
+    """
+    ProfileConnectionErrorDialog(parent, title, error_message)
+</document_content>
+</document>
+<document index="97">
+<source>.\ui\profile_error_dialog.py</source>
+<document_content>
+"""
+Profile Error Dialog - Specialized dialog for showing profile operation errors.
+
+This module provides an error dialog specifically designed for profile operations
+including device-to-profile and profile-to-device operations.
+"""
+
+import customtkinter as ctk
+from typing import Callable
+
+
+class ProfileErrorDialog:
+    """Error dialog specifically for profile operations."""
+    
+    def __init__(self, parent, title: str, error_message: str):
+        """
+        Initialize the profile error dialog.
+        
+        Args:
+            parent: Parent window
+            title: Dialog title
+            error_message: Error message to display
+        """
+        self.parent = parent
+        
+        # Get i18n service from parent if available
+        self.i18n = parent.i18n_service if hasattr(parent, 'i18n_service') else None
+        
+        # Create the dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x300")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Ensure dialog uses the same theme as the application
+        # The main app uses dark theme with blue color theme
+        # Get current theme from parent's theme service if available
+        if hasattr(parent, 'theme_service'):
+            current_theme = parent.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            # Fallback to dark theme if theme service not available
+            ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_ui(error_message)
+        
+        # Handle window close event
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Wait for the dialog to be closed
+        self.dialog.wait_window()
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        if hasattr(self.parent, 'winfo_x') and hasattr(self.parent, 'winfo_y'):
+            x = self.parent.winfo_x() + (self.parent.winfo_width() // 2) - 250
+            y = self.parent.winfo_y() + (self.parent.winfo_height() // 2) - 150
+            self.dialog.geometry(f"+{x}+{y}")
+    
+    def _create_ui(self, error_message: str):
+        """Create the dialog UI elements."""
+        # Configure grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        
+        # Create main frame to hold all content with consistent padding
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        main_frame.grid_columnconfigure(0, weight=1)
+        
+        # Add icon and title in a header frame
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Icon (using a label with a circle as a placeholder)
+        icon_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            width=30,
+            height=30,
+            fg_color="#3B8ED0",  # Blue circle
+            corner_radius=15,
+            text_color=None
+        )
+        icon_label.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="w")
+        
+        # Dialog title
+        title_text = "Profile Deployment Failed"
+        if self.i18n:
+            title_text = self.i18n.get('profile_deployment_failed', 'Profile Deployment Failed')
+            
+        self.title_label = ctk.CTkLabel(
+            header_frame, 
+            text=title_text,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.title_label.grid(row=0, column=1, padx=0, pady=0, sticky="w")
+        
+        # Error information section
+        info_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        info_frame.grid(row=1, column=0, padx=10, pady=(20, 10), sticky="ew")
+        info_frame.grid_columnconfigure(1, weight=1)
+        
+        # Error icon
+        error_icon = ctk.CTkLabel(
+            info_frame,
+            text="Ô£ò",
+            width=60,
+            height=60,
+            fg_color="#E74C3C",  # Red error color
+            corner_radius=30,
+            text_color="white",
+            font=ctk.CTkFont(size=30, weight="bold")
+        )
+        error_icon.grid(row=0, column=0, padx=(0, 20), pady=0, sticky="nw")
+        
+        # Error message
+        error_label = ctk.CTkLabel(
+            info_frame,
+            text=error_message,
+            font=ctk.CTkFont(size=14),
+            justify="left",
+            wraplength=380
+        )
+        error_label.grid(row=0, column=1, sticky="w")
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=2, column=0, padx=10, pady=(20, 0), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        
+        # OK button
+        ok_text = "OK"
+        if self.i18n:
+            ok_text = self.i18n.get('ok', 'OK')
+            
+        self.ok_button = ctk.CTkButton(
+            button_frame,
+            text=ok_text,
+            command=self._on_close,
+            width=80
+        )
+        self.ok_button.grid(row=0, column=0, sticky="e")
+    
+    def _on_close(self):
+        """Handle close button click."""
+        self.dialog.destroy()
+
+
+def show_profile_error_dialog(parent, title: str, error_message: str):
+    """
+    Show a profile error dialog.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        error_message: Error message to display
+    """
+    ProfileErrorDialog(parent, title, error_message)
+</document_content>
+</document>
+<document index="98">
+<source>.\ui\profile_success_dialog.py</source>
+<document_content>
+"""
+Profile Success Dialog - Specialized dialog for showing profile operation success.
+
+This module provides a success dialog specifically designed for profile operations
+including device-to-profile and profile-to-device operations.
+"""
+
+import customtkinter as ctk
+from typing import Callable
+
+
+class ProfileSuccessDialog:
+    """Success dialog specifically for profile operations."""
+    
+    def __init__(self, parent, title: str, success_message: str):
+        """
+        Initialize the profile success dialog.
+        
+        Args:
+            parent: Parent window
+            title: Dialog title
+            success_message: Success message to display
+        """
+        self.parent = parent
+        
+        # Get i18n service from parent if available
+        self.i18n = parent.i18n_service if hasattr(parent, 'i18n_service') else None
+        
+        # Create the dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x300")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Ensure dialog uses the same theme as the application
+        # The main app uses dark theme with blue color theme
+        # Get current theme from parent's theme service if available
+        if hasattr(parent, 'theme_service'):
+            current_theme = parent.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            # Fallback to dark theme if theme service not available
+            ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_ui(success_message)
+        
+        # Handle window close event
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Wait for the dialog to be closed
+        self.dialog.wait_window()
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        if hasattr(self.parent, 'winfo_x') and hasattr(self.parent, 'winfo_y'):
+            x = self.parent.winfo_x() + (self.parent.winfo_width() // 2) - 250
+            y = self.parent.winfo_y() + (self.parent.winfo_height() // 2) - 150
+            self.dialog.geometry(f"+{x}+{y}")
+    
+    def _create_ui(self, success_message: str):
+        """Create the dialog UI elements."""
+        # Configure grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        
+        # Create main frame to hold all content with consistent padding
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        main_frame.grid_columnconfigure(0, weight=1)
+        
+        # Add icon and title in a header frame
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Icon (using a label with a circle as a placeholder)
+        icon_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            width=30,
+            height=30,
+            fg_color="#3B8ED0",  # Blue circle
+            corner_radius=15,
+            text_color=None
+        )
+        icon_label.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="w")
+        
+        # Dialog title
+        title_text = "Profile Deployment Complete"
+        if self.i18n:
+            title_text = self.i18n.get('profile_deployment_complete', 'Profile Deployment Complete')
+            
+        self.title_label = ctk.CTkLabel(
+            header_frame, 
+            text=title_text,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.title_label.grid(row=0, column=1, padx=0, pady=0, sticky="w")
+        
+        # Success information section
+        info_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        info_frame.grid(row=1, column=0, padx=10, pady=(20, 10), sticky="ew")
+        info_frame.grid_columnconfigure(1, weight=1)
+        
+        # Success icon
+        success_icon = ctk.CTkLabel(
+            info_frame,
+            text="Ô£ô",
+            width=60,
+            height=60,
+            fg_color="#2ECC71",  # Green success color
+            corner_radius=30,
+            text_color="white",
+            font=ctk.CTkFont(size=30, weight="bold")
+        )
+        success_icon.grid(row=0, column=0, padx=(0, 20), pady=0, sticky="nw")
+        
+        # Success message
+        success_label = ctk.CTkLabel(
+            info_frame,
+            text=success_message,
+            font=ctk.CTkFont(size=14),
+            justify="left",
+            wraplength=380
+        )
+        success_label.grid(row=0, column=1, sticky="w")
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=2, column=0, padx=10, pady=(20, 0), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        
+        # OK button
+        ok_text = "OK"
+        if self.i18n:
+            ok_text = self.i18n.get('ok', 'OK')
+            
+        self.ok_button = ctk.CTkButton(
+            button_frame,
+            text=ok_text,
+            command=self._on_close,
+            width=80
+        )
+        self.ok_button.grid(row=0, column=0, sticky="e")
+    
+    def _on_close(self):
+        """Handle close button click."""
+        self.dialog.destroy()
+
+
+def show_profile_success_dialog(parent, title: str, success_message: str):
+    """
+    Show a profile success dialog.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        success_message: Success message to display
+    """
+    ProfileSuccessDialog(parent, title, success_message)
+</document_content>
+</document>
+<document index="99">
+<source>.\ui\profile_validation_error_dialog.py</source>
+<document_content>
+"""
+Profile Validation Error Dialog - Detailed error display with specific parameter locations.
+
+This module provides detailed error display for profile validation including:
+1. Detailed error display with specific parameter locations
+2. Error categorization and severity indication
+3. Expandable error details with suggestions
+4. Navigation between errors
+"""
+
+import customtkinter as ctk
+from typing import List, Optional, Dict, Any
+from services.profile_validator import ValidationError, ValidationWarning, ValidationResult, ValidationSeverity
+from services.profile_error_handler import Suggestion
+
+
+class ProfileValidationErrorDialog:
+    """Detailed error dialog for profile validation results."""
+    
+    def __init__(self, parent, validation_result: ValidationResult, profile_name: str = ""):
+        """
+        Initialize the profile validation error dialog.
+        
+        Args:
+            parent: Parent window
+            validation_result: ValidationResult with errors and warnings
+            profile_name: Name of the profile being validated
+        """
+        self.parent = parent
+        self.validation_result = validation_result
+        self.profile_name = profile_name
+        self.current_error_index = 0
+        
+        # Get i18n service from parent if available
+        self.i18n = parent.i18n_service if hasattr(parent, 'i18n_service') else None
+        
+        # Get theme service from parent
+        self.theme_service = parent.theme_service if hasattr(parent, 'theme_service') else None
+        
+        # Create the dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title("Profile Validation Errors")
+        self.dialog.geometry("700x600")
+        self.dialog.resizable(True, True)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Apply consistent theming
+        self._apply_consistent_theming()
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_ui()
+        
+        # Handle window close event
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Load initial error data
+        self._load_error_data()
+    
+    def _apply_consistent_theming(self):
+        """Apply consistent theming with the main application."""
+        if self.theme_service:
+            current_theme = self.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        try:
+            self.parent.update_idletasks()
+            
+            parent_x = self.parent.winfo_x()
+            parent_y = self.parent.winfo_y()
+            parent_width = self.parent.winfo_width()
+            parent_height = self.parent.winfo_height()
+            
+            dialog_width = 700
+            dialog_height = 600
+            x = parent_x + (parent_width // 2) - (dialog_width // 2)
+            y = parent_y + (parent_height // 2) - (dialog_height // 2)
+            
+            screen_width = self.dialog.winfo_screenwidth()
+            screen_height = self.dialog.winfo_screenheight()
+            
+            x = max(0, min(x, screen_width - dialog_width))
+            y = max(0, min(y, screen_height - dialog_height))
+            
+            self.dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        except Exception:
+            self.dialog.geometry("700x600+300+150")
+    
+    def _create_ui(self):
+        """Create the dialog UI elements."""
+        # Configure main dialog grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        self.dialog.grid_rowconfigure(0, weight=1)
+        
+        # Create main frame
+        main_frame = ctk.CTkFrame(self.dialog, corner_radius=10)
+        main_frame.grid(row=0, column=0, padx=15, pady=15, sticky="nsew")
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(2, weight=1)  # Make error details expandable
+        
+        # Header section
+        self._create_header(main_frame)
+        
+        # Summary section
+        self._create_summary_section(main_frame)
+        
+        # Error details section (expandable)
+        self._create_error_details_section(main_frame)
+        
+        # Navigation and action buttons
+        self._create_button_section(main_frame)
+    
+    def _create_header(self, parent):
+        """Create the header section."""
+        header_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=20, pady=(20, 15), sticky="ew")
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        # Determine header icon and color based on validation result
+        if self.validation_result.has_critical_errors():
+            icon_text = "­ƒö┤"
+            icon_color = "#E74C3C"
+            title_text = "Critical Validation Errors Found"
+        elif len(self.validation_result.get_errors_by_severity('error')) > 0:
+            icon_text = "­ƒƒá"
+            icon_color = "#FF8C00"
+            title_text = "Validation Errors Found"
+        else:
+            icon_text = "­ƒƒí"
+            icon_color = "#F39C12"
+            title_text = "Validation Warnings Found"
+        
+        # Error icon
+        icon_label = ctk.CTkLabel(
+            header_frame,
+            text=icon_text,
+            width=40,
+            height=40,
+            fg_color=icon_color,
+            corner_radius=20,
+            text_color="white",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        icon_label.grid(row=0, column=0, padx=(0, 15), pady=0, sticky="w")
+        
+        # Title and profile name
+        title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_frame.grid(row=0, column=1, sticky="ew")
+        title_frame.grid_columnconfigure(0, weight=1)
+        
+        self.title_label = ctk.CTkLabel(
+            title_frame,
+            text=title_text,
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=("gray10", "gray90")
+        )
+        self.title_label.grid(row=0, column=0, sticky="w")
+        
+        if self.profile_name:
+            profile_label = ctk.CTkLabel(
+                title_frame,
+                text=f"Profile: {self.profile_name}",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray30", "gray70")
+            )
+            profile_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+    
+    def _create_summary_section(self, parent):
+        """Create the validation summary section."""
+        summary_frame = ctk.CTkFrame(parent, corner_radius=8, fg_color=("gray95", "gray15"))
+        summary_frame.grid(row=1, column=0, padx=20, pady=(0, 15), sticky="ew")
+        summary_frame.grid_columnconfigure(0, weight=1)
+        
+        # Summary header
+        summary_header = ctk.CTkLabel(
+            summary_frame,
+            text="Validation Summary",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=("gray10", "gray90")
+        )
+        summary_header.grid(row=0, column=0, padx=15, pady=(15, 10), sticky="w")
+        
+        # Summary statistics
+        summary_stats_frame = ctk.CTkFrame(summary_frame, fg_color="transparent")
+        summary_stats_frame.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="ew")
+        summary_stats_frame.grid_columnconfigure(0, weight=1)
+        summary_stats_frame.grid_columnconfigure(1, weight=1)
+        summary_stats_frame.grid_columnconfigure(2, weight=1)
+        summary_stats_frame.grid_columnconfigure(3, weight=1)
+        
+        # Count different types of issues
+        critical_errors = len(self.validation_result.get_errors_by_severity('critical'))
+        errors = len(self.validation_result.get_errors_by_severity('error'))
+        warnings = len(self.validation_result.warnings)
+        total_issues = critical_errors + errors + warnings
+        
+        # Critical errors
+        critical_frame = ctk.CTkFrame(summary_stats_frame, fg_color="#E74C3C", corner_radius=6)
+        critical_frame.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
+        
+        ctk.CTkLabel(
+            critical_frame,
+            text=str(critical_errors),
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white"
+        ).pack(pady=(8, 2))
+        
+        ctk.CTkLabel(
+            critical_frame,
+            text="Critical",
+            font=ctk.CTkFont(size=10),
+            text_color="white"
+        ).pack(pady=(0, 8))
+        
+        # Errors
+        error_frame = ctk.CTkFrame(summary_stats_frame, fg_color="#FF8C00", corner_radius=6)
+        error_frame.grid(row=0, column=1, padx=5, pady=0, sticky="ew")
+        
+        ctk.CTkLabel(
+            error_frame,
+            text=str(errors),
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white"
+        ).pack(pady=(8, 2))
+        
+        ctk.CTkLabel(
+            error_frame,
+            text="Errors",
+            font=ctk.CTkFont(size=10),
+            text_color="white"
+        ).pack(pady=(0, 8))
+        
+        # Warnings
+        warning_frame = ctk.CTkFrame(summary_stats_frame, fg_color="#F39C12", corner_radius=6)
+        warning_frame.grid(row=0, column=2, padx=5, pady=0, sticky="ew")
+        
+        ctk.CTkLabel(
+            warning_frame,
+            text=str(warnings),
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white"
+        ).pack(pady=(8, 2))
+        
+        ctk.CTkLabel(
+            warning_frame,
+            text="Warnings",
+            font=ctk.CTkFont(size=10),
+            text_color="white"
+        ).pack(pady=(0, 8))
+        
+        # Total
+        total_frame = ctk.CTkFrame(summary_stats_frame, fg_color="#1f538d", corner_radius=6)
+        total_frame.grid(row=0, column=3, padx=(5, 0), pady=0, sticky="ew")
+        
+        ctk.CTkLabel(
+            total_frame,
+            text=str(total_issues),
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white"
+        ).pack(pady=(8, 2))
+        
+        ctk.CTkLabel(
+            total_frame,
+            text="Total Issues",
+            font=ctk.CTkFont(size=10),
+            text_color="white"
+        ).pack(pady=(0, 8))
+    
+    def _create_error_details_section(self, parent):
+        """Create the expandable error details section."""
+        details_frame = ctk.CTkFrame(parent, corner_radius=8)
+        details_frame.grid(row=2, column=0, padx=20, pady=(0, 15), sticky="nsew")
+        details_frame.grid_columnconfigure(0, weight=1)
+        details_frame.grid_rowconfigure(1, weight=1)
+        
+        # Details header with navigation
+        details_header_frame = ctk.CTkFrame(details_frame, fg_color="transparent")
+        details_header_frame.grid(row=0, column=0, padx=15, pady=(15, 10), sticky="ew")
+        details_header_frame.grid_columnconfigure(1, weight=1)
+        
+        details_header = ctk.CTkLabel(
+            details_header_frame,
+            text="Error Details",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=("gray10", "gray90")
+        )
+        details_header.grid(row=0, column=0, sticky="w")
+        
+        # Navigation controls
+        nav_frame = ctk.CTkFrame(details_header_frame, fg_color="transparent")
+        nav_frame.grid(row=0, column=2, sticky="e")
+        
+        self.prev_button = ctk.CTkButton(
+            nav_frame,
+            text="ÔùÇ",
+            command=self._previous_error,
+            width=30,
+            height=25,
+            font=ctk.CTkFont(size=12)
+        )
+        self.prev_button.pack(side="left", padx=(0, 5))
+        
+        self.error_counter_label = ctk.CTkLabel(
+            nav_frame,
+            text="1 / 1",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray30", "gray70")
+        )
+        self.error_counter_label.pack(side="left", padx=5)
+        
+        self.next_button = ctk.CTkButton(
+            nav_frame,
+            text="ÔûÂ",
+            command=self._next_error,
+            width=30,
+            height=25,
+            font=ctk.CTkFont(size=12)
+        )
+        self.next_button.pack(side="left", padx=(5, 0))
+        
+        # Scrollable error details
+        self.error_details_frame = ctk.CTkScrollableFrame(details_frame)
+        self.error_details_frame.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="nsew")
+        self.error_details_frame.grid_columnconfigure(0, weight=1)
+    
+    def _create_button_section(self, parent):
+        """Create the button section."""
+        button_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        button_frame.grid(row=3, column=0, padx=20, pady=(0, 20), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        
+        # Action buttons
+        action_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
+        action_frame.grid(row=0, column=0, sticky="w")
+        
+        self.export_button = ctk.CTkButton(
+            action_frame,
+            text="Export Report",
+            command=self._export_report,
+            width=120,
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray40")
+        )
+        self.export_button.pack(side="left", padx=(0, 10))
+        
+        self.copy_button = ctk.CTkButton(
+            action_frame,
+            text="Copy Details",
+            command=self._copy_details,
+            width=120,
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray40")
+        )
+        self.copy_button.pack(side="left")
+        
+        # Close button
+        self.close_button = ctk.CTkButton(
+            button_frame,
+            text="Close",
+            command=self._on_close,
+            width=90,
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color="#1f538d",
+            hover_color="#144870"
+        )
+        self.close_button.grid(row=0, column=1, sticky="e")
+    
+    def _load_error_data(self):
+        """Load and display error data."""
+        # Combine errors and warnings for navigation
+        self.all_issues = []
+        
+        # Add critical errors first
+        for error in self.validation_result.get_errors_by_severity('critical'):
+            self.all_issues.append(('critical', error))
+        
+        # Add regular errors
+        for error in self.validation_result.get_errors_by_severity('error'):
+            self.all_issues.append(('error', error))
+        
+        # Add warnings
+        for warning in self.validation_result.warnings:
+            self.all_issues.append(('warning', warning))
+        
+        # Update navigation
+        self._update_navigation()
+        
+        # Display first error
+        if self.all_issues:
+            self._display_current_error()
+    
+    def _update_navigation(self):
+        """Update navigation controls."""
+        total_issues = len(self.all_issues)
+        
+        if total_issues == 0:
+            self.error_counter_label.configure(text="No issues")
+            self.prev_button.configure(state="disabled")
+            self.next_button.configure(state="disabled")
+            return
+        
+        # Update counter
+        self.error_counter_label.configure(text=f"{self.current_error_index + 1} / {total_issues}")
+        
+        # Update button states
+        self.prev_button.configure(state="normal" if self.current_error_index > 0 else "disabled")
+        self.next_button.configure(state="normal" if self.current_error_index < total_issues - 1 else "disabled")
+    
+    def _display_current_error(self):
+        """Display the current error in the details section."""
+        # Clear existing content
+        for widget in self.error_details_frame.winfo_children():
+            widget.destroy()
+        
+        if not self.all_issues:
+            no_issues_label = ctk.CTkLabel(
+                self.error_details_frame,
+                text="No validation issues found.",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray40", "gray60")
+            )
+            no_issues_label.pack(pady=20)
+            return
+        
+        issue_type, issue = self.all_issues[self.current_error_index]
+        
+        # Issue header
+        header_frame = ctk.CTkFrame(self.error_details_frame, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(0, 15))
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        # Severity indicator
+        severity_colors = {
+            'critical': "#E74C3C",
+            'error': "#FF8C00",
+            'warning': "#F39C12"
+        }
+        
+        severity_icons = {
+            'critical': "­ƒö┤",
+            'error': "­ƒƒá",
+            'warning': "­ƒƒí"
+        }
+        
+        severity_color = severity_colors.get(issue_type, "#1f538d")
+        severity_icon = severity_icons.get(issue_type, "Ôä╣")
+        
+        severity_label = ctk.CTkLabel(
+            header_frame,
+            text=f"{severity_icon} {issue_type.upper()}",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=severity_color,
+            width=80
+        )
+        severity_label.grid(row=0, column=0, sticky="w", padx=(0, 15))
+        
+        # Location
+        location_text = getattr(issue, 'location', 'Unknown location')
+        location_label = ctk.CTkLabel(
+            header_frame,
+            text=f"Location: {location_text}",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=("gray10", "gray90")
+        )
+        location_label.grid(row=0, column=1, sticky="w")
+        
+        # Error message
+        message_frame = ctk.CTkFrame(self.error_details_frame, corner_radius=6, fg_color=("gray95", "gray15"))
+        message_frame.pack(fill="x", pady=(0, 15))
+        
+        message_label = ctk.CTkLabel(
+            message_frame,
+            text=getattr(issue, 'message', 'No message available'),
+            font=ctk.CTkFont(size=12),
+            text_color=("gray10", "gray90"),
+            wraplength=600,
+            justify="left"
+        )
+        message_label.pack(padx=15, pady=15, anchor="w")
+        
+        # Additional details
+        details_frame = ctk.CTkFrame(self.error_details_frame, fg_color="transparent")
+        details_frame.pack(fill="x", pady=(0, 15))
+        details_frame.grid_columnconfigure(1, weight=1)
+        
+        # Parameter name (if available)
+        parameter_name = getattr(issue, 'parameter_name', None)
+        if parameter_name:
+            ctk.CTkLabel(
+                details_frame,
+                text="Parameter:",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=("gray30", "gray70"),
+                width=100
+            ).grid(row=0, column=0, sticky="w", pady=2)
+            
+            ctk.CTkLabel(
+                details_frame,
+                text=parameter_name,
+                font=ctk.CTkFont(size=11),
+                text_color=("gray10", "gray90")
+            ).grid(row=0, column=1, sticky="w", pady=2)
+        
+        # Current value (if available)
+        current_value = getattr(issue, 'current_value', None) or getattr(issue, 'actual_value', None)
+        if current_value:
+            row = 1 if parameter_name else 0
+            ctk.CTkLabel(
+                details_frame,
+                text="Current Value:",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=("gray30", "gray70"),
+                width=100
+            ).grid(row=row, column=0, sticky="w", pady=2)
+            
+            ctk.CTkLabel(
+                details_frame,
+                text=str(current_value),
+                font=ctk.CTkFont(size=11),
+                text_color=("gray10", "gray90")
+            ).grid(row=row, column=1, sticky="w", pady=2)
+        
+        # Expected format (if available)
+        expected_format = getattr(issue, 'expected_format', None) or getattr(issue, 'expected_value', None)
+        if expected_format:
+            row = (1 if parameter_name else 0) + (1 if current_value else 0)
+            ctk.CTkLabel(
+                details_frame,
+                text="Expected:",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=("gray30", "gray70"),
+                width=100
+            ).grid(row=row, column=0, sticky="w", pady=2)
+            
+            ctk.CTkLabel(
+                details_frame,
+                text=str(expected_format),
+                font=ctk.CTkFont(size=11),
+                text_color=("gray10", "gray90")
+            ).grid(row=row, column=1, sticky="w", pady=2)
+        
+        # Suggestion (if available)
+        suggestion = getattr(issue, 'suggestion', None)
+        if suggestion:
+            suggestion_frame = ctk.CTkFrame(self.error_details_frame, corner_radius=6, fg_color="#2AAA8A")
+            suggestion_frame.pack(fill="x", pady=(0, 10))
+            
+            suggestion_header = ctk.CTkLabel(
+                suggestion_frame,
+                text="­ƒÆí Suggestion:",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color="white"
+            )
+            suggestion_header.pack(anchor="w", padx=15, pady=(10, 5))
+            
+            suggestion_text = ctk.CTkLabel(
+                suggestion_frame,
+                text=suggestion,
+                font=ctk.CTkFont(size=11),
+                text_color="white",
+                wraplength=600,
+                justify="left"
+            )
+            suggestion_text.pack(anchor="w", padx=15, pady=(0, 10))
+    
+    def _previous_error(self):
+        """Navigate to previous error."""
+        if self.current_error_index > 0:
+            self.current_error_index -= 1
+            self._update_navigation()
+            self._display_current_error()
+    
+    def _next_error(self):
+        """Navigate to next error."""
+        if self.current_error_index < len(self.all_issues) - 1:
+            self.current_error_index += 1
+            self._update_navigation()
+            self._display_current_error()
+    
+    def _export_report(self):
+        """Export validation report to file."""
+        try:
+            from tkinter import filedialog
+            import os
+            from datetime import datetime
+            
+            # Ask user for save location
+            filename = filedialog.asksaveasfilename(
+                title="Export Validation Report",
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                initialname=f"validation_report_{self.profile_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            )
+            
+            if filename:
+                self._write_report_to_file(filename)
+                
+                # Show success message
+                from ui.custom_dialogs import show_info
+                show_info(self.dialog, "Export Successful", f"Validation report exported to:\n{filename}")
+        
+        except Exception as e:
+            from ui.custom_dialogs import show_error
+            show_error(self.dialog, "Export Failed", f"Failed to export report:\n{str(e)}")
+    
+    def _write_report_to_file(self, filename: str):
+        """Write validation report to file."""
+        from datetime import datetime
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("PROFILE VALIDATION REPORT\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"Profile Name: {self.profile_name}\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Validation Status: {'FAILED' if not self.validation_result.is_valid else 'PASSED'}\n\n")
+            
+            # Summary
+            critical_errors = len(self.validation_result.get_errors_by_severity('critical'))
+            errors = len(self.validation_result.get_errors_by_severity('error'))
+            warnings = len(self.validation_result.warnings)
+            
+            f.write("SUMMARY\n")
+            f.write("-" * 20 + "\n")
+            f.write(f"Critical Errors: {critical_errors}\n")
+            f.write(f"Errors: {errors}\n")
+            f.write(f"Warnings: {warnings}\n")
+            f.write(f"Total Issues: {critical_errors + errors + warnings}\n\n")
+            
+            # Detailed errors
+            f.write("DETAILED ISSUES\n")
+            f.write("-" * 20 + "\n\n")
+            
+            for i, (issue_type, issue) in enumerate(self.all_issues, 1):
+                f.write(f"{i}. {issue_type.upper()}\n")
+                f.write(f"   Location: {getattr(issue, 'location', 'Unknown')}\n")
+                f.write(f"   Message: {getattr(issue, 'message', 'No message')}\n")
+                
+                if hasattr(issue, 'parameter_name') and issue.parameter_name:
+                    f.write(f"   Parameter: {issue.parameter_name}\n")
+                
+                current_value = getattr(issue, 'current_value', None) or getattr(issue, 'actual_value', None)
+                if current_value:
+                    f.write(f"   Current Value: {current_value}\n")
+                
+                expected = getattr(issue, 'expected_format', None) or getattr(issue, 'expected_value', None)
+                if expected:
+                    f.write(f"   Expected: {expected}\n")
+                
+                if hasattr(issue, 'suggestion') and issue.suggestion:
+                    f.write(f"   Suggestion: {issue.suggestion}\n")
+                
+                f.write("\n")
+    
+    def _copy_details(self):
+        """Copy current error details to clipboard."""
+        try:
+            if not self.all_issues:
+                return
+            
+            issue_type, issue = self.all_issues[self.current_error_index]
+            
+            details = f"{issue_type.upper()}\n"
+            details += f"Location: {getattr(issue, 'location', 'Unknown')}\n"
+            details += f"Message: {getattr(issue, 'message', 'No message')}\n"
+            
+            if hasattr(issue, 'parameter_name') and issue.parameter_name:
+                details += f"Parameter: {issue.parameter_name}\n"
+            
+            current_value = getattr(issue, 'current_value', None) or getattr(issue, 'actual_value', None)
+            if current_value:
+                details += f"Current Value: {current_value}\n"
+            
+            expected = getattr(issue, 'expected_format', None) or getattr(issue, 'expected_value', None)
+            if expected:
+                details += f"Expected: {expected}\n"
+            
+            if hasattr(issue, 'suggestion') and issue.suggestion:
+                details += f"Suggestion: {issue.suggestion}\n"
+            
+            # Copy to clipboard
+            self.dialog.clipboard_clear()
+            self.dialog.clipboard_append(details)
+            
+            # Show brief confirmation
+            from ui.custom_dialogs import show_info
+            show_info(self.dialog, "Copied", "Error details copied to clipboard.")
+            
+        except Exception as e:
+            from ui.custom_dialogs import show_error
+            show_error(self.dialog, "Copy Failed", f"Failed to copy details:\n{str(e)}")
+    
+    def _on_close(self):
+        """Handle close button click."""
+        self.dialog.destroy()
+
+
+def show_validation_error_dialog(parent, validation_result: ValidationResult, profile_name: str = "") -> None:
+    """
+    Show a profile validation error dialog.
+    
+    Args:
+        parent: Parent window
+        validation_result: ValidationResult with errors and warnings
+        profile_name: Name of the profile being validated
+    """
+    ProfileValidationErrorDialog(parent, validation_result, profile_name)
+</document_content>
+</document>
+<document index="100">
+<source>.\ui\profile_warning_confirmation_dialog.py</source>
+<document_content>
+"""
+Profile Warning Confirmation Dialog - User confirmation dialog for operations with validation warnings.
+
+This module provides a dialog for asking users whether to continue operations
+when validation warnings are present, supporting comprehensive error recovery.
+"""
+
+import customtkinter as ctk
+import tkinter as tk
+from typing import List, Dict, Any, Optional, Callable
+from dataclasses import dataclass
+
+
+@dataclass
+class WarningDialogResult:
+    """Result of warning confirmation dialog."""
+    continue_operation: bool
+    user_choice: str  # 'continue', 'cancel', 'fix_and_retry'
+    ignore_similar_warnings: bool = False
+
+
+class ProfileWarningConfirmationDialog(ctk.CTkToplevel):
+    """
+    Dialog for confirming continuation of operations with validation warnings.
+    
+    Features:
+    - Display detailed warning information
+    - Allow user to continue, cancel, or fix issues
+    - Option to ignore similar warnings in the future
+    - Comprehensive warning categorization and display
+    """
+    
+    def __init__(self, parent, title: str, message: str, warnings: List[Dict[str, Any]],
+                 operation_context: Dict[str, Any] = None,
+                 callback: Optional[Callable[[WarningDialogResult], None]] = None):
+        """
+        Initialize the warning confirmation dialog.
+        
+        Args:
+            parent: Parent window
+            title: Dialog title
+            message: Main message to display
+            warnings: List of warning dictionaries
+            operation_context: Context information about the operation
+            callback: Optional callback function for result
+        """
+        super().__init__(parent)
+        
+        self.parent = parent
+        self.callback = callback
+        self.warnings = warnings or []
+        self.operation_context = operation_context or {}
+        self.result = None
+        
+        # Configure dialog
+        self.title(title)
+        self.geometry("600x500")
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_dialog_content(title, message)
+        
+        # Focus on the dialog
+        self.focus()
+        
+        # Bind close event
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        self.update_idletasks()
+        
+        # Get parent window position and size
+        parent_x = self.parent.winfo_rootx()
+        parent_y = self.parent.winfo_rooty()
+        parent_width = self.parent.winfo_width()
+        parent_height = self.parent.winfo_height()
+        
+        # Calculate center position
+        dialog_width = 600
+        dialog_height = 500
+        x = parent_x + (parent_width - dialog_width) // 2
+        y = parent_y + (parent_height - dialog_height) // 2
+        
+        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+    def _create_dialog_content(self, title: str, message: str):
+        """Create the dialog content."""
+        # Main container
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title and message
+        title_label = ctk.CTkLabel(
+            main_frame,
+            text=title,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(pady=(0, 10))
+        
+        message_label = ctk.CTkLabel(
+            main_frame,
+            text=message,
+            font=ctk.CTkFont(size=12),
+            wraplength=550
+        )
+        message_label.pack(pady=(0, 15))
+        
+        # Warning details section
+        self._create_warning_details_section(main_frame)
+        
+        # Options section
+        self._create_options_section(main_frame)
+        
+        # Buttons section
+        self._create_buttons_section(main_frame)
+
+    def _create_warning_details_section(self, parent):
+        """Create the warning details section."""
+        # Warning details frame
+        details_frame = ctk.CTkFrame(parent)
+        details_frame.pack(fill="both", expand=True, pady=(0, 15))
+        
+        # Details label
+        details_label = ctk.CTkLabel(
+            details_frame,
+            text=f"Warning Details ({len(self.warnings)} warnings found):",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        details_label.pack(anchor="w", padx=15, pady=(15, 5))
+        
+        # Scrollable text widget for warnings
+        self.warnings_text = ctk.CTkTextbox(
+            details_frame,
+            height=200,
+            font=ctk.CTkFont(size=10)
+        )
+        self.warnings_text.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        
+        # Populate warnings
+        self._populate_warning_details()
+
+    def _populate_warning_details(self):
+        """Populate the warning details text widget."""
+        self.warnings_text.delete("1.0", "end")
+        
+        if not self.warnings:
+            self.warnings_text.insert("1.0", "No warnings to display.")
+            return
+        
+        # Group warnings by category
+        warning_categories = {}
+        for warning in self.warnings:
+            category = warning.get('category', 'General')
+            if category not in warning_categories:
+                warning_categories[category] = []
+            warning_categories[category].append(warning)
+        
+        # Display warnings by category
+        for category, category_warnings in warning_categories.items():
+            self.warnings_text.insert("end", f"Ôû╝ {category} ({len(category_warnings)} warnings)\n")
+            
+            for i, warning in enumerate(category_warnings, 1):
+                parameter = warning.get('parameter', 'Unknown')
+                message = warning.get('message', 'No message')
+                suggestion = warning.get('suggestion', '')
+                
+                self.warnings_text.insert("end", f"  {i}. {parameter}: {message}\n")
+                
+                if suggestion:
+                    self.warnings_text.insert("end", f"     ÔåÆ Suggestion: {suggestion}\n")
+                
+                self.warnings_text.insert("end", "\n")
+        
+        # Add operation context if available
+        if self.operation_context:
+            self.warnings_text.insert("end", "\n" + "="*50 + "\n")
+            self.warnings_text.insert("end", "Operation Context:\n")
+            
+            for key, value in self.operation_context.items():
+                if key not in ['successful_parameters', 'failed_parameters', 'warnings']:
+                    self.warnings_text.insert("end", f"  {key.replace('_', ' ').title()}: {value}\n")
+
+    def _create_options_section(self, parent):
+        """Create the options section."""
+        options_frame = ctk.CTkFrame(parent)
+        options_frame.pack(fill="x", pady=(0, 15))
+        
+        options_label = ctk.CTkLabel(
+            options_frame,
+            text="Options:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        options_label.pack(anchor="w", padx=15, pady=(15, 5))
+        
+        # Ignore similar warnings checkbox
+        self.ignore_similar_var = ctk.BooleanVar()
+        self.ignore_similar_checkbox = ctk.CTkCheckBox(
+            options_frame,
+            text="Don't show similar warnings for this session",
+            variable=self.ignore_similar_var
+        )
+        self.ignore_similar_checkbox.pack(anchor="w", padx=15, pady=(0, 15))
+
+    def _create_buttons_section(self, parent):
+        """Create the buttons section."""
+        buttons_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        buttons_frame.pack(fill="x")
+        
+        # Button container for centering
+        button_container = ctk.CTkFrame(buttons_frame, fg_color="transparent")
+        button_container.pack(expand=True)
+        
+        # Continue button
+        self.continue_button = ctk.CTkButton(
+            button_container,
+            text="Continue with Warnings",
+            command=self._on_continue,
+            width=150,
+            fg_color="#28a745",
+            hover_color="#218838"
+        )
+        self.continue_button.pack(side="left", padx=5)
+        
+        # Cancel button
+        self.cancel_button = ctk.CTkButton(
+            button_container,
+            text="Cancel Operation",
+            command=self._on_cancel,
+            width=150,
+            fg_color="#dc3545",
+            hover_color="#c82333"
+        )
+        self.cancel_button.pack(side="left", padx=5)
+        
+        # Fix and retry button (if applicable)
+        if self._can_fix_warnings():
+            self.fix_button = ctk.CTkButton(
+                button_container,
+                text="Fix and Retry",
+                command=self._on_fix_and_retry,
+                width=150,
+                fg_color="#ffc107",
+                hover_color="#e0a800",
+                text_color="#000000"
+            )
+            self.fix_button.pack(side="left", padx=5)
+
+    def _can_fix_warnings(self) -> bool:
+        """Check if warnings can be automatically fixed."""
+        # Check if any warnings have suggestions that can be auto-applied
+        for warning in self.warnings:
+            if warning.get('suggestion') and warning.get('auto_fixable', False):
+                return True
+        return False
+
+    def _on_continue(self):
+        """Handle continue button click."""
+        self.result = WarningDialogResult(
+            continue_operation=True,
+            user_choice='continue',
+            ignore_similar_warnings=self.ignore_similar_var.get()
+        )
+        self._close_dialog()
+
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        self.result = WarningDialogResult(
+            continue_operation=False,
+            user_choice='cancel',
+            ignore_similar_warnings=False
+        )
+        self._close_dialog()
+
+    def _on_fix_and_retry(self):
+        """Handle fix and retry button click."""
+        self.result = WarningDialogResult(
+            continue_operation=False,
+            user_choice='fix_and_retry',
+            ignore_similar_warnings=self.ignore_similar_var.get()
+        )
+        self._close_dialog()
+
+    def _close_dialog(self):
+        """Close the dialog and call callback if provided."""
+        if self.callback and self.result:
+            self.callback(self.result)
+        
+        self.grab_release()
+        self.destroy()
+
+    def get_result(self) -> Optional[WarningDialogResult]:
+        """Get the dialog result (for synchronous usage)."""
+        return self.result
+
+
+def show_warning_confirmation_dialog(parent, title: str, message: str, 
+                                   warnings: List[Dict[str, Any]],
+                                   operation_context: Dict[str, Any] = None) -> WarningDialogResult:
+    """
+    Show warning confirmation dialog and return result.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        message: Main message
+        warnings: List of warning dictionaries
+        operation_context: Operation context information
+        
+    Returns:
+        WarningDialogResult with user's choice
+    """
+    result = [None]
+    
+    def callback(dialog_result):
+        result[0] = dialog_result
+    
+    dialog = ProfileWarningConfirmationDialog(
+        parent, title, message, warnings, operation_context, callback
+    )
+    
+    # Wait for dialog to close
+    parent.wait_window(dialog)
+    
+    return result[0] or WarningDialogResult(
+        continue_operation=False,
+        user_choice='cancel'
+    )
+
+
+def show_warning_confirmation_dialog_async(parent, title: str, message: str,
+                                         warnings: List[Dict[str, Any]],
+                                         operation_context: Dict[str, Any] = None,
+                                         callback: Optional[Callable[[WarningDialogResult], None]] = None):
+    """
+    Show warning confirmation dialog asynchronously.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        message: Main message
+        warnings: List of warning dictionaries
+        operation_context: Operation context information
+        callback: Callback function for result
+    """
+    dialog = ProfileWarningConfirmationDialog(
+        parent, title, message, warnings, operation_context, callback
+    )
+    
+    return dialog
+</document_content>
+</document>
+<document index="101">
+<source>.\ui\resizable_frame.py</source>
+<document_content>
+import customtkinter as ctk
+import tkinter as tk
+
+class ColumnDivider(ctk.CTkFrame):
+    """A draggable divider for resizing columns."""
+    
+    def __init__(self, master, left_column, right_column, min_left=100, min_right=100, **kwargs):
+        """
+        Initialize a column divider.
+        
+        Args:
+            master: Parent widget
+            left_column: Index of the column to the left of the divider
+            right_column: Index of the column to the right of the divider
+            min_left: Minimum width for the left column
+            min_right: Minimum width for the right column
+        """
+        # Set a narrow width for the divider
+        kwargs["width"] = kwargs.get("width", 5)
+        kwargs["fg_color"] = kwargs.get("fg_color", "#888888")
+        kwargs["cursor"] = "sb_h_double_arrow"  # Horizontal resize cursor
+        
+        super().__init__(master, **kwargs)
+        
+        self.master = master
+        self.left_column = left_column
+        self.right_column = right_column
+        self.min_left = min_left
+        self.min_right = min_right
+        
+        # Track drag state
+        self.dragging = False
+        self.start_x = 0
+        self.start_width_left = 0
+        self.start_width_right = 0
+        
+        # Bind mouse events
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonPress-1>", self._on_drag_start)
+        self.bind("<ButtonRelease-1>", self._on_drag_end)
+        self.bind("<B1-Motion>", self._on_drag_motion)
+    
+    def _on_enter(self, event):
+        """Handle mouse enter event."""
+        self.configure(fg_color="#AAAAAA")  # Highlight on hover
+    
+    def _on_leave(self, event):
+        """Handle mouse leave event."""
+        if not self.dragging:
+            self.configure(fg_color="#888888")  # Reset color when not dragging
+    
+    def _on_drag_start(self, event):
+        """Handle drag start event."""
+        self.dragging = True
+        self.start_x = event.x_root
+        
+        # Get current column widths
+        self.start_width_left = self.master.grid_bbox(column=self.left_column)[2]  # Width of left column
+        self.start_width_right = self.master.grid_bbox(column=self.right_column)[2]  # Width of right column
+        
+        # Change color to indicate dragging
+        self.configure(fg_color="#5555FF")
+    
+    def _on_drag_end(self, event):
+        """Handle drag end event."""
+        self.dragging = False
+        self.configure(fg_color="#888888")
+    
+    def _on_drag_motion(self, event):
+        """Handle drag motion event."""
+        if not self.dragging:
+            return
+        
+        # Calculate the drag distance
+        delta_x = event.x_root - self.start_x
+        
+        # Calculate new widths
+        new_width_left = max(self.min_left, self.start_width_left + delta_x)
+        new_width_right = max(self.min_right, self.start_width_right - delta_x)
+        
+        # Update column widths
+        self.master.grid_columnconfigure(self.left_column, minsize=new_width_left)
+        self.master.grid_columnconfigure(self.right_column, minsize=new_width_right)
+        
+        # Update the UI
+        self.master.update_idletasks()
+
+
+class ResizableFrame(ctk.CTkFrame):
+    """A frame with resizable columns."""
+    
+    def __init__(self, master, column_count=3, **kwargs):
+        """
+        Initialize a frame with resizable columns.
+        
+        Args:
+            master: Parent widget
+            column_count: Number of columns in the frame
+        """
+        super().__init__(master, **kwargs)
+        
+        self.column_count = column_count
+        self.dividers = []
+        
+        # Configure grid
+        for i in range(column_count):
+            self.grid_columnconfigure(i*2, weight=1)
+            if i < column_count - 1:
+                # Add a column for the divider (no weight)
+                self.grid_columnconfigure(i*2 + 1, weight=0)
+        
+        # Create dividers
+        for i in range(column_count - 1):
+            divider = ColumnDivider(
+                self,
+                left_column=i*2,
+                right_column=(i+1)*2
+            )
+            divider.grid(row=0, column=i*2 + 1, sticky="ns")
+            self.dividers.append(divider)
+    
+    def add_widget(self, widget, column, **kwargs):
+        """
+        Add a widget to a specific column.
+        
+        Args:
+            widget: Widget to add
+            column: Column index (0-based)
+            **kwargs: Additional grid options
+        """
+        if column >= self.column_count:
+            raise ValueError(f"Column index {column} out of range (0-{self.column_count-1})")
+        
+        # Place widget in the appropriate grid cell
+        widget.grid(column=column*2, **kwargs)
+</document_content>
+</document>
+<document index="102">
+<source>.\ui\simple_device_progress_dialog.py</source>
+<document_content>
+"""
+Simple Device Progress Dialog - Simplified progress dialog for device operations.
+
+This module provides a clean, simple progress dialog for device parameter loading
+with proper internationalization support.
+"""
+
+import customtkinter as ctk
+import threading
+import time
+from typing import Callable, Optional, Dict, Any
+from dataclasses import dataclass
+
+
+@dataclass
+class SimpleProgressInfo:
+    """Simple progress information for device operations."""
+    operation_type: str      # 'device_to_profile', 'profile_to_device'
+    current_step: int        # Current step (1-4)
+    total_steps: int         # Total steps (4)
+    step_name: str          # Localized step name
+    status_message: str     # Localized status message
+    progress_percentage: float  # Progress percentage (0-100)
+    
+    # Parameter-based progress tracking
+    current_parameter: int = 0    # Current parameter being processed
+    total_parameters: int = 0     # Total parameters to process
+    parameter_name: str = ""      # Name of current parameter
+    
+    is_complete: bool = False
+    is_cancelled: bool = False
+    has_error: bool = False
+    error_message: str = ""
+
+
+class SimpleDeviceProgressDialog:
+    """Simple, clean progress dialog for device operations."""
+    
+    def __init__(self, parent, i18n_service, operation_type: str = "device_operation"):
+        self.parent = parent
+        self.i18n = i18n_service
+        self.operation_type = operation_type
+        self.is_cancelled = False
+        self.is_destroying = False
+        self.cancel_callback = None
+        self.last_update_time = time.time()
+        self.timeout_seconds = 300  # 5 minutes timeout
+        
+        # Create dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title(self._get_dialog_title())
+        self.dialog.geometry("450x220")
+        self.dialog.resizable(False, False)
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Make dialog modal
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Create UI elements
+        self._create_ui()
+        
+        # Handle window close
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Start timeout monitoring
+        self._check_timeout()
+        
+    def _get_dialog_title(self) -> str:
+        """Get localized dialog title based on operation type."""
+        titles = {
+            'device_to_profile': self.i18n.get('device_to_profile_title', 'Salvando Configura├º├úo do Dispositivo'),
+            'profile_to_device': self.i18n.get('profile_to_device_title', 'Carregando Configura├º├úo para Dispositivo'),
+            'device_operation': self.i18n.get('device_operation_title', 'Opera├º├úo do Dispositivo')
+        }
+        return titles.get(self.operation_type, titles['device_operation'])
+        
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        self.dialog.update_idletasks()
+        
+        # Get parent window position and size
+        parent_x = self.parent.winfo_x()
+        parent_y = self.parent.winfo_y()
+        parent_width = self.parent.winfo_width()
+        parent_height = self.parent.winfo_height()
+        
+        # Calculate center position
+        dialog_width = 450
+        dialog_height = 220
+        x = parent_x + (parent_width - dialog_width) // 2
+        y = parent_y + (parent_height - dialog_height) // 2
+        
+        self.dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        
+    def _create_ui(self):
+        """Create the simplified UI elements."""
+        # Main container
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Operation title
+        self.title_label = ctk.CTkLabel(
+            main_frame,
+            text=self._get_operation_title(),
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.title_label.pack(pady=(0, 15))
+        
+        # Status message
+        self.status_label = ctk.CTkLabel(
+            main_frame,
+            text=self.i18n.get('initializing', 'Inicializando...'),
+            font=ctk.CTkFont(size=12)
+        )
+        self.status_label.pack(pady=(0, 10))
+        
+        # Progress bar
+        self.progress_bar = ctk.CTkProgressBar(main_frame, width=350)
+        self.progress_bar.pack(pady=(0, 10))
+        self.progress_bar.set(0)
+        
+        # Progress percentage label
+        self.percentage_label = ctk.CTkLabel(
+            main_frame,
+            text="0%",
+            font=ctk.CTkFont(size=11)
+        )
+        self.percentage_label.pack(pady=(0, 15))
+        
+        # Cancel button
+        self.cancel_button = ctk.CTkButton(
+            main_frame,
+            text=self.i18n.get('cancel', 'Cancelar'),
+            command=self._on_cancel,
+            width=100,
+            fg_color="gray",
+            hover_color="darkgray"
+        )
+        self.cancel_button.pack()
+        
+    def _get_operation_title(self) -> str:
+        """Get localized operation title."""
+        titles = {
+            'device_to_profile': self.i18n.get('saving_device_config', 'Salvando Configura├º├úo do Dispositivo'),
+            'profile_to_device': self.i18n.get('loading_config_to_device', 'Carregando Configura├º├úo para Dispositivo'),
+            'device_operation': self.i18n.get('device_operation', 'Opera├º├úo do Dispositivo')
+        }
+        return titles.get(self.operation_type, titles['device_operation'])
+        
+    def update_progress(self, progress_info: SimpleProgressInfo):
+        """Update the progress dialog with new information."""
+        try:
+            # Check if dialog is being destroyed
+            if self.is_destroying:
+                return
+                
+            # Update last activity time
+            self.last_update_time = time.time()
+                
+            # Multiple safety checks to prevent widget access after destruction
+            if not hasattr(self, 'dialog') or self.dialog is None:
+                return
+                
+            if not self.dialog.winfo_exists():
+                return
+                
+            # Check if widgets still exist before updating
+            if not hasattr(self, 'status_label') or not hasattr(self, 'progress_bar') or not hasattr(self, 'percentage_label'):
+                return
+                
+            # Create enhanced status message with parameter info
+            status_message = progress_info.status_message
+            if progress_info.total_parameters > 0 and progress_info.current_parameter > 0:
+                if progress_info.parameter_name:
+                    status_message = f"{status_message}\n{progress_info.parameter_name} ({progress_info.current_parameter}/{progress_info.total_parameters})"
+                else:
+                    status_message = f"{status_message}\nPar├ómetro {progress_info.current_parameter}/{progress_info.total_parameters}"
+            
+            # Update status message with safety check
+            try:
+                if hasattr(self.status_label, 'configure'):
+                    self.status_label.configure(text=status_message)
+            except Exception:
+                pass
+            
+            # Update progress bar with safety check
+            try:
+                if hasattr(self.progress_bar, 'set'):
+                    progress_value = progress_info.progress_percentage / 100.0
+                    self.progress_bar.set(progress_value)
+            except Exception:
+                pass
+            
+            # Update percentage label with parameter info and safety check
+            try:
+                if hasattr(self.percentage_label, 'configure'):
+                    percentage_text = f"{int(progress_info.progress_percentage)}%"
+                    if progress_info.total_parameters > 0:
+                        percentage_text += f" ({progress_info.current_parameter}/{progress_info.total_parameters})"
+                    self.percentage_label.configure(text=percentage_text)
+            except Exception:
+                pass
+            
+            # Handle completion
+            if progress_info.is_complete:
+                if progress_info.has_error:
+                    self._show_error(progress_info.error_message)
+                else:
+                    self._show_success()
+                    
+        except Exception as e:
+            # Dialog may have been closed, ignore all errors to prevent crashes
+            pass
+            
+    def _show_success(self):
+        """Show success state."""
+        try:
+            if hasattr(self, 'status_label') and hasattr(self.status_label, 'configure'):
+                self.status_label.configure(text=self.i18n.get('operation_completed', 'Opera├º├úo conclu├¡da com sucesso!'))
+        except Exception:
+            pass
+            
+        try:
+            if hasattr(self, 'cancel_button') and hasattr(self.cancel_button, 'configure'):
+                self.cancel_button.configure(
+                    text=self.i18n.get('close', 'Fechar'),
+                    fg_color="green",
+                    hover_color="darkgreen"
+                )
+        except Exception:
+            pass
+        
+    def _show_error(self, error_message: str):
+        """Show error state."""
+        try:
+            if hasattr(self, 'status_label') and hasattr(self.status_label, 'configure'):
+                self.status_label.configure(text=f"{self.i18n.get('operation_failed', 'Opera├º├úo falhou')}: {error_message}")
+        except Exception:
+            pass
+            
+        try:
+            if hasattr(self, 'cancel_button') and hasattr(self.cancel_button, 'configure'):
+                self.cancel_button.configure(
+                    text=self.i18n.get('close', 'Fechar'),
+                    fg_color="red",
+                    hover_color="darkred"
+                )
+        except Exception:
+            pass
+        
+    def set_cancel_callback(self, callback: Callable):
+        """Set callback function for cancel operation."""
+        self.cancel_callback = callback
+        
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        if self.cancel_callback and not self.is_cancelled:
+            self.is_cancelled = True
+            self.cancel_callback()
+            
+        self._close_dialog()
+        
+    def _on_close(self):
+        """Handle window close event."""

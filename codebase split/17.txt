@@ -1,0 +1,4328 @@
+            # Calculate results
+            operation_duration = time.time() - start_time
+            parameters_processed = len(device_config)
+            
+            self.logger.info(f"Load from device completed: {parameters_processed} parameters processed in {operation_duration:.2f}s")
+            
+            # Create success result
+            result = SimpleOperationResult(
+                success=True,
+                operation_type='device_to_profile',
+                profile_path=profile_path,
+                parameters_processed=parameters_processed,
+                failed_parameters=[],
+                error_message=None,
+                operation_duration=operation_duration,
+                timestamp=datetime.now()
+            )
+            
+            # Call completion callback
+            if completion_callback:
+                completion_callback(result)
+                
+        except Exception as e:
+            operation_duration = time.time() - start_time
+            error_msg = str(e)
+            
+            self.logger.error(f"Load from device failed: {error_msg}")
+            
+            # Create error result
+            result = SimpleOperationResult(
+                success=False,
+                operation_type='device_to_profile',
+                profile_path=profile_path,
+                parameters_processed=0,
+                failed_parameters=[],
+                error_message=error_msg,
+                operation_duration=operation_duration,
+                timestamp=datetime.now()
+            )
+            
+            # Call completion callback
+            if completion_callback:
+                completion_callback(result)
+                
+        finally:
+            self.is_busy = False
+    
+    def load_from_profile_to_device(self, profile_path: str,
+                                  progress_callback: Optional[Callable] = None,
+                                  completion_callback: Optional[Callable] = None,
+                                  show_progress_dialog: bool = False) -> None:
+        """
+        Load configuration from profile file and deploy to device - ultra simple version.
+        
+        Args:
+            profile_path: Path to the profile file to load
+            progress_callback: Optional callback for progress updates (step, total, message)
+            completion_callback: Optional callback when operation is complete
+            show_progress_dialog: Ignored - no progress dialogs in ultra simple version
+        """
+        if self.is_busy:
+            self.logger.warning("Operation already running")
+            if completion_callback:
+                result = SimpleOperationResult(
+                    success=False,
+                    operation_type='profile_to_device',
+                    profile_path=profile_path,
+                    parameters_processed=0,
+                    failed_parameters=[],
+                    error_message="Another operation is already running",
+                    operation_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result)
+            return
+        
+        # Validate connection
+        is_connected, error_msg = self._validate_connection_comprehensive()
+        if not is_connected:
+            self.logger.error(f"Connection validation failed: {error_msg}")
+            if completion_callback:
+                result = SimpleOperationResult(
+                    success=False,
+                    operation_type='profile_to_device',
+                    profile_path=profile_path,
+                    parameters_processed=0,
+                    failed_parameters=[],
+                    error_message=error_msg,
+                    operation_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result)
+            return
+        
+        # Validate profile file exists
+        if not os.path.exists(profile_path):
+            error_msg = f"Profile file does not exist: {profile_path}"
+            self.logger.error(error_msg)
+            if completion_callback:
+                result = SimpleOperationResult(
+                    success=False,
+                    operation_type='profile_to_device',
+                    profile_path=profile_path,
+                    parameters_processed=0,
+                    failed_parameters=[],
+                    error_message=error_msg,
+                    operation_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result)
+            return
+        
+        # Start operation in background thread
+        self.is_busy = True
+        operation_thread = threading.Thread(
+            target=self._execute_load_to_device,
+            args=(profile_path, progress_callback, completion_callback),
+            name="UltraSimpleLoadToDevice",
+            daemon=True
+        )
+        operation_thread.start()
+    
+    def _execute_load_to_device(self, profile_path: str,
+                              progress_callback: Optional[Callable],
+                              completion_callback: Optional[Callable]):
+        """Execute load to device operation - ultra simple version."""
+        start_time = time.time()
+        
+        try:
+            self.logger.info(f"Starting load to device from: {profile_path}")
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(1, 4, "Reading profile file...")
+            
+            # Load profile parameters using simplified file handler
+            profile_params, error_msg = self.file_handler.read_universal_profile(profile_path)
+            
+            # Ensure profile_params is a dictionary
+            if not isinstance(profile_params, dict):
+                raise Exception(f"Invalid profile data format: expected dictionary, got {type(profile_params)}")
+            
+            if not profile_params:
+                raise Exception(f"Failed to load profile parameters: {error_msg}")
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(2, 4, "Validating parameters...")
+            
+            # Simple validation
+            if len(profile_params) == 0:
+                raise Exception("Profile file contains no parameters")
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(3, 4, "Writing to device...")
+            
+            # Write parameters to device using LT32ProDeviceWriter
+            try:
+                # Initialize LT32Pro components
+                self._initialize_lt32pro_components()
+                
+                if not self.device_writer:
+                    raise Exception("Failed to initialize LT32Pro device writer")
+                
+                # Create progress wrapper for LT32Pro writer
+                def lt32pro_write_progress_callback(current_step, total_steps, step_description, success=True):
+                    """Progress callback for LT32Pro device writer."""
+                    if progress_callback:
+                        try:
+                            # Convert to the expected format
+                            progress_callback(current_step + 2, 4, step_description)  # Offset by 2 for previous steps
+                        except Exception as e:
+                            self.logger.debug(f"Progress callback failed (non-critical): {e}")
+                
+                # Write parameters using LT32Pro writer
+                write_results = self.device_writer.write_device_configuration(
+                    profile_params, 
+                    progress_callback=lt32pro_write_progress_callback
+                )
+                
+                # Process results
+                parameters_written = sum(1 for success in write_results.values() if success)
+                failed_parameters = [param for param, success in write_results.items() if not success]
+                
+                self.logger.info(f"Device write completed: {parameters_written}/{len(profile_params)} parameters written")
+                
+            except Exception as write_error:
+                # Use error handler for better error messages
+                try:
+                    error_category = self.error_handler.categorize_error(write_error)
+                    suggestions = self.error_handler.get_recovery_suggestions(error_category, write_error)
+                    
+                    # Create user-friendly error message
+                    error_message = f"Device write failed: {str(write_error)}"
+                    if suggestions:
+                        error_message += f"\n\nTroubleshooting suggestions:\n" + "\n".join(f"ÔÇó {s}" for s in suggestions[:3])
+                    
+                    raise Exception(error_message)
+                except:
+                    # Fallback to original error
+                    raise Exception(f"Device write failed: {str(write_error)}")
+            
+            # Initialize variables for backward compatibility
+            parameters_written = parameters_written if 'parameters_written' in locals() else 0
+            failed_parameters = failed_parameters if 'failed_parameters' in locals() else []
+            
+            # Simple progress update
+            if progress_callback:
+                progress_callback(4, 4, "Operation completed")
+            
+            # Calculate results
+            operation_duration = time.time() - start_time
+            
+            if parameters_written == 0:
+                raise Exception("No parameters were successfully written to device")
+            
+            self.logger.info(f"Load to device completed: {parameters_written}/{len(profile_params)} parameters written in {operation_duration:.2f}s")
+            
+            # Create success result
+            result = SimpleOperationResult(
+                success=True,
+                operation_type='profile_to_device',
+                profile_path=profile_path,
+                parameters_processed=parameters_written,
+                failed_parameters=failed_parameters,
+                error_message=None,
+                operation_duration=operation_duration,
+                timestamp=datetime.now()
+            )
+            
+            # Call completion callback with safety check
+            if completion_callback:
+                try:
+                    # Ensure result is a proper SimpleOperationResult object
+                    if not isinstance(result, SimpleOperationResult):
+                        self.logger.error(f"Invalid result type: {type(result)}")
+                        # Create a fallback result
+                        result = SimpleOperationResult(
+                            success=False,
+                            operation_type='profile_to_device',
+                            profile_path=profile_path,
+                            parameters_processed=0,
+                            failed_parameters=[],
+                            error_message="Internal error: invalid result type",
+                            operation_duration=time.time() - start_time,
+                            timestamp=datetime.now()
+                        )
+                    completion_callback(result)
+                except Exception as callback_error:
+                    self.logger.error(f"Error in completion callback: {callback_error}")
+                
+        except Exception as e:
+            operation_duration = time.time() - start_time
+            error_msg = str(e)
+            
+            self.logger.error(f"Load to device failed: {error_msg}")
+            
+            # Create error result
+            result = SimpleOperationResult(
+                success=False,
+                operation_type='profile_to_device',
+                profile_path=profile_path,
+                parameters_processed=0,
+                failed_parameters=[],
+                error_message=error_msg,
+                operation_duration=operation_duration,
+                timestamp=datetime.now()
+            )
+            
+            # Call completion callback with safety check
+            if completion_callback:
+                try:
+                    completion_callback(result)
+                except Exception as callback_error:
+                    self.logger.error(f"Error in completion callback: {callback_error}")
+                
+        finally:
+            self.is_busy = False
+    
+    def validate_profile_file(self, profile_path: str) -> tuple:
+        """
+        Validate a profile file - simple version.
+        
+        Returns:
+            tuple: (is_valid: bool, error_message: str)
+        """
+        try:
+            return self.file_handler.validate_universal_profile(profile_path)
+        except Exception as e:
+            return False, f"Profile validation error: {str(e)}"
+    
+    def load_profile_to_ui(self, profile_path: str) -> bool:
+        """Load profile parameters to UI."""
+        try:
+            return self.core_manager.load_profile_to_ui(profile_path)
+        except Exception as e:
+            self.logger.error(f"Load profile to UI failed: {e}")
+            return False
+    
+    def save_profile_from_ui(self, profile_path: str, profile_name: str = None) -> bool:
+        """Save current UI parameters to profile file."""
+        try:
+            return self.core_manager.save_profile_from_ui(profile_path, profile_name)
+        except Exception as e:
+            self.logger.error(f"Save profile from UI failed: {e}")
+            return False
+    
+    def get_profile_parameter_count(self, profile_path: str) -> int:
+        """Get the number of parameters in a profile file."""
+        try:
+            return self.file_handler.get_parameter_count(profile_path)
+        except Exception as e:
+            self.logger.error(f"Error getting parameter count: {e}")
+            return 0
+    
+    def is_profile_file_valid(self, profile_path: str) -> bool:
+        """Check if a profile file is valid."""
+        is_valid, _ = self.validate_profile_file(profile_path)
+        return is_valid
+    
+    def show_user_confirmation_for_warnings(self, warnings: List, operation_context: Dict[str, Any]) -> bool:
+        """
+        Show user confirmation for warnings - ultra simple version.
+        
+        In ultra simple mode, we always continue (no complex dialogs).
+        """
+        if warnings:
+            self.logger.info(f"Operation has {len(warnings)} warnings - continuing in simple mode")
+        return True
+    
+    def create_recovery_summary(self, recovery_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a recovery summary - ultra simple version.
+        
+        Args:
+            recovery_context: Dictionary containing recovery context information
+            
+        Returns:
+            Dictionary with recovery summary information
+        """
+        # Extract recovery actions from context
+        recovery_actions = recovery_context.get('recovery_actions', []) if isinstance(recovery_context, dict) else []
+        
+        # Create summary dictionary
+        summary = {
+            'recovery_actions': recovery_actions,
+            'recovery_count': len(recovery_actions),
+            'success_rate_percent': 100.0,  # Default success rate
+            'has_recovery': len(recovery_actions) > 0,
+            'summary_text': ""
+        }
+        
+        if not recovery_actions:
+            summary['summary_text'] = "No recovery actions were needed."
+        else:
+            summary_text = f"Recovery Summary ({len(recovery_actions)} actions):\\n"
+            for i, action in enumerate(recovery_actions, 1):
+                summary_text += f"{i}. {action}\\n"
+            summary['summary_text'] = summary_text
+        
+        return summary
+    
+    def update_recovery_statistics(self, recovery_summary: Dict[str, Any]) -> None:
+        """
+        Update recovery statistics - ultra simple version.
+        
+        Args:
+            recovery_summary: Recovery summary dictionary
+        """
+        try:
+            # In ultra simple mode, just log the recovery statistics
+            recovery_count = recovery_summary.get('recovery_count', 0)
+            success_rate = recovery_summary.get('success_rate_percent', 100.0)
+            
+            if recovery_count > 0:
+                self.logger.info(f"Recovery statistics updated: {recovery_count} actions, {success_rate:.1f}% success rate")
+            else:
+                self.logger.info("No recovery actions needed - operation completed successfully")
+                
+        except Exception as e:
+            self.logger.error(f"Error updating recovery statistics: {e}")
+    
+    def cleanup(self):
+        """Clean up resources - simple version."""
+        try:
+            self.is_busy = False
+            self.logger.info("UltraSimpleProfileManager cleanup completed")
+        except Exception as e:
+            self.logger.error(f"Cleanup error: {e}")
+
+
+# Create an alias for backward compatibility
+ProfileManager = UltraSimpleProfileManager
+</document_content>
+</document>
+<document index="84">
+<source>.\services\unified_device_communicator.py</source>
+<document_content>
+"""
+UnifiedDeviceCommunicator - Wrapper around ConfigurationReaderService for unified device communication.
+
+This class provides a consistent interface for device communication by wrapping
+ConfigurationReaderService, ensuring both "Check Configuration" and "Load Profile from Device"
+operations use the same reliable communication method.
+"""
+
+import logging
+import time
+from typing import Dict, Any, Optional, Callable, List
+from datetime import datetime
+
+from services.configuration_reader_service import ConfigurationReaderService, ConfigurationReadResult
+from services.i18n_service import I18nService
+
+
+class UnifiedDeviceCommunicator:
+    """
+    Unified device communication wrapper that uses ConfigurationReaderService
+    for consistent and reliable device communication.
+    """
+    
+    # Command sequence for reading device configuration
+    READ_COMMAND_SEQUENCE = [
+        'device_info',
+        'apn_settings', 
+        'server_settings',
+        'network_settings',
+        'protocol',
+        'tcp_ack',
+        'report_intervals',
+        'heartbeat_intervals',
+        'ignition_type',
+        'speed_alert',
+        'speed_buzzer',
+        'sleep_mode',
+        'sleep_time',
+        'angle_report',
+        'backup_battery_alert',
+        'main_power_alert',
+        'vibration_sensitivity',
+        'vibration_settings',
+        'vibration_window',
+        'jammer_detection',
+        'jammer_relay_action',
+        'odometer',
+        'hourmeter',
+        'defense_settings'
+    ]
+    
+    def __init__(self, configuration_reader_service: ConfigurationReaderService):
+        """
+        Initialize the unified device communicator.
+        
+        Args:
+            configuration_reader_service: ConfigurationReaderService instance to wrap
+        """
+        self.config_reader = configuration_reader_service
+        self.logger = logging.getLogger(__name__)
+        
+        # Track operation state
+        self.is_reading = False
+        self.last_operation_result = None
+        self.last_error_message = None
+        
+    def read_device_configuration(self, progress_callback: Optional[Callable] = None) -> Dict[str, str]:
+        """
+        Read all device parameters using ConfigurationReaderService.
+        
+        This method provides a synchronous interface that wraps the asynchronous
+        ConfigurationReaderService.read_all_configurations method.
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Dict[str, str]: Dictionary mapping parameter names to their values
+            
+        Raises:
+            RuntimeError: If device communication fails or times out
+            ConnectionError: If device connection is not available
+            ValueError: If invalid parameters are provided
+        """
+        if self.is_reading:
+            error_msg = "Device configuration reading is already in progress"
+            self._log_message(f"ERROR: {error_msg}")
+            raise RuntimeError(error_msg)
+            
+        # Validate that we have a valid configuration reader
+        if not self.config_reader:
+            error_msg = "ConfigurationReaderService is not available"
+            self._log_message(f"ERROR: {error_msg}")
+            raise ConnectionError(error_msg)
+            
+        # Check if device connection is available
+        if (hasattr(self.config_reader, 'app') and 
+            hasattr(self.config_reader.app, 'serial_service') and
+            not self.config_reader.app.serial_service.is_connected):
+            error_msg = "Device connection is not available"
+            self._log_message(f"ERROR: {error_msg}")
+            raise ConnectionError(error_msg)
+            
+        self.is_reading = True
+        self.last_operation_result = None
+        self.last_error_message = None
+        
+        # Result storage for the async operation
+        operation_complete = False
+        operation_result = None
+        operation_error = None
+        
+        def completion_callback(result: ConfigurationReadResult, error_msg: Optional[str] = None):
+            """Handle completion of the async read operation."""
+            nonlocal operation_complete, operation_result, operation_error
+            operation_result = result
+            operation_error = error_msg
+            operation_complete = True
+            
+        def wrapped_progress_callback(progress_info: Dict[str, Any]):
+            """Wrap the progress callback to match expected format."""
+            if progress_callback:
+                try:
+                    progress_callback(progress_info)
+                except Exception as e:
+                    self.logger.warning(f"Progress callback error: {e}")
+        
+        try:
+            # Log the start of the operation
+            self._log_message("INFO: Starting unified device configuration read")
+            self._log_message(f"DEBUG: Using ConfigurationReaderService for device communication")
+            
+            # Start the async read operation with comprehensive error handling
+            try:
+                self.config_reader.read_all_configurations(
+                    progress_callback=wrapped_progress_callback,
+                    completion_callback=completion_callback,
+                    show_progress_dialog=False  # Let the caller handle progress display
+                )
+            except Exception as e:
+                error_msg = f"Failed to start configuration reading: {e}"
+                self._log_message(f"ERROR: {error_msg}")
+                self.last_error_message = error_msg
+                raise RuntimeError(error_msg) from e
+            
+            # Wait for completion with timeout
+            timeout_seconds = 60  # 1 minute timeout
+            start_time = time.time()
+            
+            self._log_message(f"DEBUG: Waiting for operation completion (timeout: {timeout_seconds}s)")
+            
+            while not operation_complete:
+                elapsed_time = time.time() - start_time
+                
+                if elapsed_time > timeout_seconds:
+                    error_msg = f"Device communication timeout after {timeout_seconds} seconds"
+                    self._log_message(f"ERROR: {error_msg}")
+                    self.last_error_message = error_msg
+                    
+                    # Try to cancel the operation
+                    try:
+                        self.cancel_operation()
+                    except Exception as cancel_error:
+                        self._log_message(f"WARNING: Failed to cancel operation: {cancel_error}")
+                        
+                    raise RuntimeError(error_msg)
+                    
+                # Log progress every 10 seconds
+                if int(elapsed_time) % 10 == 0 and int(elapsed_time) > 0:
+                    self._log_message(f"DEBUG: Operation in progress... ({elapsed_time:.0f}s elapsed)")
+                    
+                time.sleep(0.1)  # Small delay to prevent busy waiting
+                
+            # Process the result with comprehensive error handling
+            self._log_message("DEBUG: Processing operation result")
+            
+            if operation_result:
+                self.last_operation_result = operation_result
+                
+                # Log operation statistics
+                total_params = operation_result.total_parameters
+                successful_params = len([p for p in operation_result.parameters_read if p.success])
+                failed_params = len(operation_result.failed_parameters)
+                duration = operation_result.read_duration
+                
+                self._log_message(f"INFO: Operation completed - Total: {total_params}, "
+                                f"Success: {successful_params}, Failed: {failed_params}, "
+                                f"Duration: {duration:.2f}s")
+                
+                if operation_result.success:
+                    # Convert parameter read results to dictionary format
+                    device_responses = {}
+                    
+                    for param_result in operation_result.parameters_read:
+                        if param_result.success and param_result.value is not None:
+                            device_responses[param_result.parameter_name] = param_result.value
+                            self._log_message(f"DEBUG: Parameter {param_result.parameter_name}: {param_result.value}")
+                        elif not param_result.success:
+                            self._log_message(f"WARNING: Failed to read {param_result.parameter_name}: "
+                                            f"{param_result.error_message or 'Unknown error'}")
+                    
+                    if device_responses:
+                        self._log_message(f"INFO: Successfully read {len(device_responses)} parameters from device")
+                        return device_responses
+                    else:
+                        error_msg = "No parameters were successfully read from device"
+                        self._log_message(f"ERROR: {error_msg}")
+                        self.last_error_message = error_msg
+                        raise RuntimeError(error_msg)
+                else:
+                    # Operation completed but was not successful
+                    error_msg = operation_error or "Device communication completed with errors"
+                    self.last_error_message = error_msg
+                    self._log_message(f"ERROR: {error_msg}")
+                    
+                    if operation_result.failed_parameters:
+                        failed_list = ', '.join(operation_result.failed_parameters)
+                        self._log_message(f"ERROR: Failed parameters: {failed_list}")
+                        
+                    raise RuntimeError(f"Device communication failed: {error_msg}")
+            else:
+                # No result received
+                error_msg = operation_error or "No result received from device communication"
+                self.last_error_message = error_msg
+                self._log_message(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg)
+                
+        except ConnectionError as e:
+            self.last_error_message = str(e)
+            self._log_message(f"ERROR: Connection error during device configuration read: {e}")
+            raise
+        except RuntimeError as e:
+            self.last_error_message = str(e)
+            self._log_message(f"ERROR: Runtime error during device configuration read: {e}")
+            raise
+        except Exception as e:
+            self.last_error_message = str(e)
+            self._log_message(f"ERROR: Unexpected exception during device configuration read: {e}")
+            # Log the full traceback for debugging
+            import traceback
+            self._log_message(f"DEBUG: Exception traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Unexpected error during device communication: {e}") from e
+            
+        finally:
+            self.is_reading = False
+            self._log_message("DEBUG: Device configuration read operation completed")
+            
+    def get_current_profile(self) -> Dict[str, Any]:
+        """
+        Get current device configuration as profile data.
+        
+        This method reads the device configuration and formats it as profile data
+        that can be used by the profile management system.
+        
+        Returns:
+            Dict[str, Any]: Profile data dictionary
+            
+        Raises:
+            RuntimeError: If device communication fails
+        """
+        try:
+            self._log_message("INFO: Reading current device profile")
+            
+            # Read device configuration
+            device_responses = self.read_device_configuration()
+            
+            # Convert to profile format
+            profile_data = {
+                'metadata': {
+                    'source': 'device',
+                    'timestamp': datetime.now().isoformat(),
+                    'parameter_count': len(device_responses)
+                },
+                'parameters': device_responses
+            }
+            
+            self._log_message(f"INFO: Successfully retrieved current profile with {len(device_responses)} parameters")
+            return profile_data
+            
+        except Exception as e:
+            error_msg = f"Failed to get current device profile: {e}"
+            self._log_message(f"ERROR: {error_msg}")
+            raise RuntimeError(error_msg) from e
+    
+    def cancel_operation(self):
+        """Cancel any ongoing device communication operation."""
+        try:
+            if hasattr(self.config_reader, 'cancel_reading'):
+                self.config_reader.cancel_reading()
+                self._log_message("INFO: Device communication operation cancelled")
+            else:
+                self._log_message("WARNING: Cancel operation not supported by ConfigurationReaderService")
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to cancel operation: {e}")
+            
+    def get_last_operation_result(self) -> Optional[ConfigurationReadResult]:
+        """
+        Get the result of the last operation.
+        
+        Returns:
+            ConfigurationReadResult: Last operation result or None if no operation completed
+        """
+        return self.last_operation_result
+        
+    def get_last_error_message(self) -> Optional[str]:
+        """
+        Get the error message from the last failed operation.
+        
+        Returns:
+            str: Last error message or None if no error occurred
+        """
+        return self.last_error_message
+        
+    def is_operation_in_progress(self) -> bool:
+        """
+        Check if a device communication operation is currently in progress.
+        
+        Returns:
+            bool: True if operation is in progress, False otherwise
+        """
+        return self.is_reading
+        
+    def _log_message(self, message: str):
+        """
+        Log a message using the application's logging system.
+        
+        Args:
+            message: Message to log
+        """
+        try:
+            # Try to use the app's log frame if available
+            if (hasattr(self.config_reader, 'app') and 
+                hasattr(self.config_reader.app, 'log_frame') and 
+                self.config_reader.app.log_frame):
+                self.config_reader.app.log_frame.log_message(f"{message}\n")
+            else:
+                # Fallback to standard logging
+                if message.startswith("ERROR:"):
+                    self.logger.error(message[6:].strip())
+                elif message.startswith("WARNING:"):
+                    self.logger.warning(message[8:].strip())
+                elif message.startswith("INFO:"):
+                    self.logger.info(message[5:].strip())
+                elif message.startswith("DEBUG:"):
+                    self.logger.debug(message[6:].strip())
+                else:
+                    self.logger.info(message)
+                    
+        except Exception as e:
+            # If logging fails, use standard logging as final fallback
+            self.logger.error(f"Failed to log message '{message}': {e}")
+</document_content>
+</document>
+<document index="85">
+<source>.\services\universal_profile_manager.py</source>
+<document_content>
+"""
+Universal Profile Manager for the LT32 PRO Universal Profile System.
+
+This module provides the main orchestrator class that coordinates all profile
+operations including loading from device, saving to device, and file operations.
+"""
+
+import asyncio
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional, Callable, List
+
+from models.universal_profile import UniversalProfile
+from models.operation_result import ProfileOperationResult, ParameterOperationResult, OperationType
+from models.validation_result import ValidationResult
+from services.parameter_specification_parser import ParameterSpecificationParser
+from services.universal_profile_service import UniversalProfileService
+from services.device_communication_manager import DeviceCommunicationManager
+
+
+class UniversalProfileManager:
+    """
+    Main orchestrator for all profile operations in the LT32 PRO Universal Profile System.
+    
+    This class provides a unified interface for loading and saving profiles between
+    the UI, device, and file system. It coordinates the various services to provide
+    comprehensive profile management with progress tracking and error handling.
+    """
+    
+    def __init__(self, serial_service, parameter_ui_list_path: str):
+        """
+        Initialize the Universal Profile Manager.
+        
+        Args:
+            serial_service: The serial communication service instance
+            parameter_ui_list_path: Path to the Parameter UI List markdown file
+        """
+        self.serial_service = serial_service
+        self.parameter_ui_list_path = parameter_ui_list_path
+        
+        # Initialize core services
+        self.spec_parser = ParameterSpecificationParser(parameter_ui_list_path)
+        self.profile_service = UniversalProfileService(self.spec_parser)
+        self.device_manager = DeviceCommunicationManager(serial_service, self.spec_parser)
+        
+        # Current profile state
+        self._current_profile: Optional[UniversalProfile] = None
+        self._operation_cancelled = False
+        self._current_operation: Optional[str] = None
+    
+    async def load_from_device(self, progress_callback: Optional[Callable] = None) -> ProfileOperationResult:
+        """
+        Load the current configuration from the LT32 PRO device into a profile.
+        
+        This method reads all supported parameters from the device and creates
+        a universal profile with the current device configuration.
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+                              Called with (current_step, total_steps, step_description, success)
+        
+        Returns:
+            ProfileOperationResult: Result of the load operation including the profile
+            
+        Raises:
+            ConnectionError: If device is not connected
+        """
+        start_time = time.time()
+        self._operation_cancelled = False
+        self._current_operation = "load_from_device"
+        
+        result = ProfileOperationResult(
+            operation_type=OperationType.LOAD_FROM_DEVICE,
+            success=False,
+            started_at=datetime.now()
+        )
+        
+        try:
+            # Check device connection
+            if not self.serial_service.is_connected:
+                result.add_error("Device is not connected")
+                return result
+            
+            # Update progress
+            if progress_callback:
+                progress_callback(0, 100, "Starting device read operation", None)
+            
+            # Read all parameters from device
+            try:
+                device_responses = await self.device_manager.read_all_parameters(
+                    progress_callback=self._create_device_progress_callback(progress_callback, 10, 90)
+                )
+                
+                if self._operation_cancelled:
+                    result.add_error("Operation was cancelled")
+                    return result
+                
+                if not device_responses:
+                    result.add_error("No parameters could be read from device")
+                    return result
+                
+                # Update progress
+                if progress_callback:
+                    progress_callback(90, 100, "Creating profile from device data", None)
+                
+                # Create profile from device responses
+                profile_name = f"Device Profile {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                profile = self.profile_service.create_profile_from_device(device_responses, profile_name)
+                
+                # Validate the created profile
+                validation_result = self.profile_service.validate_profile(profile)
+                
+                # Add validation warnings to result
+                for warning in validation_result.warnings:
+                    result.add_warning(warning)
+                
+                if not validation_result.is_valid:
+                    for error in validation_result.errors:
+                        result.add_error(f"Profile validation: {error}")
+                
+                # Set the current profile
+                self._current_profile = profile
+                result.profile = profile
+                result.success = True
+                
+                # Add parameter results
+                for param_name, response in device_responses.items():
+                    param_result = ParameterOperationResult(
+                        parameter_name=param_name,
+                        success=True,
+                        value=profile.get_parameter_value(param_name),
+                        device_response=response
+                    )
+                    result.add_parameter_result(param_result)
+                
+                # Final progress update
+                if progress_callback:
+                    progress_callback(100, 100, f"Successfully loaded {len(device_responses)} parameters", True)
+                
+                result.add_detail("device_responses_count", len(device_responses))
+                result.add_detail("profile_name", profile_name)
+                
+            except Exception as e:
+                result.add_error(f"Failed to read from device: {str(e)}")
+                
+        except Exception as e:
+            result.add_error(f"Unexpected error during load from device: {str(e)}")
+            
+        finally:
+            result.duration_seconds = time.time() - start_time
+            result.completed_at = datetime.now()
+            self._current_operation = None
+        
+        return result
+    
+    async def save_to_device(self, progress_callback: Optional[Callable] = None) -> ProfileOperationResult:
+        """
+        Save the current profile configuration to the LT32 PRO device.
+        
+        This method validates the current profile and writes all parameters
+        to the device using the appropriate commands.
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+                              Called with (current_step, total_steps, step_description, success)
+        
+        Returns:
+            ProfileOperationResult: Result of the save operation
+            
+        Raises:
+            ConnectionError: If device is not connected
+            ValueError: If no profile is loaded or profile is invalid
+        """
+        start_time = time.time()
+        self._operation_cancelled = False
+        self._current_operation = "save_to_device"
+        
+        result = ProfileOperationResult(
+            operation_type=OperationType.SAVE_TO_DEVICE,
+            success=False,
+            started_at=datetime.now()
+        )
+        
+        try:
+            # Check device connection
+            if not self.serial_service.is_connected:
+                result.add_error("Device is not connected")
+                return result
+            
+            # Check if we have a current profile
+            if not self._current_profile:
+                result.add_error("No profile loaded to save to device")
+                return result
+            
+            # Update progress
+            if progress_callback:
+                progress_callback(0, 100, "Validating profile before save", None)
+            
+            # Validate profile before saving
+#            validation_result = self.profile_service.validate_profile(self._current_profile)
+            
+            # Add validation warnings to result
+            # for warning in validation_result.warnings:
+            #     result.add_warning(warning)
+            
+            # if not validation_result.is_valid:
+            #     for error in validation_result.errors:
+            #         result.add_error(f"Profile validation failed: {error}")
+            #     return result
+            
+            # Update progress
+            if progress_callback:
+                progress_callback(10, 100, "Preparing parameters for device", None)
+            
+            # Prepare parameters for device writing
+            parameters_to_write = {}
+            complex_param_values = {}
+            all_specs = self.spec_parser.parse_specifications()
+
+            for param_name, param_value_obj in self._current_profile.parameters.items():
+                # Normalize parameter name
+                base_param_name = param_name.split('.')[-1]
+                spec = all_specs.get(base_param_name)
+                
+                if spec:
+                    if spec.fields:
+                        field_name = param_name.split('.')[-1]
+                        if base_param_name not in complex_param_values:
+                            complex_param_values[base_param_name] = {}
+                        complex_param_values[base_param_name][field_name] = param_value_obj.value
+                    else:
+                        parameters_to_write[base_param_name] = param_value_obj.value
+            
+            parameters_to_write.update(complex_param_values)
+
+            # Debugging: Check odometer and hourmeter values before sending
+            if 'odometer' in parameters_to_write:
+                print(f"DEBUG: Odometer in parameters_to_write: {parameters_to_write['odometer']}")
+            if 'hourmeter' in parameters_to_write:
+                print(f"DEBUG: Hourmeter in parameters_to_write: {parameters_to_write['hourmeter']}")
+
+            if not parameters_to_write:
+                result.add_warning("No parameters to write to device")
+                result.success = True
+                return result
+            
+            # Write parameters to device
+            try:
+                write_results = await self.device_manager.write_all_parameters(
+                    parameters_to_write,
+                    progress_callback=self._create_device_progress_callback(progress_callback, 20, 90)
+                )
+                
+                if self._operation_cancelled:
+                    result.add_error("Operation was cancelled")
+                    return result
+                
+                # Process write results
+                successful_writes = 0
+                failed_writes = 0
+                
+                for param_name, success in write_results.items():
+                    param_result = ParameterOperationResult(
+                        parameter_name=param_name,
+                        success=success,
+                        value=parameters_to_write.get(param_name)
+                    )
+                    
+                    if not success:
+                        param_result.error_message = "Failed to write to device"
+                        failed_writes += 1
+                    else:
+                        successful_writes += 1
+                    
+                    result.add_parameter_result(param_result)
+                
+                # Update progress
+                if progress_callback:
+                    progress_callback(90, 100, "Finalizing save operation", None)
+                
+                # Determine overall success
+                if successful_writes > 0:
+                    result.success = True
+                    if failed_writes > 0:
+                        result.add_warning(f"Partial success: {successful_writes} parameters written, {failed_writes} failed")
+                else:
+                    result.add_error("No parameters could be written to device")
+                
+                # Final progress update
+                if progress_callback:
+                    status_msg = f"Saved {successful_writes}/{len(parameters_to_write)} parameters"
+                    progress_callback(100, 100, status_msg, successful_writes > 0)
+                
+                result.add_detail("parameters_to_write", len(parameters_to_write))
+                result.add_detail("successful_writes", successful_writes)
+                result.add_detail("failed_writes", failed_writes)
+                
+            except Exception as e:
+                result.add_error(f"Failed to write to device: {str(e)}")
+                
+        except Exception as e:
+            result.add_error(f"Unexpected error during save to device: {str(e)}")
+            
+        finally:
+            result.duration_seconds = time.time() - start_time
+            result.completed_at = datetime.now()
+            self._current_operation = None
+        
+        return result
+    
+    async def load_from_file(self, file_path: str) -> ProfileOperationResult:
+        """Load a profile from a JSON file."""
+        start_time = time.time()
+        self._current_operation = "load_from_file"
+        
+        result = ProfileOperationResult(
+            operation_type=OperationType.LOAD_FROM_FILE,
+            success=False,
+            started_at=datetime.now()
+        )
+        
+        try:
+            # Check if file exists
+            if not Path(file_path).exists():
+                result.add_error(f"Profile file not found: {file_path}")
+                return result
+            
+            # Load profile using the profile service
+            try:
+                profile = self.profile_service.load_profile_from_file(file_path)
+                
+                # Mark all parameters as user source after loading
+                for param_name in profile.parameters:
+                    profile.parameters[param_name].source = "user"
+                
+                # Validate the loaded profile
+#                validation_result = self.profile_service.validate_profile(profile)
+                
+                # Add validation warnings to result
+                # for warning in validation_result.warnings:
+                #     result.add_warning(warning)
+                
+                # if not validation_result.is_valid:
+                #     for error in validation_result.errors:
+                #         result.add_error(f"Profile validation: {error}")
+                
+                # Set the current profile
+                self._current_profile = profile
+                result.profile = profile
+                result.success = True
+                
+                # Debugging: Check odometer and hourmeter values after loading
+                if self._current_profile.parameters.get('miscellaneous.odometer'):
+                    print(f"DEBUG: Odometer after load: {self._current_profile.parameters['miscellaneous.odometer'].value}")
+                if self._current_profile.parameters.get('miscellaneous.hourmeter'):
+                    print(f"DEBUG: Hourmeter after load: {self._current_profile.parameters['miscellaneous.hourmeter'].value}")
+                
+                # Add parameter results
+                for param_name, param_value in profile.parameters.items():
+                    param_result = ParameterOperationResult(
+                        parameter_name=param_name,
+                        success=True,
+                        value=param_value.value
+                    )
+                    result.add_parameter_result(param_result)
+                
+                result.add_detail("file_path", file_path)
+                result.add_detail("profile_name", profile.name)
+                result.add_detail("parameters_loaded", len(profile.parameters))
+                
+            except FileNotFoundError:
+                result.add_error(f"Profile file not found: {file_path}")
+            except ValueError as e:
+                result.add_error(f"Invalid profile file format: {str(e)}")
+            except Exception as e:
+                result.add_error(f"Failed to load profile file: {str(e)}")
+                
+        except Exception as e:
+            result.add_error(f"Unexpected error during load from file: {str(e)}")
+            
+        finally:
+            result.duration_seconds = time.time() - start_time
+            result.completed_at = datetime.now()
+            self._current_operation = None
+        
+        return result
+    
+    async def save_to_file(self, file_path: str, profile_name: Optional[str] = None) -> ProfileOperationResult:
+        """
+        Save the current profile to a JSON file.
+        
+        Args:
+            file_path: Path where to save the profile file
+            profile_name: Optional new name for the profile
+        
+        Returns:
+            ProfileOperationResult: Result of the save operation
+        """
+        start_time = time.time()
+        self._current_operation = "save_to_file"
+        
+        result = ProfileOperationResult(
+            operation_type=OperationType.SAVE_TO_FILE,
+            success=False,
+            started_at=datetime.now()
+        )
+        
+        try:
+            # Check if we have a current profile
+            if not self._current_profile:
+                result.add_error("No profile loaded to save to file")
+                return result
+            
+            # Create a copy of the profile for saving
+            profile_to_save = self._current_profile.clone()
+            
+            # Update profile name if provided
+            if profile_name:
+                profile_to_save.name = profile_name
+            
+            # Update modification timestamp
+            profile_to_save.modified_at = datetime.now()
+            
+            # Validate profile before saving
+            validation_result = self.profile_service.validate_profile(profile_to_save)
+            
+            # Add validation warnings to result
+            for warning in validation_result.warnings:
+                result.add_warning(warning)
+            
+            if not validation_result.is_valid:
+                for error in validation_result.errors:
+                    result.add_error(f"Profile validation failed: {error}")
+                return result
+            
+            # Save profile using the profile service
+            try:
+                success = self.profile_service.save_profile_to_file(profile_to_save, file_path)
+                
+                if success:
+                    result.success = True
+                    result.profile = profile_to_save
+                    
+                    # Add parameter results
+                    for param_name, param_value in profile_to_save.parameters.items():
+                        param_result = ParameterOperationResult(
+                            parameter_name=param_name,
+                            success=True,
+                            value=param_value.value
+                        )
+                        result.add_parameter_result(param_result)
+                    
+                    result.add_detail("file_path", file_path)
+                    result.add_detail("profile_name", profile_to_save.name)
+                    result.add_detail("parameters_saved", len(profile_to_save.parameters))
+                else:
+                    result.add_error("Failed to save profile to file")
+                    
+            except Exception as e:
+                result.add_error(f"Failed to save profile file: {str(e)}")
+                
+        except Exception as e:
+            result.add_error(f"Unexpected error during save to file: {str(e)}")
+            
+        finally:
+            result.duration_seconds = time.time() - start_time
+            result.completed_at = datetime.now()
+            self._current_operation = None
+        
+        return result 
+   
+    def get_current_profile(self) -> Optional[UniversalProfile]:
+        """
+        Get the currently loaded profile.
+        
+        Returns:
+            Optional[UniversalProfile]: Current profile or None if no profile is loaded
+        """
+        return self._current_profile
+    
+    def set_current_profile(self, profile: UniversalProfile) -> None:
+        """
+        Set the current profile.
+        
+        Args:
+            profile: Profile to set as current
+        """
+        self._current_profile = profile
+    
+    def populate_ui_fields(self, ui_field_values: Dict[str, Any]) -> ValidationResult:
+        """
+        Populate UI fields from the current profile with enhanced visibility and dependency handling.
+        
+        Args:
+            ui_field_values: Dictionary to populate with UI field values
+        
+        Returns:
+            ValidationResult: Result of the population operation
+        """
+        result = ValidationResult(is_valid=True)
+        
+        if not self._current_profile:
+            result.add_error("No profile loaded to populate UI fields")
+            return result
+        
+        try:
+            # Clear existing UI values
+            ui_field_values.clear()
+            
+            # Create context for visibility evaluation
+            context = {name: pv.value for name, pv in self._current_profile.parameters.items()}
+            
+            # Track parameters that were skipped due to visibility
+            skipped_parameters = []
+            populated_parameters = []
+            
+            # Populate UI fields from profile parameters
+            for param_name, param_value in self._current_profile.parameters.items():
+                try:
+                    # Get parameter specification for UI mapping
+                    param_spec = self.spec_parser.get_parameter_spec(param_name)
+                    
+                    if param_spec:
+                        # Check if parameter should be visible
+                        if self._evaluate_visibility_condition(param_spec.visibility_condition, context):
+                            # Handle complex parameters with multiple fields
+                            if param_spec.fields:
+                                # Complex parameter - populate individual fields
+                                for field in param_spec.fields:
+                                    field_name = f"{param_name}.{field.name}"
+                                    if hasattr(param_value.value, field.name):
+                                        field_value = getattr(param_value.value, field.name)
+                                        ui_field_values[field_name] = field_value
+                                        populated_parameters.append(field_name)
+                                    elif isinstance(param_value.value, dict) and field.name in param_value.value:
+                                        ui_field_values[field_name] = param_value.value[field.name]
+                                        populated_parameters.append(field_name)
+                            else:
+                                # Simple parameter
+                                ui_field_values[param_name] = param_value.value
+                                populated_parameters.append(param_name)
+                        else:
+                            skipped_parameters.append(param_name)
+                            result.add_warning(f"Parameter '{param_name}' is not visible with current values")
+                    else:
+                        # Parameter not found in specifications - include it anyway
+                        ui_field_values[param_name] = param_value.value
+                        populated_parameters.append(param_name)
+                        result.add_warning(f"No specification found for parameter '{param_name}'")
+                        
+                except Exception as e:
+                    result.add_warning(f"Failed to populate parameter '{param_name}': {str(e)}")
+            
+            # Validate field dependencies after population
+            dependency_result = self._validate_field_dependencies(ui_field_values)
+            if not dependency_result.is_valid:
+                result.warnings.extend(dependency_result.warnings)
+                result.errors.extend(dependency_result.errors)
+            
+            result.add_detail("parameters_populated", len(populated_parameters))
+            result.add_detail("parameters_skipped", len(skipped_parameters))
+            result.add_detail("populated_parameters", populated_parameters)
+            result.add_detail("skipped_parameters", skipped_parameters)
+            
+        except Exception as e:
+            result.is_valid = False
+            result.add_error(f"Failed to populate UI fields: {str(e)}")
+        
+        return result
+    
+    def extract_ui_field_values(self, ui_field_values: Dict[str, Any]) -> ValidationResult:
+        """
+        Extract UI field values and update the current profile with enhanced validation and dependency handling.
+        
+        Args:
+            ui_field_values: Dictionary of UI field values
+        
+        Returns:
+            ValidationResult: Result of the extraction operation
+        """
+        result = ValidationResult(is_valid=True)
+        
+        try:
+            # Validate field dependencies first
+            dependency_result = self._validate_field_dependencies(ui_field_values)
+            if not dependency_result.is_valid:
+                result.warnings.extend(dependency_result.warnings)
+                result.errors.extend(dependency_result.errors)
+            
+            # Track processing results
+            processed_parameters = []
+            failed_parameters = []
+            updated_dependencies = []
+            
+            # Create a new profile if none exists
+            if not self._current_profile:
+                profile_name = f"UI Profile {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                self._current_profile = self.profile_service.create_profile_from_ui(ui_field_values, profile_name)
+                processed_parameters = list(ui_field_values.keys())
+            else:
+                # Update existing profile with UI values
+                for param_name, value in ui_field_values.items():
+                    try:
+                        # Get parameter specification for validation
+                        param_spec = self.spec_parser.get_parameter_spec(param_name)
+                        
+                        # Check if this is a complex parameter field first
+                        if '.' in param_name:
+                            # Handle complex parameter field
+                            base_param, field_name = param_name.split('.', 1)
+                            self._set_complex_parameter_field(base_param, field_name, value)
+                            processed_parameters.append(param_name)
+                        elif param_spec:
+                            # Validate individual parameter value
+                            param_validation = param_spec.validate_value(value)
+                            
+                            if param_validation.is_valid:
+                                # Simple parameter
+                                old_value = self._current_profile.get_parameter_value(param_name)
+                                self._current_profile.set_parameter_value(param_name, value, "user")
+                                
+                                # Check if this parameter affects other parameters
+                                if old_value != value:
+                                    dependencies = self._update_dependent_fields(param_name, value, ui_field_values)
+                                    updated_dependencies.extend(dependencies)
+                                
+                                processed_parameters.append(param_name)
+                            else:
+                                # Use default value for invalid parameters
+                                default_value = param_spec.get_default_value()
+                                if default_value is not None:
+                                    self._current_profile.set_parameter_value(param_name, default_value, "default")
+                                    result.add_warning(f"Invalid value for '{param_name}': {param_validation.errors[0]}. Using default: {default_value}")
+                                    processed_parameters.append(param_name)
+                                else:
+                                    failed_parameters.append(param_name)
+                                    result.add_error(f"Invalid value for '{param_name}': {param_validation.errors[0]}")
+                        else:
+                            # Parameter not in specifications - set it anyway with warning
+                            self._current_profile.set_parameter_value(param_name, value, "user")
+                            processed_parameters.append(param_name)
+                            result.add_warning(f"No specification found for parameter '{param_name}'")
+                            
+                    except Exception as e:
+                        failed_parameters.append(param_name)
+                        result.add_error(f"Failed to process parameter '{param_name}': {str(e)}")
+            
+            # Validate the updated profile
+            validation_result = self.profile_service.validate_profile(self._current_profile)
+            
+            # Merge validation results
+            result.warnings.extend(validation_result.warnings)
+            if not validation_result.is_valid:
+                result.errors.extend(validation_result.errors)
+                result.is_valid = False
+            
+            result.add_detail("parameters_extracted", len(processed_parameters))
+            result.add_detail("parameters_failed", len(failed_parameters))
+            result.add_detail("dependencies_updated", len(updated_dependencies))
+            result.add_detail("processed_parameters", processed_parameters)
+            result.add_detail("failed_parameters", failed_parameters)
+            result.add_detail("updated_dependencies", updated_dependencies)
+            result.add_detail("profile_name", self._current_profile.name)
+            
+        except Exception as e:
+            result.add_error(f"Failed to extract UI field values: {str(e)}")
+        
+        return result
+    
+    def cancel_operation(self) -> None:
+        """Cancel the current operation."""
+        self._operation_cancelled = True
+        
+        # Cancel device manager operations
+        if self.device_manager:
+            self.device_manager.cancel_operation()
+    
+    def is_operation_cancelled(self) -> bool:
+        """Check if the current operation was cancelled."""
+        return self._operation_cancelled
+    
+    def get_current_operation(self) -> Optional[str]:
+        """Get the name of the current operation."""
+        return self._current_operation
+    
+    def get_supported_parameters(self) -> List[str]:
+        """
+        Get list of parameters supported by the system.
+        
+        Returns:
+            List[str]: List of supported parameter names
+        """
+        try:
+            return self.spec_parser.get_all_parameters()
+        except Exception:
+            return []
+    
+    def get_profile_summary(self) -> Optional[Dict[str, Any]]:
+        """
+        Get a summary of the current profile.
+        
+        Returns:
+            Optional[Dict[str, Any]]: Profile summary or None if no profile loaded
+        """
+        if not self._current_profile:
+            return None
+        
+        return self.profile_service.get_profile_summary(self._current_profile)
+    
+    def validate_current_profile(self) -> ValidationResult:
+        """
+        Validate the current profile.
+        
+        Returns:
+            ValidationResult: Validation result
+        """
+        if not self._current_profile:
+            result = ValidationResult(is_valid=False)
+            result.add_error("No profile loaded to validate")
+            return result
+        
+        return self.profile_service.validate_profile(self._current_profile)
+    
+    def get_visible_parameters(self, context: Optional[Dict[str, Any]] = None) -> List[str]:
+        """
+        Get list of parameters that should be visible given the current context.
+        
+        Args:
+            context: Optional context dictionary. If None, uses current profile values.
+        
+        Returns:
+            List[str]: List of visible parameter names
+        """
+        if context is None and self._current_profile:
+            context = {name: pv.value for name, pv in self._current_profile.parameters.items()}
+        elif context is None:
+            context = {}
+        
+        visible_params = []
+        
+        try:
+            all_params = self.spec_parser.get_all_parameters()
+            
+            for param_name in all_params:
+                param_spec = self.spec_parser.get_parameter_spec(param_name)
+                if param_spec:
+                    if self._evaluate_visibility_condition(param_spec.visibility_condition, context):
+                        visible_params.append(param_name)
+                else:
+                    # Include parameters without specifications
+                    visible_params.append(param_name)
+        
+        except Exception:
+            # If visibility evaluation fails, return all parameters
+            visible_params = self.get_supported_parameters()
+        
+        return visible_params
+    
+    def get_parameter_dependencies(self, parameter_name: str) -> Dict[str, List[str]]:
+        """
+        Get dependency information for a parameter.
+        
+        Args:
+            parameter_name: Name of the parameter to check
+        
+        Returns:
+            Dict containing 'depends_on' and 'affects' lists
+        """
+        result = {
+            'depends_on': [],
+            'affects': []
+        }
+        
+        try:
+            # Get what this parameter depends on
+            result['depends_on'] = self._get_field_dependencies(parameter_name)
+            
+            # Get what parameters this one affects
+            all_params = self.spec_parser.get_all_parameters()
+            for param_name in all_params:
+                dependencies = self._get_field_dependencies(param_name)
+                if parameter_name in dependencies:
+                    result['affects'].append(param_name)
+        except Exception:
+            pass
+        
+        return result
+    
+    def validate_ui_field_values(self, ui_field_values: Dict[str, Any]) -> ValidationResult:
+        """
+        Validate UI field values without updating the profile.
+        
+        Args:
+            ui_field_values: Dictionary of UI field values to validate
+        
+        Returns:
+            ValidationResult: Validation result with detailed feedback
+        """
+        result = ValidationResult(is_valid=True)
+        
+        try:
+            # Validate field dependencies
+            dependency_result = self._validate_field_dependencies(ui_field_values)
+            result.warnings.extend(dependency_result.warnings)
+            result.errors.extend(dependency_result.errors)
+            
+            # Validate individual field values
+            valid_fields = []
+            invalid_fields = []
+            
+            for field_name, field_value in ui_field_values.items():
+                param_spec = self.spec_parser.get_parameter_spec(field_name)
+                
+                if param_spec:
+                    field_validation = param_spec.validate_value(field_value)
+                    
+                    if field_validation.is_valid:
+                        valid_fields.append(field_name)
+                    else:
+                        invalid_fields.append(field_name)
+                        result.add_error(f"Invalid value for '{field_name}': {field_validation.errors[0]}")
+                else:
+                    # No specification - assume valid but warn
+                    valid_fields.append(field_name)
+                    result.add_warning(f"No specification found for field '{field_name}'")
+            
+            if invalid_fields:
+                result.is_valid = False
+            
+            result.add_detail("valid_fields", valid_fields)
+            result.add_detail("invalid_fields", invalid_fields)
+            result.add_detail("total_fields", len(ui_field_values))
+            
+        except Exception as e:
+            result.add_error(f"Failed to validate UI field values: {str(e)}")
+            result.is_valid = False
+        
+        return result
+    
+    def get_field_default_values(self, field_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Get default values for specified fields or all supported fields.
+        
+        Args:
+            field_names: Optional list of field names. If None, returns defaults for all fields.
+        
+        Returns:
+            Dict[str, Any]: Dictionary of field names to default values
+        """
+        defaults = {}
+        
+        try:
+            if field_names is None:
+                field_names = self.get_supported_parameters()
+            
+            for field_name in field_names:
+                param_spec = self.spec_parser.get_parameter_spec(field_name)
+                if param_spec:
+                    default_value = param_spec.get_default_value()
+                    if default_value is not None:
+                        defaults[field_name] = default_value
+        
+        except Exception:
+            pass
+        
+        return defaults
+    
+    def compare_with_device(self, progress_callback: Optional[Callable] = None) -> ProfileOperationResult:
+        """
+        Compare the current profile with device configuration.
+        
+        This method reads the current device configuration and compares it
+        with the loaded profile to identify differences.
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+        
+        Returns:
+            ProfileOperationResult: Result containing comparison details
+        """
+        # This would be implemented as a future enhancement
+        # For now, return a not implemented result
+        result = ProfileOperationResult(
+            operation_type=OperationType.VALIDATE_PROFILE,
+            success=False,
+            started_at=datetime.now(),
+            completed_at=datetime.now()
+        )
+        result.add_error("Profile comparison with device not yet implemented")
+        return result
+    
+    def _evaluate_visibility_condition(self, condition: Optional[str], context: Dict[str, Any]) -> bool:
+        """
+        Evaluate a visibility condition against the current parameter context.
+        
+        Args:
+            condition: Visibility condition string (e.g., "ignition_mode == 'Virtual por bateria'")
+            context: Dictionary of parameter values for evaluation
+        
+        Returns:
+            bool: True if the condition is met or no condition exists
+        """
+        if not condition:
+            return True
+        
+        try:
+            # Simple condition parsing - supports basic equality and boolean checks
+            condition = condition.strip()
+            
+            # Handle boolean conditions
+            if condition in context:
+                return bool(context[condition])
+            
+            # Handle equality conditions
+            if '==' in condition:
+                left, right = condition.split('==', 1)
+                left = left.strip()
+                right = right.strip().strip("'\"")
+                
+                if left in context:
+                    return str(context[left]) == right
+            
+            # Handle boolean true/false conditions
+            if '== true' in condition:
+                param_name = condition.replace('== true', '').strip()
+                if param_name in context:
+                    return bool(context[param_name])
+            
+            if '== false' in condition:
+                param_name = condition.replace('== false', '').strip()
+                if param_name in context:
+                    return not bool(context[param_name])
+            
+            # Default to visible if condition cannot be evaluated
+            return True
+            
+        except Exception:
+            # If condition evaluation fails, default to visible
+            return True
+    
+    def _update_dependent_fields(self, changed_field: str, new_value: Any, ui_field_values: Dict[str, Any]) -> List[str]:
+        """
+        Update fields that depend on the changed field.
+        
+        Args:
+            changed_field: Name of the field that changed
+            new_value: New value of the changed field
+            ui_field_values: Dictionary of all UI field values
+        
+        Returns:
+            List[str]: List of field names that were updated
+        """
+        updated_fields = []
+        
+        try:
+            # Get all parameter specifications to check for dependencies
+            all_params = self.spec_parser.get_all_parameters()
+            
+            for param_name in all_params:
+                param_spec = self.spec_parser.get_parameter_spec(param_name)
+                if param_spec and param_spec.visibility_condition:
+                    # Check if this parameter's visibility depends on the changed field
+                    if changed_field in param_spec.visibility_condition:
+                        # Update the context and re-evaluate visibility
+                        context = dict(ui_field_values)
+                        context[changed_field] = new_value
+                        
+                        is_visible = self._evaluate_visibility_condition(param_spec.visibility_condition, context)
+                        
+                        # If parameter becomes invisible, remove it from UI values
+                        if not is_visible and param_name in ui_field_values:
+                            del ui_field_values[param_name]
+                            updated_fields.append(param_name)
+                        # If parameter becomes visible and has a default, add it
+                        elif is_visible and param_name not in ui_field_values:
+                            default_value = param_spec.get_default_value()
+                            if default_value is not None:
+                                ui_field_values[param_name] = default_value
+                                updated_fields.append(param_name)
+            
+        except Exception:
+            # If dependency update fails, continue without updates
+            pass
+        
+        return updated_fields
+    
+    def _get_field_dependencies(self, field_name: str) -> List[str]:
+        """
+        Get the list of fields that the given field depends on.
+        
+        Args:
+            field_name: Name of the field to check dependencies for
+        
+        Returns:
+            List[str]: List of field names that this field depends on
+        """
+        dependencies = []
+        
+        try:
+            param_spec = self.spec_parser.get_parameter_spec(field_name)
+            if param_spec and param_spec.visibility_condition:
+                # Simple dependency extraction from visibility condition
+                condition = param_spec.visibility_condition
+                
+                # Extract parameter names from condition
+                import re
+                # Find parameter names (alphanumeric with underscores)
+                param_matches = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', condition)
+                
+                # Filter out keywords and operators
+                keywords = {'true', 'false', 'and', 'or', 'not', 'in', 'is'}
+                dependencies = [match for match in param_matches if match not in keywords]
+        
+        except Exception:
+            pass
+        
+        return dependencies
+    
+    def _validate_field_dependencies(self, ui_field_values: Dict[str, Any]) -> ValidationResult:
+        """
+        Validate that all field dependencies are satisfied.
+        
+        Args:
+            ui_field_values: Dictionary of UI field values
+        
+        Returns:
+            ValidationResult: Result of dependency validation
+        """
+        result = ValidationResult(is_valid=True)
+        
+        try:
+            # Check each field's dependencies
+            for field_name, field_value in ui_field_values.items():
+                dependencies = self._get_field_dependencies(field_name)
+                
+                for dependency in dependencies:
+                    if dependency not in ui_field_values:
+                        result.add_warning(f"Field '{field_name}' depends on '{dependency}' which is not present")
+                    else:
+                        # Check if the dependency relationship is valid
+                        param_spec = self.spec_parser.get_parameter_spec(field_name)
+                        if param_spec and param_spec.visibility_condition:
+                            is_visible = self._evaluate_visibility_condition(
+                                param_spec.visibility_condition, ui_field_values
+                            )
+                            
+                            if not is_visible:
+                                result.add_error(f"Field '{field_name}' should not be visible with current dependency values. "
+                                               f"Condition: {param_spec.visibility_condition}")
+        
+        except Exception as e:
+            result.add_warning(f"Failed to validate field dependencies: {str(e)}")
+        
+        return result
+    
+    def _set_complex_parameter_field(self, base_param: str, field_name: str, value: Any) -> None:
+        """
+        Set a field value in a complex parameter.
+        
+        Args:
+            base_param: Name of the base parameter
+            field_name: Name of the field within the parameter
+            value: Value to set
+        """
+        try:
+            current_value = self._current_profile.get_parameter_value(base_param)
+            
+            if current_value is None:
+                # Create new complex parameter value
+                current_value = {}
+            elif not isinstance(current_value, dict):
+                # Convert to dict if needed
+                current_value = {"value": current_value}
+            
+            # Set the field value
+            current_value[field_name] = value
+            
+            # Update the parameter
+            self._current_profile.set_parameter_value(base_param, current_value, "user")
+            
+        except Exception:
+            # If complex parameter handling fails, set as simple parameter
+            self._current_profile.set_parameter_value(f"{base_param}.{field_name}", value, "user")
+    
+    def _create_device_progress_callback(self, user_callback: Optional[Callable], 
+                                       start_percent: int, end_percent: int) -> Optional[Callable]:
+        """
+        Create a progress callback that maps device operation progress to user callback.
+        
+        Args:
+            user_callback: User's progress callback
+            start_percent: Starting percentage for this operation
+            end_percent: Ending percentage for this operation
+        
+        Returns:
+            Optional[Callable]: Mapped progress callback
+        """
+        if not user_callback:
+            return None
+        
+        def device_progress_callback(current: int, total: int, description: str, success: Optional[bool]):
+            if total > 0:
+                # Map device progress to user progress range
+                device_percent = (current / total) * 100
+                mapped_percent = start_percent + (device_percent * (end_percent - start_percent) / 100)
+                user_callback(int(mapped_percent), 100, description, success)
+            else:
+                user_callback(start_percent, 100, description, success)
+        
+        return device_progress_callback
+    
+    def __str__(self) -> str:
+        """String representation of the profile manager."""
+        profile_info = "No profile loaded"
+        if self._current_profile:
+            profile_info = f"Profile: {self._current_profile.name} ({len(self._current_profile.parameters)} parameters)"
+        
+        operation_info = "Idle"
+        if self._current_operation:
+            operation_info = f"Operation: {self._current_operation}"
+        
+        return f"UniversalProfileManager({profile_info}, {operation_info})"
+
+    def create_recovery_summary(self, recovery_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a recovery summary from the given context.
+        
+        Args:
+            recovery_context: Dictionary with recovery information
+        
+        Returns:
+            Dictionary with a summary of the recovery actions
+        """
+        if not recovery_context:
+            return {}
+
+        summary = {
+            'total_parameters': recovery_context.get('total_parameters', 0),
+            'successful_parameters': recovery_context.get('successful_parameters', 0),
+            'failed_parameters': recovery_context.get('failed_parameters', 0),
+            'recovery_actions': recovery_context.get('recovery_actions', 0),
+            'success_rate_percent': 0
+        }
+        
+        if summary['total_parameters'] > 0:
+            summary['success_rate_percent'] = (summary['successful_parameters'] / summary['total_parameters']) * 100
+            
+        return summary
+
+    def update_recovery_statistics(self, stats: Dict[str, Any]) -> None:
+        """
+        Update recovery statistics.
+
+        (Placeholder implementation)
+
+        Args:
+            stats: Dictionary with recovery statistics.
+        """
+        # TODO: Implement recovery statistics handling
+        pass
+</document_content>
+</document>
+<document index="86">
+<source>.\services\universal_profile_service.py</source>
+<document_content>
+"""
+Universal Profile Service for the LT32 PRO Universal Profile System.
+
+This module provides the core service for creating, validating, and managing
+universal profiles using parameter specifications.
+"""
+
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+from models.validation_result import ValidationResult
+from services.parameter_specification_parser import ParameterSpecificationParser
+from services.profile_ui_populator import ProfileUIPopulator
+from services.parameter_processor import ParameterProcessor
+
+
+class UniversalProfileService:
+    """
+    Service for managing universal profiles with parameter specification validation.
+    
+    This service handles profile creation from UI values and device responses,
+    profile validation, file I/O operations, and profile migration.
+    """
+    
+    def __init__(self, spec_parser: ParameterSpecificationParser):
+        """
+        Initialize the service with a parameter specification parser.
+        
+        Args:
+            spec_parser: Parameter specification parser instance
+        """
+        self.spec_parser = spec_parser
+        self.profile_ui_populator = ProfileUIPopulator(spec_parser)
+        self.parameter_processor = ParameterProcessor()
+    
+    def create_profile_from_ui(self, ui_values: Dict[str, Any], profile_name: str) -> UniversalProfile:
+        """
+        Create a universal profile from UI field values.
+        
+        Args:
+            ui_values: Dictionary of UI field values keyed by parameter name
+            profile_name: Name for the new profile
+            
+        Returns:
+            UniversalProfile: Created profile with UI values
+        """
+        now = datetime.now()
+        
+        # Create metadata
+        metadata = ProfileMetadata(
+            parameter_spec_version="1.0",  # TODO: Get from spec parser
+            created_by="LT32 PRO Configurator",
+            device_model="LT32 PRO",
+            profile_format_version="1.0"
+        )
+        
+        # Create profile
+        profile = UniversalProfile(
+            name=profile_name,
+            version="1.0",
+            created_at=now,
+            modified_at=now,
+            metadata=metadata
+        )
+        
+        # Process UI values and create parameter values
+        for param_name, value in ui_values.items():
+            # Get parameter specification for validation
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            
+            if param_spec:
+                # Create parameter value with validation
+                param_value = ParameterValue(
+                    value=value,
+                    source="user",
+                    timestamp=now
+                )
+                
+                # Validate the value
+                validation_result = param_spec.validate_value(value)
+                param_value.set_validation_result(validation_result)
+                
+                profile.parameters[param_name] = param_value
+            else:
+                # Parameter not found in specifications - still include but mark as unknown
+                param_value = ParameterValue(
+                    value=value,
+                    source="user",
+                    timestamp=now
+                )
+                
+                # Create a warning validation result
+                validation_result = ValidationResult(
+                    is_valid=True,
+                    warnings=[f"Parameter '{param_name}' not found in specifications"]
+                )
+                param_value.set_validation_result(validation_result)
+                
+                profile.parameters[param_name] = param_value
+        
+        return profile
+    
+    def create_profile_from_device(self, device_responses: Dict[str, str], profile_name: str) -> UniversalProfile:
+        """
+        Create a universal profile from device response data.
+        
+        Args:
+            device_responses: Dictionary of device responses keyed by parameter name
+            profile_name: Name for the new profile
+            
+        Returns:
+            UniversalProfile: Created profile with device values
+        """
+        now = datetime.now()
+        
+        # Create metadata
+        metadata = ProfileMetadata(
+            parameter_spec_version="1.0",  # TODO: Get from spec parser
+            created_by="LT32 PRO Configurator",
+            device_model="LT32 PRO",
+            profile_format_version="1.0",
+            tags={"source": "device"}
+        )
+        
+        # Create profile
+        profile = UniversalProfile(
+            name=profile_name,
+            version="1.0",
+            created_at=now,
+            modified_at=now,
+            metadata=metadata
+        )
+        
+        # Process device responses and create parameter values
+        for param_name, response in device_responses.items():
+            # Get parameter specification
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            
+            if param_spec:
+                # Parse the device response using the parameter specification
+                parsed_value = self._parse_device_response(param_spec, response)
+                
+                # Apply parameter processing for clean display (Requirements 3.1, 3.2, 3.3, 3.5)
+                processed_value = self._apply_parameter_processing(param_name, parsed_value, response)
+                
+                # Create parameter value with processed value
+                param_value = ParameterValue(
+                    value=processed_value,
+                    source="device",
+                    timestamp=now
+                )
+                
+                # Validate the processed value
+                validation_result = param_spec.validate_value(processed_value)
+                param_value.set_validation_result(validation_result)
+                
+                profile.parameters[param_name] = param_value
+            else:
+                # Parameter not found in specifications - apply processing and store
+                processed_value = self._apply_parameter_processing(param_name, response, response)
+                
+                param_value = ParameterValue(
+                    value=processed_value,
+                    source="device",
+                    timestamp=now
+                )
+                
+                # Create a warning validation result
+                validation_result = ValidationResult(
+                    is_valid=True,
+                    warnings=[f"Parameter '{param_name}' not found in specifications"]
+                )
+                param_value.set_validation_result(validation_result)
+                
+                profile.parameters[param_name] = param_value
+        
+        return profile
+    
+    def _parse_device_response(self, param_spec, response: str) -> Any:
+        """
+        Parse a device response according to parameter specification.
+        """
+        if not response:
+            return param_spec.get_default_value()
+
+        raw_value = response.strip()
+
+        # For complex parameters with fields, parse into a dictionary
+        if param_spec.fields:
+            # Special handling for server_settings
+            if param_spec.name == 'server_settings':
+                result = {}
+                parts = raw_value.split(':')[-1].split(',')
+                
+                port_field = None
+                for field in param_spec.fields:
+                    if field.name == 'port':
+                        port_field = field
+                        break
+
+                if len(parts) >= 3 and port_field:
+                    result['address'] = parts[1]
+                    result['port'] = self._convert_field_value(port_field, parts[2])
+                else:
+                    result['address'] = ''
+                    if port_field:
+                        result['port'] = port_field.get_default_value()
+                    else:
+                        result['port'] = 0 # fallback default
+                return result
+
+            # Special handling for ignition_type due to its unique response format
+            if param_spec.name == 'ignition_type':
+                result = {}
+                # Default ignition mode mapping based on response
+                ignition_mode_value = 'F├¡sica (Physical)'
+                if 'ACCLINE=0' in raw_value:
+                    ignition_mode_value = 'Virtual por aceler├┤metro (Virtual by accelerometer)'
+                # Note: Only include voltage fields if battery mode is active
+                result['ignition_mode'] = ignition_mode_value
+                return result
+
+            # Extract the value part of the response (e.g., from "APN:val1,val2")
+            if ':' in raw_value:
+                raw_value = raw_value.split(':', 1)[-1].strip()
+            
+            parts = raw_value.split(',')
+            provisional = {}
+            for i, field in enumerate(param_spec.fields):
+                if i < len(parts):
+                    # Convert each part to the correct field type
+                    provisional[field.name] = self._convert_field_value(field, parts[i])
+                else:
+                    provisional[field.name] = field.get_default_value()
+
+            # Filter out fields that should not be visible given the current context
+            visible_field_names = {f.name for f in param_spec.get_visible_fields(provisional)}
+            filtered: Dict[str, Any] = {}
+            for field in param_spec.fields:
+                if field.visibility_condition is None or field.name in visible_field_names:
+                    filtered[field.name] = provisional[field.name]
+            return filtered
+
+        # For simple parameters, extract the single value
+        last_delim = max(raw_value.rfind('='), raw_value.rfind(':'))
+        if last_delim != -1:
+            raw_value = raw_value[last_delim + 1:].strip()
+            
+        return self._convert_and_map_value(param_spec, raw_value)
+
+    def _clean_time_parameter_field(self, field, raw_value: str) -> str:
+        """
+        Clean time parameter field values to show only numeric values.
+        
+        Args:
+            field: Parameter field specification
+            raw_value: Raw field value from device (e.g., '60s' or 'ACC OFF:120s')
+            
+        Returns:
+            Cleaned value for time parameters, original value for others
+        """
+        if not isinstance(raw_value, str):
+            return raw_value
+        
+        # Define time parameter field names that need cleaning
+        time_field_names = [
+            'moving_time', 'stopped_time',
+            'moving_heartbeat', 'stopped_heartbeat',
+            'sleep_time',
+            'detection_time', 'speed_detection_time',
+            'power_detection_time',
+            'min_charge_time',
+            'jammer_confirmation_time'
+        ]
+        
+        # Check if this field needs time parameter cleaning
+        if hasattr(field, 'name') and field.name in time_field_names:
+            cleaned_value = self._extract_numeric_value_from_time_string(raw_value)
+            print(f"DEBUG: Time parameter field cleaning - {field.name}: '{raw_value}' -> '{cleaned_value}'")
+            return cleaned_value
+        
+        return raw_value
+    
+    def _extract_numeric_value_from_time_string(self, time_string: str) -> str:
+        """
+        Extract numeric value from time parameter strings.
+        
+        Examples:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "180" -> "180"
+        
+        Args:
+            time_string: Time string that may contain units and prefixes
+            
+        Returns:
+            str: Numeric value only
+        """
+        if not time_string:
+            return ""
+        
+        # Extract all digits from the string
+        import re
+        digits = re.findall(r'\d+', str(time_string))
+        
+        # Return the last number found (handles cases like "ACC OFF:120s")
+        return digits[-1] if digits else ""
+
+    def _convert_field_value(self, field, raw_value: str) -> Any:
+        """Convert a raw field value to the appropriate type and map to options."""
+        # Apply time parameter cleaning for time-related fields
+        cleaned_value = self._clean_time_parameter_field(field, raw_value)
+        
+        # First, convert to a Python type
+        typed_value = cleaned_value
+        if field.ui_element.value == "number_input":
+            try:
+                typed_value = int(cleaned_value)
+            except (ValueError, TypeError):
+                try:
+                    typed_value = float(cleaned_value)
+                except (ValueError, TypeError):
+                    # For validation errors like port:0, we keep the value for now
+                    typed_value = cleaned_value
+        elif field.ui_element.value == "toggle_switch":
+            typed_value = cleaned_value.lower() in ("true", "1", "on", "yes", "enabled")
+
+        # Then, map to UI option string if applicable
+        if field.options:
+            if field.ui_element.value == "dropdown":
+                try:
+                    index = int(str(typed_value).strip())
+                    # Clamp out-of-range indices to nearest valid option
+                    if index < 0:
+                        index = 0
+                    if index >= len(field.options):
+                        index = len(field.options) - 1
+                    return field.options[index]
+                except (ValueError, TypeError):
+                    if typed_value in field.options:
+                        return typed_value
+            elif field.ui_element.value == "toggle_switch":
+                # This mapping is for UI display, the validator should handle the boolean
+                if typed_value is True and len(field.options) > 0:
+                    return field.options[0]
+                elif typed_value is False and len(field.options) > 1:
+                    return field.options[1]
+        
+        return typed_value
+
+    def _convert_and_map_value(self, param_spec, raw_value: str) -> Any:
+        """Convert a raw parameter value to the appropriate type and map to UI options if needed."""
+        # First, convert to a Python type (int, bool, etc.)
+        typed_value = self._convert_simple_value(param_spec, raw_value)
+
+        # Then, map this typed value to the corresponding UI option string if applicable
+        if param_spec.options:
+            if param_spec.ui_element and param_spec.ui_element.value == "dropdown":
+                try:
+                    # Device value is an index for the options list
+                    index = int(str(typed_value).strip())
+                    # Clamp out-of-range indices to nearest valid option
+                    if index < 0:
+                        index = 0
+                    if index >= len(param_spec.options):
+                        index = len(param_spec.options) - 1
+                    return param_spec.options[index]
+                except (ValueError, TypeError):
+                    # If it's not an index, it might be the value itself
+                    if typed_value in param_spec.options:
+                        return typed_value
+            
+            elif param_spec.ui_element and param_spec.ui_element.value == "toggle_switch":
+                # Map boolean to "Enabled" / "Disabled" based on options
+                if typed_value is True and "Enabled" in param_spec.options:
+                    return "Enabled"
+                elif typed_value is False and "Disabled" in param_spec.options:
+                    return "Disabled"
+
+        # For other cases, or if mapping fails, return the raw value or the typed value
+        # Let's return the typed_value, as it's more likely to be what validation expects if no options are matched
+        return typed_value
+
+    def _convert_simple_value(self, param_spec, raw_value: str) -> Any:
+        """Convert a raw parameter value to its basic Python type."""
+        if param_spec.ui_element and param_spec.ui_element.value == "number_input":
+            try:
+                return int(raw_value)
+            except (ValueError, TypeError):
+                try:
+                    return float(raw_value)
+                except (ValueError, TypeError):
+                    return param_spec.get_default_value()
+        elif param_spec.ui_element and param_spec.ui_element.value == "toggle_switch":
+            return raw_value.lower() in ("true", "1", "on", "yes", "enabled")
+        
+        return raw_value
+    
+    def save_profile_to_file(self, profile: UniversalProfile, file_path: str) -> bool:
+        """
+        Save a profile to a JSON file using the ProfileFileHandler.
+        
+        Args:
+            profile: Profile to save
+            file_path: Path where to save the profile
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            from services.profile_file_handler import ProfileFileHandler
+            file_handler = ProfileFileHandler()
+            
+            result = file_handler.save_profile_to_file(profile, file_path)
+            return result.success
+            
+        except Exception as e:
+            # Log error in a real implementation
+            print(f"Error saving profile to {file_path}: {e}")
+            return False
+    
+    def load_profile_from_file(self, file_path: str) -> UniversalProfile:
+        """
+        Load a profile from a JSON file using the ProfileFileHandler.
+        
+        Args:
+            file_path: Path to the profile file
+            
+        Returns:
+            UniversalProfile: Loaded profile
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            ValueError: If the file format is invalid
+        """
+        try:
+            from services.profile_file_handler import ProfileFileHandler
+            file_handler = ProfileFileHandler()
+            
+            profile, result = file_handler.load_profile_from_file(file_path)
+            
+            if not result.success:
+                if "not found" in result.error_message:
+                    raise FileNotFoundError(result.error_message)
+                else:
+                    raise ValueError(result.error_message)
+            
+            # Migrate profile if needed
+#            migrated_profile = self.migrate_profile(profile)
+            
+            return profile
+            
+        except (FileNotFoundError, ValueError):
+            raise
+        except Exception as e:
+            raise ValueError(f"Error loading profile from {file_path}: {e}")
+    
+    def validate_profile(self, profile: UniversalProfile) -> ValidationResult:
+        """
+        Validate a profile against current parameter specifications.
+        
+        Args:
+            profile: Profile to validate
+            
+        Returns:
+            ValidationResult: Comprehensive validation result
+        """
+        result = ValidationResult(is_valid=True)
+        
+        # Basic profile validation
+        if not profile.name:
+            result.add_error("Profile name is required")
+        
+        if not profile.version:
+            result.add_error("Profile version is required")
+        
+        # Validate individual parameters
+        for param_name, param_value in profile.parameters.items():
+            # Try exact lookup first; if not found, try the short parameter name after the last dot
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            lookup_name = param_name
+            if not param_spec:
+                short_name = param_name.split('.')[-1]
+                param_spec = self.spec_parser.get_parameter_spec(short_name)
+                if param_spec:
+                    lookup_name = short_name
+
+            if param_spec:
+                value_to_validate = param_value.value
+
+                # If the profile stored a dict like {'tcp_ack': 'Disabled'} for a single-field parameter,
+                # unwrap it to the inner value (common when loading device dump outputs).
+                if not param_spec.fields and isinstance(value_to_validate, dict):
+                    # If dict has a single key that matches the short parameter name, extract it
+                    if len(value_to_validate) == 1:
+                        sole_key = next(iter(value_to_validate))
+                        if sole_key == lookup_name or sole_key.endswith(lookup_name):
+                            value_to_validate = value_to_validate[sole_key]
+
+                # If parameter has conditional fields and value is a dict, attempt coercion then validate visible fields
+                if param_spec.fields and isinstance(value_to_validate, dict):
+                    # Normalize fields container
+                    fields_list = param_spec.fields
+                    if isinstance(fields_list, dict):
+                        fields_list = list(fields_list.values())
+                    coerced = dict(value_to_validate)  # shallow copy to avoid mutating original
+
+                    # Coerce common device dump formats to expected UI types
+                    for field in fields_list:
+                        field_name = getattr(field, "name", None) or (field.get("name") if isinstance(field, dict) else None)
+                        if not field_name or field_name not in coerced:
+                            continue
+                        v = coerced[field_name]
+
+                        ui_type = getattr(field, "ui_element", None) or (field.get("ui_element") if isinstance(field, dict) else None)
+                        options = getattr(field, "options", None) or (field.get("options") if isinstance(field, dict) else None) or []
+
+                        # Coerce numeric strings to ints/floats for number_input
+                        if ui_type == "number_input" and isinstance(v, str):
+                            s = v.strip()
+                            try:
+                                if s.isdigit():
+                                    coerced[field_name] = int(s)
+                                else:
+                                    coerced[field_name] = float(s)
+                            except Exception:
+                                coerced[field_name] = v
+
+                        # Map booleans/numeric flags to option labels for toggle_switch
+                        if ui_type == "toggle_switch" and options:
+                            opts = [opt.strip() for opt in options]
+                            if isinstance(v, bool):
+                                coerced[field_name] = opts[0] if v else (opts[1] if len(opts) > 1 else opts[0])
+                            elif isinstance(v, (int, float)):
+                                coerced[field_name] = opts[0] if int(v) == 1 else (opts[1] if len(opts) > 1 else opts[0])
+                            elif isinstance(v, str) and v.strip().lower() in ("true", "false", "1", "0", "enabled", "disabled"):
+                                s = v.strip().lower()
+                                if s in ("true", "1", "enabled"):
+                                    coerced[field_name] = opts[0]
+                                else:
+                                    coerced[field_name] = opts[1] if len(opts) > 1 else opts[0]
+
+                    # If numeric fields coerced to 0 but validation expects min>0, replace with default instead of failing
+                    try:
+                        for field in fields_list:
+                            field_name = getattr(field, "name", None) or (field.get("name") if isinstance(field, dict) else None)
+                            if not field_name or field_name not in coerced:
+                                continue
+                            validation_rule = getattr(field, "validation", None) or (field.get("validation") if isinstance(field, dict) else None) or ""
+                            val = coerced.get(field_name)
+                            if isinstance(val, (int, float)) and int(val) == 0 and validation_rule and "-" in validation_rule:
+                                parts = validation_rule.split("-", 1)
+                                try:
+                                    min_val = int(parts[0])
+                                    if min_val > 0:
+                                        # replace with the field's default if available
+                                        default = getattr(field, "get_default_value", None)
+                                        if callable(default):
+                                            coerced[field_name] = default()
+                                        else:
+                                            # try attribute default or leave removed
+                                            fld_def = getattr(field, "default", None) or None
+                                            if fld_def is not None:
+                                                coerced[field_name] = fld_def
+                                            else:
+                                                coerced.pop(field_name, None)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+                    # Evaluate visible fields based on coerced context
+                    context = coerced.copy()
+                    try:
+                        visible_fields = {f.name for f in param_spec.get_visible_fields(context)}
+                    except Exception:
+                        visible_fields = set(coerced.keys())
+                    filtered_value = {k: v for k, v in coerced.items() if k in visible_fields}
+
+                    # Validate using the filtered/coerced structure
+                    try:
+                        param_validation = param_spec.validate_value(filtered_value)
+                    except Exception as e:
+                        pv = ValidationResult(is_valid=False)
+                        pv.add_error(f"Validation exception: {e}")
+                        param_validation = pv
+                else:
+                    # Handle single-value toggle switches stored as booleans by mapping them to option labels
+                    ui_type = getattr(param_spec, "ui_element", None)
+                    if ui_type == "toggle_switch" and isinstance(value_to_validate, bool):
+                        options = getattr(param_spec, "options", []) or []
+                        opts = [opt.strip() for opt in options]
+                        if opts:
+                            value_to_validate = opts[0] if value_to_validate else (opts[1] if len(opts) > 1 else opts[0])
+
+                    # Normal validation (guard against exceptions)
+                    try:
+                        param_validation = param_spec.validate_value(value_to_validate)
+                    except Exception as e:
+                        pv = ValidationResult(is_valid=False)
+                        pv.add_error(f"Validation exception: {e}")
+                        param_validation = pv
+
+                if not param_validation.is_valid:
+                    for error in param_validation.errors:
+                        result.add_error(f"Parameter '{lookup_name}': {error}")
+                
+                for warning in param_validation.warnings:
+                    result.add_warning(f"Parameter '{lookup_name}': {warning}")
+                
+                # Update parameter's validation status
+                param_value.set_validation_result(param_validation)
+            else:
+                # Parameter not found in current specifications
+                result.add_warning(f"Parameter '{param_name}' not found in current specifications")
+        
+        # Check for missing required parameters
+        all_param_names = self.spec_parser.get_all_parameters()
+        for param_name in all_param_names:
+            if param_name not in profile.parameters:
+                param_spec = self.spec_parser.get_parameter_spec(param_name)
+                if param_spec:
+                    # Add default value for missing parameter
+                    default_value = param_spec.get_default_value()
+                    profile.set_parameter_value(param_name, default_value, "default")
+                    result.add_warning(f"Added default value for missing parameter '{param_name}'")
+        
+        # Validate parameter dependencies and visibility conditions
+        self._validate_parameter_dependencies(profile, result)
+        
+        return result
+    
+    def _validate_parameter_dependencies(self, profile: UniversalProfile, result: ValidationResult) -> None:
+        """
+        Validate parameter dependencies and visibility conditions.
+        
+        Args:
+            profile: Profile to validate
+            result: Validation result to update
+        """
+        # Create context for visibility checks
+        context = {}
+        for param_name, param_value in profile.parameters.items():
+            context[param_name] = param_value.value
+        
+        # Check visibility conditions for all parameters
+        for param_name, param_value in profile.parameters.items():
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            if param_spec and not param_spec.is_visible(context):
+                result.add_warning(f"Parameter '{param_name}' should not be visible with current values")
+        
+        # Check field visibility for complex parameters
+        for param_name, param_value in profile.parameters.items():
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            if param_spec and param_spec.fields and isinstance(param_value.value, dict):
+                visible_fields = param_spec.get_visible_fields(param_value.value)
+                visible_field_names = {field.name for field in visible_fields}
+                
+                for field_name in param_value.value.keys():
+                    if field_name not in visible_field_names:
+                        result.add_warning(f"Field '{field_name}' in parameter '{param_name}' should not be visible")
+    
+    def migrate_profile(self, profile: UniversalProfile) -> UniversalProfile:
+        """
+        Migrate a profile to the current format and specifications.
+        
+        Args:
+            profile: Profile to migrate
+            
+        Returns:
+            UniversalProfile: Migrated profile
+        """
+        # For now, this is a simple migration that ensures all current parameters
+        # have values (using defaults for missing ones)
+        
+        migrated_profile = profile.clone()
+        
+        # Add missing parameters with default values (do not mark as modified)
+        # But avoid adding defaults if an equivalent parameter already exists with a section prefix
+        all_param_names = self.spec_parser.get_all_parameters()
+        existing_keys = set(migrated_profile.parameters.keys())
+        for param_name in all_param_names:
+            # Detect equivalent present keys (exact or with section prefixes, e.g. 'network_parameters.server_settings')
+            def _has_equivalent(name: str) -> bool:
+                if name in existing_keys:
+                    return True
+                for k in existing_keys:
+                    if k == name or k.endswith("." + name):
+                        return True
+                return False
+
+            if _has_equivalent(param_name):
+                continue
+
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            if param_spec:
+                default_value = param_spec.get_default_value()
+                migrated_profile.parameters[param_name] = ParameterValue(
+                    value=default_value,
+                    source="default"
+                )
+
+        # Clean up field visibility: remove fields that should not be visible
+        for param_name, param_value in list(migrated_profile.parameters.items()):
+            param_spec = self.spec_parser.get_parameter_spec(param_name)
+            if not param_spec or not param_spec.fields:
+                continue
+            value = param_value.value
+            if not isinstance(value, dict):
+                continue
+            # Determine which fields are visible based on current values
+            visible_fields = {f.name for f in param_spec.get_visible_fields(value)}
+            cleaned: Dict[str, Any] = {}
+            for field in param_spec.fields:
+                if field.visibility_condition is None:
+                    # Always include non-conditional fields
+                    if field.name in value:
+                        cleaned[field.name] = value[field.name]
+                else:
+                    if field.name in visible_fields and field.name in value:
+                        cleaned[field.name] = value[field.name]
+            # Replace with cleaned value if different (do not mark as modified)
+            if cleaned != value:
+                pv = migrated_profile.parameters.get(param_name)
+                if pv:
+                    pv.value = cleaned
+                else:
+                    migrated_profile.parameters[param_name] = ParameterValue(
+                        value=cleaned,
+                        source="device"
+                    )
+        
+        # Update metadata to reflect migration
+        migrated_profile.metadata.parameter_spec_version = "1.0"  # Current version
+        migrated_profile.modified_at = datetime.now()
+        
+        return migrated_profile
+    
+    def get_profile_summary(self, profile: UniversalProfile) -> Dict[str, Any]:
+        """
+        Get a summary of profile information.
+        
+        Args:
+            profile: Profile to summarize
+            
+        Returns:
+            Dict[str, Any]: Profile summary information
+        """
+        total_params = len(profile.parameters)
+        device_params = len(profile.get_parameters_by_source("device"))
+        user_params = len(profile.get_parameters_by_source("user"))
+        default_params = len(profile.get_parameters_by_source("default"))
+        
+        # Count validation issues
+        validation_errors = 0
+        validation_warnings = 0
+        
+        for param_value in profile.parameters.values():
+            if param_value.validation_status:
+                validation_errors += len(param_value.validation_status.errors)
+                validation_warnings += len(param_value.validation_status.warnings)
+        
+        return {
+            "name": profile.name,
+            "version": profile.version,
+            "created_at": profile.created_at.isoformat(),
+            "modified_at": profile.modified_at.isoformat(),
+            "total_parameters": total_params,
+            "device_parameters": device_params,
+            "user_parameters": user_params,
+            "default_parameters": default_params,
+            "validation_errors": validation_errors,
+            "validation_warnings": validation_warnings,
+            "metadata": profile.metadata.to_dict()
+        }
+    
+    def compare_profiles(self, profile1: UniversalProfile, profile2: UniversalProfile) -> Dict[str, Any]:
+        """
+        Compare two profiles and return differences.
+        
+        Args:
+            profile1: First profile to compare
+            profile2: Second profile to compare
+            
+        Returns:
+            Dict[str, Any]: Comparison results
+        """
+        differences = {
+            "added_parameters": [],
+            "removed_parameters": [],
+            "changed_parameters": [],
+            "unchanged_parameters": []
+        }
+        
+        params1 = set(profile1.parameters.keys())
+        params2 = set(profile2.parameters.keys())
+        
+        # Find added and removed parameters
+        differences["added_parameters"] = list(params2 - params1)
+        differences["removed_parameters"] = list(params1 - params2)
+        
+        # Find changed and unchanged parameters
+        common_params = params1 & params2
+        
+        for param_name in common_params:
+            value1 = profile1.get_parameter_value(param_name)
+            value2 = profile2.get_parameter_value(param_name)
+            
+            if value1 != value2:
+                differences["changed_parameters"].append({
+                    "parameter": param_name,
+                    "old_value": value1,
+                    "new_value": value2
+                })
+            else:
+                differences["unchanged_parameters"].append(param_name)
+        
+        return differences
+    
+    def extract_validated_ui_values(self, ui_elements: Dict[str, Any]) -> Tuple[Dict[str, Any], ValidationResult]:
+        """
+        Extract validated values from UI elements using ProfileUIPopulator.
+        
+        Args:
+            ui_elements: Dictionary mapping parameter names to UI elements
+            
+        Returns:
+            Tuple[Dict[str, Any], ValidationResult]: Extracted values and validation result
+        """
+        return self.profile_ui_populator.extract_validated_field_values(ui_elements)
+    
+    def apply_visibility_conditions_to_profile(self, profile: UniversalProfile, context: Dict[str, Any]) -> None:
+        """
+        Apply visibility conditions to a profile based on context values.
+        
+        Args:
+            profile: UniversalProfile to apply visibility conditions to
+            context: Current parameter values for evaluating conditions
+        """
+        # Create a mapping of parameter names to UI elements if needed
+        # For now, we'll just validate the profile data integrity
+        self.profile_ui_populator.validate_profile_data_integrity(profile)
+    
+    def get_field_dependencies_for_parameter(self, param_name: str) -> List[str]:
+        """
+        Get field dependencies for a parameter based on visibility conditions.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            List[str]: List of parameter names this parameter depends on
+        """
+        return self.profile_ui_populator.get_field_dependencies(param_name)
+    
+    def populate_ui_from_profile_data(self, profile: UniversalProfile, ui_elements: Dict[str, Any]) -> ValidationResult:
+        """
+        Populate UI elements with values from a profile using ProfileUIPopulator.
+        
+        Args:
+            profile: UniversalProfile containing parameter values
+            ui_elements: Dictionary mapping parameter names to UI elements
+            
+        Returns:
+            ValidationResult: Result of the population operation
+        """
+        return self.profile_ui_populator.populate_ui_from_profile(profile, ui_elements)
+    
+    def _apply_parameter_processing(self, param_name: str, parsed_value: Any, raw_response: str) -> Any:
+        """
+        Apply parameter processing for clean display according to requirements.
+        
+        This method processes parameters to ensure clean display in the UI:
+        - Time parameters show only numeric values (Requirements 1.1, 1.2, 1.3)
+        - Odometer values are properly parsed and displayed (Requirements 3.1, 3.2, 3.3, 3.5)
+        - Hourmeter values are properly parsed and displayed (Requirements 4.1, 4.2, 4.3, 4.5)
+        
+        Args:
+            param_name: Name of the parameter being processed
+            parsed_value: Already parsed value from device response
+            raw_response: Raw device response for additional processing
+            
+        Returns:
+            Processed value for UI display
+        """
+        try:
+            param_name_lower = param_name.lower()
+            
+            # Time parameter names that need cleaning (Requirements 1.1, 1.2, 1.3)
+            time_parameter_names = {
+                'heartbeat_interval', 'report_interval', 'upload_interval', 'sleep_time',
+                'moving_time', 'stopped_time', 'moving_heartbeat', 'stopped_heartbeat',
+                'timeout', 'interval', 'delay', 'duration'
+            }
+            
+            # Process time parameters
+            if any(time_param in param_name_lower for time_param in time_parameter_names):
+                if isinstance(parsed_value, str):
+                    clean_value = self.parameter_processor.clean_time_parameter(parsed_value)
+                    return clean_value
+                elif isinstance(parsed_value, dict):
+                    # For complex parameters with time fields
+                    processed_dict = {}
+                    for field_name, field_value in parsed_value.items():
+                        if any(time_param in field_name.lower() for time_param in time_parameter_names):
+                            if isinstance(field_value, str):
+                                processed_dict[field_name] = self.parameter_processor.clean_time_parameter(field_value)
+                            else:
+                                processed_dict[field_name] = field_value
+                        else:
+                            processed_dict[field_name] = field_value
+                    return processed_dict
+            
+            # Process odometer parameters (Requirements 3.1, 3.2, 3.3, 3.5)
+            elif 'odometer' in param_name_lower or 'mileage' in param_name_lower:
+                if isinstance(parsed_value, str):
+                    # Use the raw response for better parsing
+                    clean_value = self.parameter_processor.process_odometer_value(raw_response)
+                    if clean_value:
+                        return clean_value
+                    else:
+                        # Fallback to parsed value if processing fails
+                        return parsed_value
+                elif isinstance(parsed_value, dict):
+                    # For complex parameters with odometer fields
+                    processed_dict = {}
+                    for field_name, field_value in parsed_value.items():
+                        if 'odometer' in field_name.lower() or 'mileage' in field_name.lower():
+                            if isinstance(field_value, str):
+                                clean_value = self.parameter_processor.process_odometer_value(raw_response)
+                                processed_dict[field_name] = clean_value if clean_value else field_value
+                            else:
+                                processed_dict[field_name] = field_value
+                        else:
+                            processed_dict[field_name] = field_value
+                    return processed_dict
+            
+            # Process hourmeter parameters (Requirements 4.1, 4.2, 4.3, 4.5)
+            elif 'hourmeter' in param_name_lower or 'acc_on' in param_name_lower or 'accont' in param_name_lower:
+                if isinstance(parsed_value, str):
+                    # Use the raw response for better parsing
+                    clean_value = self.parameter_processor.process_hourmeter_value(raw_response)
+                    if clean_value:
+                        return clean_value
+                    else:
+                        # Fallback to parsed value if processing fails
+                        return parsed_value
+                elif isinstance(parsed_value, dict):
+                    # For complex parameters with hourmeter fields
+                    processed_dict = {}
+                    for field_name, field_value in parsed_value.items():
+                        if 'hourmeter' in field_name.lower() or 'acc_on' in field_name.lower() or 'accont' in field_name.lower():
+                            if isinstance(field_value, str):
+                                clean_value = self.parameter_processor.process_hourmeter_value(raw_response)
+                                processed_dict[field_name] = clean_value if clean_value else field_value
+                            else:
+                                processed_dict[field_name] = field_value
+                        else:
+                            processed_dict[field_name] = field_value
+                    return processed_dict
+            
+            # For all other parameters, return the parsed value as-is
+            return parsed_value
+            
+        except Exception as e:
+            # Log the error and return the original parsed value
+            print(f"WARNING: Parameter processing failed for {param_name}: {e}")
+            return parsed_value
+</document_content>
+</document>
+<document index="87">
+<source>.\services\validation_service.py</source>
+<document_content>
+"""
+ValidationService - Comprehensive parameter validation with localized error messages.
+
+This service provides centralized validation for all LT32Pro device parameters,
+including range checking for numeric inputs, format validation for text inputs,
+and connection state validation.
+"""
+
+import re
+import logging
+import json
+import threading
+import asyncio
+import hashlib
+import time
+from dataclasses import dataclass, asdict
+from typing import Optional, Any, Dict, List, Callable, Union
+from datetime import datetime, timedelta
+from collections import defaultdict, deque
+from functools import lru_cache, wraps
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from services.i18n_service import I18nService
+from services.apn_security_service import APNSecurityService, SecurityContext, SecurityLevel, AuditAction
+
+
+@dataclass
+class ValidationResult:
+    """Result of a validation operation."""
+    is_valid: bool
+    error_message: str = ""
+    error_code: str = ""
+    suggested_value: Optional[str] = None
+    warning_message: str = ""
+    validation_level: str = "error"  # "error", "warning", "info"
+
+
+@dataclass
+class ValidationAttempt:
+    """Detailed information about a validation attempt."""
+    timestamp: datetime
+    parameter_name: str
+    value: str  # Masked for sensitive data
+    validation_type: str
+    source: str  # 'ui', 'command', 'api', 'profile'
+    result: ValidationResult
+    execution_time_ms: float
+    context: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class ValidationMetrics:
+    """Aggregated validation metrics for monitoring."""
+    total_attempts: int = 0
+    successful_validations: int = 0
+    failed_validations: int = 0
+    success_rate: float = 0.0
+    average_execution_time_ms: float = 0.0
+    common_errors: Dict[str, int] = None
+    parameter_failure_rates: Dict[str, float] = None
+    cache_hit_rate: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    async_validations: int = 0
+    timeout_validations: int = 0
+    
+    def __post_init__(self):
+        if self.common_errors is None:
+            self.common_errors = {}
+        if self.parameter_failure_rates is None:
+            self.parameter_failure_rates = {}
+
+
+@dataclass
+class ValidationCacheEntry:
+    """Cache entry for validation results."""
+    result: ValidationResult
+    timestamp: datetime
+    access_count: int = 0
+    last_accessed: datetime = None
+    
+    def __post_init__(self):
+        if self.last_accessed is None:
+            self.last_accessed = self.timestamp
+
+
+@dataclass
+class PerformanceConfig:
+    """Configuration for validation performance optimizations."""
+    cache_enabled: bool = True
+    cache_max_size: int = 1000
+    cache_ttl_seconds: int = 300  # 5 minutes
+    async_enabled: bool = True
+    async_threshold_ms: int = 50
+    timeout_seconds: int = 5
+    regex_optimization: bool = True
+    batch_validation: bool = True
+    performance_monitoring: bool = True
+
+
+class ValidationService:
+    """Handles comprehensive parameter validation with localized error messages and performance optimizations."""
+    
+    def __init__(self, i18n_service: I18nService, performance_config: Optional[PerformanceConfig] = None):
+        self.i18n = i18n_service
+        self.logger = logging.getLogger(__name__)
+        
+        # Set up logging handlers
+        import sys
+        if not getattr(sys, 'frozen', False): # Only set up file handlers if not running as a PyInstaller executable
+            try:
+                self.debug_file_handler = logging.FileHandler('validation_debug.log')
+                self.debug_file_handler.setLevel(logging.DEBUG)
+                self.debug_file_handler.setFormatter(
+                    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                )
+                self.logger.addHandler(self.debug_file_handler)
+                
+                self.error_file_handler = logging.FileHandler('validation_errors.log')
+                self.error_file_handler.setLevel(logging.ERROR)
+                self.error_file_handler.setFormatter(
+                    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                )
+                self.logger.addHandler(self.error_file_handler)
+                
+                # Add metrics file handler
+                self.metrics_file_handler = logging.FileHandler('validation_metrics.log')
+                self.metrics_file_handler.setLevel(logging.INFO)
+                self.metrics_file_handler.setFormatter(
+                    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                )
+                self.logger.addHandler(self.metrics_file_handler)
+                
+            except Exception as e:
+                self.logger.warning(f"Could not set up validation log files: {str(e)}")
+        else:
+            self.logger.info("Running as PyInstaller executable, file logging for validation disabled.")
+        
+        # Performance configuration
+        self._perf_config = performance_config or PerformanceConfig()
+        
+        # Security service integration
+        self.security_service = APNSecurityService()
+        self._security_enabled = True
+        
+        # Enhanced logging and debugging
+        self._debug_mode = False
+        self._validation_attempts = deque(maxlen=1000)  # Store last 1000 attempts
+        self._metrics = ValidationMetrics()
+        self._error_patterns = defaultdict(int)
+        self._parameter_stats = defaultdict(lambda: {'attempts': 0, 'failures': 0})
+        self._lock = threading.Lock()
+        
+        # Performance monitoring
+        self._performance_thresholds = {
+            'slow_validation_ms': 100,
+            'very_slow_validation_ms': 500
+        }
+        
+        # Performance optimizations
+        self._validation_cache: Dict[str, ValidationCacheEntry] = {}
+        self._cache_lock = threading.RLock()
+        self._compiled_patterns: Dict[str, re.Pattern] = {}
+        self._pattern_lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="validation")
+        self._async_loop = None
+        
+        # Performance monitoring dashboard data
+        self._performance_dashboard = {
+            'cache_stats': defaultdict(int),
+            'async_stats': defaultdict(int),
+            'timeout_stats': defaultdict(int),
+            'pattern_performance': defaultdict(list),
+            'validation_timeline': deque(maxlen=1000)
+        }
+        
+        # Initialize validation components
+        self._init_validation_rules()
+        self._init_apn_validation_patterns()
+        self._init_debug_logging()
+        self._init_performance_optimizations()
+    
+    def _init_validation_rules(self):
+        """Initialize validation rules for all parameter types from the specification."""
+        self.validation_rules = {
+            # Network Parameters
+            'apn': {
+                'type': 'apn',
+                'max_length': 50,
+                'required': True,
+                'pattern': r'^(?!.*\.\.+)(?!^\.)(?!.*\.$)(?:(?!.*\.([a-zA-Z])\.\1\.)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z]{2,}|(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:/.*)?|[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)$'
+            },
+            'apn_user': {
+                'type': 'apn_credential',
+                'max_length': 30,
+                'min_length': 0,
+                'required': False
+            },
+            'apn_password': {
+                'type': 'apn_credential',
+                'max_length': 30,
+                'min_length': 0,
+                'required': False
+            },
+            'server_address': {
+                'type': 'text',
+                'max_length': 100,
+                'required': True,
+                'pattern': r'^(?!.*\.\.)((?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|[\w\.-]+\.[a-zA-Z]{2,}|https?://[\w\.-]+.*)$'
+            },
+            'server_port': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65535,
+                'integer': True
+            },
+            
+            # Time Parameters
+            'moving_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65535,
+                'integer': True
+            },
+            'stopped_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65535,
+                'integer': True
+            },
+            'moving_heartbeat': {
+                'type': 'numeric',
+                'min': 30,
+                'max': 86400,
+                'integer': True
+            },
+            'stopped_heartbeat': {
+                'type': 'numeric',
+                'min': 30,
+                'max': 86400,
+                'integer': True
+            },
+            
+            # Service Parameters
+            'protocol': {
+                'type': 'dropdown',
+                'allowed_values': ['GT06 (0x60)', 'CRX3 (0x22)', 'GT06 (0x12)']
+            },
+            'tcp_ack': {
+                'type': 'dropdown',
+                'allowed_values': ['Enabled', 'Disabled']
+            },
+            
+            # Ignition Parameters
+            'ignition_mode': {
+                'type': 'dropdown',
+                'allowed_values': ['F├¡sica (Physical)', 'Virtual por aceler├┤metro (Virtual by accelerometer)', 'Virtual por bateria (Virtual by battery)']
+            },
+            'on_voltage': {
+                'type': 'numeric',
+                'min': 6,
+                'max': 60,
+                'integer': True
+            },
+            'off_voltage': {
+                'type': 'numeric',
+                'min': 6,
+                'max': 60,
+                'integer': True
+            },
+            
+            # Speed Parameters
+            'speed_detection_time': {
+                'type': 'numeric',
+                'min': 5,
+                'max': 600,
+                'integer': True
+            },
+            'speed_limit': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 255,
+                'integer': True
+            },
+            'speed_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['Apenas GPRS', 'GPRS+SMS']
+            },
+            
+            # Power Saving Parameters
+            'sleep_mode': {
+                'type': 'dropdown',
+                'allowed_values': ['Desabilitado (Disabled)', 'Sleep (Habilitado)', 'Deep Sleep (Ultra-baixo)']
+            },
+            'sleep_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 1440,
+                'integer': True
+            },
+            
+            # Angle Parameters
+            'angle_min_speed': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 20,
+                'integer': True
+            },
+            'angle_variation': {
+                'type': 'numeric',
+                'min': 5,
+                'max': 90,
+                'integer': True
+            },
+            
+            # Battery Alert Parameters
+            'power_detection_time': {
+                'type': 'numeric',
+                'min': 2,
+                'max': 60,
+                'integer': True
+            },
+            'min_charge_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 3600,
+                'integer': True
+            },
+            'battery_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['Apenas GPRS', 'GPRS+SMS']
+            },
+            
+            # Vibration Sensor Parameters
+            'vibration_level': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 6,
+                'integer': True
+            },
+            
+            # Jammer Detection Parameters
+            'jammer_confirmation_time': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 1800,
+                'integer': True
+            },
+            'jammer_speed_limit': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 255,
+                'integer': True
+            },
+            'jammer_output_operation': {
+                'type': 'dropdown',
+                'allowed_values': ['Sem A├º├úo', 'Ativar e Manter', 'Ativar e Desativar com Jammer']
+            },
+            
+            # Miscellaneous Parameters
+            'odometer': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 999999999,
+                'integer': True
+            },
+            'hourmeter': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 999999999,
+                'integer': True
+            },
+            
+            # Legacy parameters for backward compatibility
+            'vibration': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 255,
+                'integer': True
+            },
+            'sensitivity': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 10,
+                'integer': True
+            },
+            'timer_ign_on': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65500,
+                'integer': True
+            },
+            'timer_ign_off': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 65500,
+                'integer': True
+            },
+            'heartbeat_ign_on': {
+                'type': 'numeric',
+                'min': 60,
+                'max': 300,
+                'integer': True
+            },
+            'heartbeat_ign_off': {
+                'type': 'numeric',
+                'min': 60,
+                'max': 300,
+                'integer': True
+            },
+            'speed_time': {
+                'type': 'numeric',
+                'min': 5,
+                'max': 600,
+                'integer': True
+            },
+            'angle_speed': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 20,
+                'integer': True
+            },
+            'angle_value': {
+                'type': 'numeric',
+                'min': 5,
+                'max': 90,
+                'integer': True
+            },
+            'blind_speed': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 20,
+                'integer': True
+            },
+            'defense_time': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 60,
+                'integer': True
+            },
+            'moving_radius': {
+                'type': 'numeric',
+                'min': 100,
+                'max': 1000,
+                'integer': True
+            },
+            'jammer_time': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 60,
+                'integer': True
+            },
+            'jammer_signal': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 100,
+                'integer': True
+            },
+            'jammer_freq': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 10,
+                'integer': True
+            },
+            'acc_on_voltage': {
+                'type': 'numeric',
+                'min': 6,
+                'max': 60,
+                'integer': True
+            },
+            'acc_off_voltage': {
+                'type': 'numeric',
+                'min': 6,
+                'max': 60,
+                'integer': True
+            },
+            'timezone_hours': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 12,
+                'integer': True
+            },
+            'timezone_minutes': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 59,
+                'integer': True
+            },
+            
+            # Text parameters with format validation
+            'apn_server': {
+                'type': 'text',
+                'max_length': 50,
+                'required': True,
+                'pattern': r'^((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))$'
+            },
+            'server_ip': {
+                'type': 'text',
+                'max_length': 100,
+                'required': True,
+                'pattern': r'^((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))$'
+            },
+            'server_domain': {
+                'type': 'domain',
+                'max_length': 50,
+                'required': True
+            },
+            'phone_number': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': True
+            },
+            
+            # Dropdown parameters with allowed values
+            'heartbeat_interval': {
+                'type': 'dropdown',
+                'allowed_values': ['30s', '1min', '5min', '10min', '30min', '1hr', '2hr', '6hr', '12hr', '24hr']
+            },
+            'curve_sensor': {
+                'type': 'dropdown',
+                'allowed_values': ['Enabled', 'Disabled', 'Auto']
+            },
+            'protocol_type': {
+                'type': 'dropdown',
+                'allowed_values': ['TCP', 'UDP']
+            },
+            'network_type': {
+                'type': 'dropdown',
+                'allowed_values': ['AUTO', '4G', '2G']
+            },
+            'sleep_mode': {
+                'type': 'dropdown',
+                'allowed_values': ['Disabled', 'Sleep', 'Deep Sleep']
+            },
+            'alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'gt06_protocol': {
+                'type': 'dropdown',
+                'allowed_values': ['GT06-0x60', 'GT06-0x12', 'CRX3']
+            },
+            'relay_state': {
+                'type': 'dropdown',
+                'allowed_values': ['OFF', 'ON']
+            },
+            
+            # Radio button parameters
+            'lock_type': {
+                'type': 'radio',
+                'allowed_values': ['PIN', 'Card']
+            },
+            'ignition_type': {
+                'type': 'radio',
+                'allowed_values': ['Digital', 'Analog']
+            },
+            'transmission_mode': {
+                'type': 'radio',
+                'allowed_values': ['TCP', 'UDP']
+            },
+            'timezone_direction': {
+                'type': 'radio',
+                'allowed_values': ['E', 'W']
+            },
+            'tcp_ack_config': {
+                'type': 'radio',
+                'allowed_values': ['Enabled', 'Disabled']
+            },
+            
+            # Additional numeric parameters for comprehensive coverage
+            'vibration_window': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 60,
+                'integer': True
+            },
+            'vibration_threshold': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 100,
+                'integer': True
+            },
+            'power_alert_t1': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 60,
+                'integer': True
+            },
+            'power_alert_t2': {
+                'type': 'numeric',
+                'min': 1,
+                'max': 60,
+                'integer': True
+            },
+            'sos_phone1': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'sos_phone2': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'sos_phone3': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'center_phone1': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'center_phone2': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'center_phone3': {
+                'type': 'phone',
+                'max_length': 15,
+                'required': False
+            },
+            'password': {
+                'type': 'text',
+                'min_length': 4,
+                'max_length': 20,
+                'required': False
+            },
+            
+            # Additional dropdown parameters
+            'power_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'battery_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'movement_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'acc_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'acc_off_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'jammer_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'speed_alert_type': {
+                'type': 'dropdown',
+                'allowed_values': ['GPRS', 'SMS+GPRS']
+            },
+            'gps_source_type': {
+                'type': 'dropdown',
+                'allowed_values': ['Disabled', 'Enabled']
+            },
+            'parameter_lock_state': {
+                'type': 'dropdown',
+                'allowed_values': ['Unlock', 'Lock']
+            },
+            
+            # Additional parameters from design document
+            'firmware_version': {
+                'type': 'text',
+                'max_length': 20,
+                'required': False
+            },
+            'signal_strength': {
+                'type': 'numeric',
+                'min': 0,
+                'max': 100,
+                'integer': True
+            },
+            'device_status': {
+                'type': 'text',
+                'max_length': 50,
+                'required': False
+            },
+            'imei': {
+                'type': 'text',
+                'min_length': 15,
+                'max_length': 15,
+                'required': False,
+                'pattern': r'^\d{15}$'
+            },
+            'iccid': {
+                'type': 'text',
+                'min_length': 19,
+                'max_length': 20,
+                'required': False,
+                'pattern': r'^\d{19,20}$'
+            },
+            'imsi': {
+                'type': 'text',
+                'min_length': 15,
+                'max_length': 15,
+                'required': False,
+                'pattern': r'^\d{15}$'
+            }
+        }
+    
+    def _init_apn_validation_patterns(self):
+        """Initialize enhanced APN validation patterns."""
+        # Domain name pattern - prevents consecutive dots and malformed domains
+        self.apn_domain_pattern = r'^(?!.*\.\.+)(?!^\.)(?!.*\.$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$'
+        
+        # IP address pattern - validates IPv4 addresses
+        self.apn_ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        
+        # URL pattern - validates HTTP/HTTPS URLs
+        self.apn_url_pattern = r'^https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:/.*)?$'
+        
+        # Simple APN name pattern - for carrier-specific APNs without dots
+        self.apn_simple_pattern = r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
+        
+        # Combined pattern for all APN formats
+        self.apn_combined_pattern = f'({self.apn_domain_pattern[1:-1]}|{self.apn_ip_pattern[1:-1]}|{self.apn_url_pattern[1:-1]}|{self.apn_simple_pattern[1:-1]})'
+        
+        # APN credential pattern - allows alphanumeric, special chars commonly used in credentials
+        self.apn_credential_pattern = r'^[a-zA-Z0-9@._-]*$'
+        
+        # Common carrier APN patterns for suggestions
+        self.common_carrier_apns = {
+            'vivo': ['zap.vivo.com.br', 'vivo.br'],
+            'claro': ['claro.com.br', 'bandalarga.claro.com.br'],
+            'tim': ['tim.br', 'timbrasil.br'],
+            'oi': ['gprs.oi.com.br', 'oi.com.br'],
+            'allcom': ['allcom.br']
+        }
+    
+    def validate_parameter(self, param_name: str, value: Any, context: Optional[Dict[str, Any]] = None, 
+                         source: str = 'unknown', security_context: Optional[SecurityContext] = None) -> ValidationResult:
+        """
+        Validate a parameter value according to its defined rules with security enhancements.
+        
+        Args:
+            param_name: Name of the parameter to validate
+            value: Value to validate
+            context: Optional context with other parameter values for conditional validation
+            source: Source of the validation request ('ui', 'command', 'api', 'profile')
+            security_context: Security context for audit logging and rate limiting
+            
+        Returns:
+            ValidationResult with validation status and error details
+        """
+        start_time = datetime.now()
+        result = None
+        param_type = 'unknown'
+
+        # Short-circuit: if speed alert is disabled, skip validation for speed fields
+        try:
+            if param_name in ('speed_detection_time', 'speed_limit') and context:
+                # Context may include either a flattened flag or a grouped dict
+                enabled = None
+                if isinstance(context, dict):
+                    if 'speed_alert_enabled' in context:
+                        enabled = context.get('speed_alert_enabled')
+                    elif 'speed_alert' in context and isinstance(context.get('speed_alert'), dict):
+                        enabled = context.get('speed_alert', {}).get('enabled')
+                # Treat common false-ish values
+                if enabled is False or (isinstance(enabled, str) and enabled.lower() in ('false', 'off', '0', 'no')):
+                    return ValidationResult(is_valid=True)
+        except Exception:
+            # If any error occurs while checking context, fall back to normal validation
+            pass
+        
+        # Create default security context if not provided
+        if security_context is None:
+            security_context = SecurityContext(
+                user_id="system",
+                session_id="default",
+                ip_address="127.0.0.1",
+                user_agent="ValidationService",
+                timestamp=start_time,
+                security_level=SecurityLevel.MEDIUM,
+                permissions=[]
+            )
+        
+        # Security enhancements
+        if self._security_enabled:
+            # 1. Rate limiting check
+            rate_limit_id = f"{security_context.ip_address}:{security_context.user_id}"
+            rate_allowed, rate_error = self.security_service.check_rate_limit(
+                rate_limit_id, "validation", security_context
+            )
+            if not rate_allowed:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=rate_error,
+                    error_code='RATE_LIMITED'
+                )
+            
+            # 2. Input sanitization for APN-related fields
+            if param_name in ['apn', 'apn_user', 'apn_password'] and isinstance(value, str):
+                field_type = 'apn' if param_name == 'apn' else 'username' if param_name == 'apn_user' else 'password'
+                sanitized_value, sanitization_issues = self.security_service.sanitize_apn_input(value, field_type)
+                
+                if sanitization_issues:
+                    # Log sanitization issues
+                    self.security_service.audit_log(
+                        AuditAction.SECURITY_VIOLATION,
+                        security_context,
+                        "input_sanitization",
+                        param_name,
+                        {"original_value_length": len(value), "issues": sanitization_issues},
+                        True,
+                        f"Input sanitization applied: {', '.join(sanitization_issues)}"
+                    )
+                
+                # Use sanitized value for validation
+                value = sanitized_value
+            
+            # 3. Validation integrity check
+            integrity_ok, integrity_issues = self.security_service.verify_validation_integrity(self.validation_rules)
+            if not integrity_ok:
+                self.security_service.audit_log(
+                    AuditAction.SECURITY_VIOLATION,
+                    security_context,
+                    "validation_integrity",
+                    "validation_rules",
+                    {"integrity_issues": integrity_issues},
+                    False,
+                    f"Validation integrity compromised: {', '.join(integrity_issues)}"
+                )
+                # Continue with validation but log the issue
+        
+        # Check cache first for performance optimization
+        cache_key = self._generate_cache_key(param_name, value, context)
+        cached_result = self._get_cached_validation_result(cache_key)
+        if cached_result:
+            # Update metrics for cached result
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            self.log_validation_attempt(param_name, str(value), 'cached', source, cached_result, execution_time, context)
+            return cached_result
+        
+        try:
+            if param_name not in self.validation_rules:
+                result = ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_unknown_parameter', 'Unknown parameter: {param_name}').format(param_name=param_name),
+                    error_code='UNKNOWN_PARAMETER'
+                )
+                param_type = 'unknown_parameter'
+                return result
+            
+            rules = self.validation_rules[param_name]
+            param_type = rules['type']
+            
+            # Get the translated display name for the parameter
+            display_name = self.i18n.get(param_name, param_name)
+            
+            # For server_ip, use the server_url_ip translation
+            if param_name == 'server_ip':
+                display_name = self.i18n.get('server_url_ip', 'URL/IP')
+            elif param_name == 'server_address':
+                display_name = self.i18n.get('server_url_ip', 'URL/IP')
+            
+            # Handle empty values
+            if value is None or (isinstance(value, str) and value.strip() == ''):
+                if rules.get('required', False):
+                    result = ValidationResult(
+                        is_valid=False,
+                        error_message=self.i18n.get('validation_required_field', '{param_name} is required and cannot be empty').format(param_name=display_name),
+                        error_code='REQUIRED_FIELD'
+                    )
+                else:
+                    result = ValidationResult(is_valid=True)
+                return result
+            
+            # Check conditional validation rules
+            conditional_result = self._validate_conditional_rules(param_name, value, context)
+            if conditional_result is not None:
+                result = conditional_result
+                return result
+            
+            # Type-specific validation
+            if param_type == 'numeric':
+                result = self._validate_numeric(param_name, value, rules)
+            elif param_type == 'text':
+                result = self._validate_text(param_name, value, rules)
+            elif param_type == 'apn':
+                result = self._validate_apn(param_name, value, rules, context)
+            elif param_type == 'apn_credential':
+                result = self._validate_apn_credential(param_name, value, rules)
+            elif param_type == 'ip_address':
+                result = self._validate_ip_address(param_name, value)
+            elif param_type == 'domain':
+                result = self._validate_domain(param_name, value, rules)
+            elif param_type == 'phone':
+                result = self._validate_phone(param_name, value, rules)
+            elif param_type == 'dropdown':
+                result = self._validate_dropdown(param_name, value, rules)
+            elif param_type == 'radio':
+                result = self._validate_radio(param_name, value, rules)
+            else:
+                result = ValidationResult(is_valid=True)
+            
+            # Cache the result for future use
+            if result is not None:
+                self._cache_validation_result(cache_key, result)
+            
+            return result
+            
+        finally:
+            # Always log the validation attempt, regardless of the path taken
+            if result is not None:
+                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                self.log_validation_attempt(
+                    param_name, str(value), param_type, source, result, execution_time, context
+                )
+                
+                # Security audit logging
+                if self._security_enabled and security_context:
+                    self.security_service.audit_log(
+                        AuditAction.VALIDATION_ATTEMPT,
+                        security_context,
+                        "parameter_validation",
+                        param_name,
+                        {
+                            "param_type": param_type,
+                            "validation_source": source,
+                            "execution_time_ms": execution_time,
+                            "has_context": context is not None
+                        },
+                        result.is_valid,
+                        result.error_message if not result.is_valid else ""
+                    )
+    
+    def validate_parameter_realtime(self, param_name: str, value: Any, context: Optional[Dict[str, Any]] = None, 
+                                  source: str = 'ui', security_context: Optional[SecurityContext] = None) -> ValidationResult:
+        """
+        Validate a parameter value with real-time feedback optimizations and security enhancements.
+        
+        This method provides immediate validation feedback suitable for real-time UI updates.
+        It includes progressive validation levels and user-friendly error messages.
+        
+        Args:
+            param_name: Name of the parameter to validate
+            value: Value to validate
+            context: Optional context with other parameter values for conditional validation
+            security_context: Security context for audit logging and rate limiting
+            
+        Returns:
+            ValidationResult with validation status and detailed feedback
+        """
+        # Delegate to main validation method with security context
+        return self.validate_parameter(param_name, value, context, source, security_context)
+        # Use the standard validation but with enhanced feedback
+        result = self.validate_parameter(param_name, value, context, source)
+        
+        # Add progressive validation feedback
+        if not result.is_valid and result.error_code:
+            result = self._enhance_validation_feedback(param_name, value, result)
+        
+        return result
+    
+    def _enhance_validation_feedback(self, param_name: str, value: Any, result: ValidationResult) -> ValidationResult:
+        """
+        Enhance validation result with more detailed feedback for real-time validation.
+        
+        Args:
+            param_name: Name of the parameter
+            value: Value being validated
+            result: Original validation result
+            
+        Returns:
+            Enhanced validation result
+        """
+        rules = self.validation_rules.get(param_name, {})
+        param_type = rules.get('type', 'text')
+        display_name = self.i18n.get(param_name, param_name)
+        
+        # Enhance numeric validation feedback
+        if param_type == 'numeric' and result.error_code in ['RANGE_ERROR', 'MIN_VALUE', 'MAX_VALUE']:
+            min_val = rules.get('min')
+            max_val = rules.get('max')
+            
+            try:
+                num_value = float(value) if value else 0
+                
+                if min_val is not None and max_val is not None:
+                    # Provide contextual feedback based on how far off the value is
+                    if num_value < min_val:
+                        diff = min_val - num_value
+                        if diff <= (max_val - min_val) * 0.1:  # Within 10% of range
+                            result.validation_level = "warning"
+                            result.warning_message = self.i18n.get(
+                                'validation_close_to_range', 
+                                '{param_name} is close to valid range. Minimum is {min_val}'
+                            ).format(param_name=display_name, constraint=f"Minimum is {min_val}")
+                    elif num_value > max_val:
+                        diff = num_value - max_val
+                        if diff <= (max_val - min_val) * 0.1:  # Within 10% of range
+                            result.validation_level = "warning"
+                            result.warning_message = self.i18n.get(
+                                'validation_close_to_range', 
+                                '{param_name} is close to valid range. Maximum is {max_val}'
+                            ).format(param_name=display_name, constraint=f"Maximum is {max_val}")
+                            
+            except (ValueError, TypeError):
+                pass
+        
+        # Enhance text validation feedback
+        elif param_type == 'text' and result.error_code in ['MIN_LENGTH', 'MAX_LENGTH']:
+            text_value = str(value) if value else ""
+            min_length = rules.get('min_length')
+            max_length = rules.get('max_length')
+            
+            if min_length and len(text_value) < min_length:
+                remaining = min_length - len(text_value)
+                if remaining <= 3:  # Close to minimum length
+                    result.validation_level = "warning"
+                    result.warning_message = self.i18n.get(
+                        'validation_characters_remaining',
+                        '{remaining} more characters needed for {param_name}'
+                    ).format(remaining=remaining, param_name=display_name)
+        
+        return result
+    
+    def validate_parameter_group(self, parameters: Dict[str, Any]) -> Dict[str, ValidationResult]:
+        """
+        Validate a group of parameters with conditional validation support.
+        
+        Args:
+            parameters: Dictionary of parameter names and values
+            
+        Returns:
+            Dictionary of parameter names and their validation results
+        """
+        results = {}
+        
+        for param_name, value in parameters.items():
+            results[param_name] = self.validate_parameter(param_name, value, parameters)
+        
+        return results
+    
+    def _validate_conditional_rules(self, param_name: str, value: Any, context: Optional[Dict[str, Any]]) -> Optional[ValidationResult]:
+        """
+        Validate conditional rules based on other parameter values.
+        
+        Args:
+            param_name: Name of the parameter being validated
+            value: Value being validated
+            context: Context with other parameter values
+            
+        Returns:
+            ValidationResult for conditional validation, or None to continue with normal validation
+        """
+        if not context:
+            return None
+        
+        # Conditional validation for voltage fields based on ignition mode
+        if param_name in ['on_voltage', 'off_voltage']:
+            ignition_mode = context.get('ignition_mode')
+            if ignition_mode and ignition_mode != 'Virtual por bateria (Virtual by battery)':
+                # These fields should not be validated if ignition mode is not battery
+                return ValidationResult(is_valid=True)
+        
+        # Conditional validation for angle parameters based on angle report enabled
+        if param_name in ['angle_min_speed', 'angle_variation']:
+            angle_enabled = context.get('angle_enabled')
+            if angle_enabled is False:  # Explicitly check for False
+                # These fields should not be validated if angle report is disabled
+                return ValidationResult(is_valid=True)
+        
+        # Conditional validation for speed alert parameters
+        if param_name in ['speed_detection_time', 'speed_limit', 'speed_alert_type']:
+            speed_enabled = context.get('speed_enabled')
+            if speed_enabled is False:  # Explicitly check for False
+                # These fields should not be validated if speed alert is disabled
+                return ValidationResult(is_valid=True)
+        
+        # Conditional validation for power alert parameters
+        if param_name in ['power_detection_time', 'min_charge_time', 'battery_alert_type']:
+            power_enabled = context.get('power_enabled')
+            if power_enabled is False:  # Explicitly check for False
+                # These fields should not be validated if power alert is disabled
+                return ValidationResult(is_valid=True)
+        
+        # Conditional validation for jammer parameters
+        if param_name in ['jammer_confirmation_time', 'jammer_speed_limit', 'jammer_output_operation']:
+            jammer_enabled = context.get('jammer_enabled')
+            if jammer_enabled is False:  # Explicitly check for False
+                # These fields should not be validated if jammer detection is disabled
+                return ValidationResult(is_valid=True)
+        
+        return None  # Continue with normal validation
+    
+    def _validate_numeric(self, param_name: str, value: Any, rules: Dict) -> ValidationResult:
+        # Get the translated display name for the parameter
+        display_name = self.i18n.get(param_name, param_name)
+        
+        # For server_port, use the server_port translation
+        if param_name == 'server_port':
+            display_name = self.i18n.get('server_port', 'Porta do Servidor')
+        """Validate numeric parameters with range checking."""
+        try:
+            if isinstance(value, str):
+                if rules.get('integer', False):
+                    num_value = int(value)
+                else:
+                    num_value = float(value)
+            else:
+                num_value = value
+                
+            # Check if integer is required
+            if rules.get('integer', False) and not isinstance(num_value, int):
+                if isinstance(num_value, float) and not num_value.is_integer():
+                    return ValidationResult(
+                        is_valid=False,
+                        error_message=self.i18n.get('validation_integer_required', '{param_name} must be an integer value').format(param_name=display_name),
+                        error_code='INTEGER_REQUIRED'
+                    )
+                num_value = int(num_value)
+            
+            # Check range
+            min_val = rules.get('min')
+            max_val = rules.get('max')
+            
+            if min_val is not None and num_value < min_val:
+                # Use more specific range error message if both min and max are specified
+                if max_val is not None:
+                    return ValidationResult(
+                        is_valid=False,
+                        error_message=self.i18n.get('validation_range_error', '{param_name} must be between {min_val} and {max_val}').format(
+                            param_name=display_name, min_val=min_val, max_val=max_val
+                        ),
+                        error_code='RANGE_ERROR',
+                        suggested_value=str(min_val)
+                    )
+                else:
+                    return ValidationResult(
+                        is_valid=False,
+                        error_message=self.i18n.get('validation_min_value', '{param_name} must be at least {min_val}').format(
+                            param_name=display_name, min_val=min_val
+                        ),
+                        error_code='MIN_VALUE',
+                        suggested_value=str(min_val)
+                    )
+            
+            if max_val is not None and num_value > max_val:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_max_value', '{param_name} must be at most {max_val}').format(
+                        param_name=display_name, max_val=max_val
+                    ),
+                    error_code='MAX_VALUE',
+                    suggested_value=str(max_val)
+                )
+            
+            # Check allowed values (for specific numeric constraints)
+            allowed_values = rules.get('allowed_values')
+            if allowed_values and num_value not in allowed_values:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_not_in_allowed_values', '{param_name} must be one of: {allowed_values}').format(
+                        param_name=display_name, 
+                        allowed_values=", ".join(map(str, allowed_values))
+                    ),
+                    error_code='NOT_IN_ALLOWED_VALUES'
+                )
+            
+            return ValidationResult(is_valid=True)
+            
+        except (ValueError, TypeError):
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_numeric_required', '{param_name} must be a numeric value').format(param_name=display_name),
+                error_code='NUMERIC_REQUIRED'
+            )
+    
+    def _validate_text(self, param_name: str, value: Any, rules: Dict) -> ValidationResult:
+        # Get the translated display name for the parameter
+        display_name = self.i18n.get(param_name, param_name)
+        
+        # For server_ip, use the server_url_ip translation
+        if param_name == 'server_ip':
+            display_name = self.i18n.get('server_url_ip', 'URL/IP')
+        """Validate text parameters with length and pattern checking."""
+        if not isinstance(value, str):
+            value = str(value)
+        
+        # Check minimum length
+        min_length = rules.get('min_length')
+        if min_length and len(value) < min_length:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_min_length', '{param_name} must be at least {min_length} characters').format(
+                    param_name=display_name, 
+                    min_length=min_length
+                ),
+                error_code='MIN_LENGTH'
+            )
+        
+        # Check maximum length
+        max_length = rules.get('max_length')
+        if max_length and len(value) > max_length:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_max_length', '{param_name} must be at most {max_length} characters').format(
+                    param_name=param_name, 
+                    max_length=max_length
+                ),
+                error_code='MAX_LENGTH'
+            )
+        
+        # Check pattern
+        pattern = rules.get('pattern')
+        if pattern and not re.match(pattern, value):
+            # Use specific error messages for known patterns
+            if param_name == 'imei':
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_imei', '{param_name} must be exactly 15 digits').format(param_name=display_name),
+                    error_code='INVALID_IMEI'
+                )
+            elif param_name == 'iccid':
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_iccid', '{param_name} must be 19-20 digits').format(param_name=display_name),
+                    error_code='INVALID_ICCID'
+                )
+            elif param_name == 'imsi':
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_imsi', '{param_name} must be exactly 15 digits').format(param_name=display_name),
+                    error_code='INVALID_IMSI'
+                )
+            elif param_name in ['apn', 'apn_server']:
+                # Use enhanced APN validation
+                apn_result = self._validate_apn_format(value)
+                if not apn_result.is_valid:
+                    suggestions = self._get_apn_suggestions(value)
+                    error_message = self.i18n.get('validation_invalid_apn', '{param_name} deve ser um nome de host ou endere├ºo IP v├ílido').format(param_name=display_name)
+                    if suggestions:
+                        error_message += f". Sugest├Áes: {', '.join(suggestions[:3])}"
+                    
+                    return ValidationResult(
+                        is_valid=False,
+                        error_message=error_message,
+                        error_code='INVALID_APN'
+                    )
+            elif param_name in ['server_ip', 'server_address']:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_server_url_ip', '{param_name} deve ser uma URL ou endere├ºo IP v├ílido').format(param_name=display_name),
+                    error_code='INVALID_SERVER_URL_IP'
+                )
+            else:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_format', '{param_name} has an invalid format').format(param_name=display_name),
+                    error_code='INVALID_FORMAT'
+                )
+        
+        return ValidationResult(is_valid=True)
+    
+    def _validate_ip_address(self, param_name: str, value: str) -> ValidationResult:
+        """Validate IP address format using optimized compiled pattern."""
+        ip_pattern = self._get_compiled_pattern('ip_address')
+        
+        # Use compiled pattern if available, otherwise fall back to regex
+        if ip_pattern:
+            is_valid = bool(ip_pattern.match(value))
+        else:
+            ip_pattern_str = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+            is_valid = bool(re.match(ip_pattern_str, value))
+        
+        if not is_valid:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_ip', '{param_name} must be a valid IP address (e.g. 192.168.1.1)').format(param_name=param_name),
+                error_code='INVALID_IP'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def _validate_domain(self, param_name: str, value: str, rules: Dict) -> ValidationResult:
+        """Validate domain name format using optimized compiled pattern."""
+        domain_pattern = self._get_compiled_pattern('domain')
+        
+        # Use compiled pattern if available, otherwise fall back to regex
+        if domain_pattern:
+            is_valid = bool(domain_pattern.match(value))
+        else:
+            domain_pattern_str = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
+            is_valid = bool(re.match(domain_pattern_str, value))
+        
+        if not is_valid:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_domain', '{param_name} must be a valid domain name (e.g. example.com)').format(param_name=param_name),
+                error_code='INVALID_DOMAIN'
+            )
+        
+        max_length = rules.get('max_length', 253)
+        if len(value) > max_length:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_max_length', '{param_name} must be at most {max_length} characters').format(
+                    param_name=param_name, 
+                    max_length=max_length
+                ),
+                error_code='MAX_LENGTH'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def _validate_phone(self, param_name: str, value: str, rules: Dict) -> ValidationResult:
+        """Validate phone number format using optimized pattern matching."""
+        # First check if the format looks like a phone number using compiled pattern
+        phone_pattern = self._get_compiled_pattern('phone')
+        if phone_pattern and not phone_pattern.match(value):
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_phone', '{param_name} must contain only digits and common separators').format(param_name=param_name),
+                error_code='INVALID_PHONE'
+            )
+        
+        # Remove common phone number separators
+        clean_phone = re.sub(r'[\s\-\(\)\+]', '', value)
+        
+        # Check if it contains only digits
+        if not clean_phone.isdigit():
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_phone', '{param_name} must contain only digits').format(param_name=param_name),
+                error_code='INVALID_PHONE'
+            )
+        
+        # Check length
+        max_length = rules.get('max_length', 15)
+        if len(clean_phone) > max_length:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_phone_too_long', '{param_name} must be at most {max_length} digits').format(
+                    param_name=param_name,
+                    max_length=max_length
+                ),
+                error_code='PHONE_TOO_LONG'
+            )
+        
+        if len(clean_phone) < 7:  # Minimum reasonable phone number length
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_phone_too_short', '{param_name} must be at least 7 digits').format(param_name=param_name),
+                error_code='PHONE_TOO_SHORT'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def _validate_dropdown(self, param_name: str, value: str, rules: Dict) -> ValidationResult:
+        """Validate dropdown selection."""
+        allowed_values = rules.get('allowed_values', [])
+        
+        if value not in allowed_values:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_selection', '{param_name} must be one of: {allowed_values}').format(
+                    param_name=param_name,
+                    allowed_values=", ".join(allowed_values)
+                ),
+                error_code='INVALID_SELECTION'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def _validate_radio(self, param_name: str, value: str, rules: Dict) -> ValidationResult:
+        """Validate radio button selection."""
+        return self._validate_dropdown(param_name, value, rules)
+    
+    def _validate_apn(self, param_name: str, value: Any, rules: Dict, context: Optional[Dict[str, Any]] = None) -> ValidationResult:
+        """
+        Enhanced APN validation with support for domain names, IP addresses, and URLs.
+        
+        Args:
+            param_name: Name of the parameter being validated
+            value: APN value to validate
+            rules: Validation rules for the parameter
+            context: Optional context with other parameter values
+            
+        Returns:
+            ValidationResult with detailed validation feedback
+        """
+        display_name = self.i18n.get(param_name, param_name)
+        
+        if not isinstance(value, str):
+            value = str(value)
+        
+        # Log validation attempt
+        self._log_validation_attempt(param_name, value, 'apn_validation')
+        
+        # Check length constraints
+        max_length = rules.get('max_length', 50)
+        if len(value) > max_length:
+            result = ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_max_length', '{param_name} must be at most {max_length} characters').format(
+                    param_name=display_name, 
+                    max_length=max_length
+                ),
+                error_code='MAX_LENGTH'
+            )
+            self._log_validation_result(param_name, value, result)
+            return result
+        
+        # Check for empty value
+        if not value.strip():
+            if rules.get('required', False):
+                result = ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_required_field', '{param_name} is required and cannot be empty').format(param_name=display_name),
+                    error_code='REQUIRED_FIELD'
+                )
+                self._log_validation_result(param_name, value, result)
+                return result
+            else:
+                result = ValidationResult(is_valid=True)
+                self._log_validation_result(param_name, value, result)
+                return result
+        
+        # Enhanced APN format validation
+        validation_result = self._validate_apn_format(value)
+        if not validation_result.is_valid:

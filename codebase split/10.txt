@@ -1,0 +1,4328 @@
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Timer command validation failed: {str(e)}")
+        return command
+    
+    def format_hbt_command(self, moving_hbt: int, stopped_hbt: int) -> str:
+        """Format heartbeat configuration command."""
+        command = f"ATSMS:HBT,{moving_hbt},{stopped_hbt}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Heartbeat command validation failed: {str(e)}")
+        return command
+    
+    def format_ignition_command(self, ignition_mode: str, on_voltage: float = None, off_voltage: float = None) -> str:
+        """Format ignition configuration command."""
+        if ignition_mode == 'Virtual por Tens├úo da Bateria':
+            if on_voltage is None or off_voltage is None:
+                raise ValueError("On and off voltages are required for virtual battery ignition mode")
+            
+            # Convert voltages to integers
+            on_voltage_int = int(float(on_voltage))
+            off_voltage_int = int(float(off_voltage))
+            
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=1-{on_voltage_int}-{off_voltage_int}"
+        elif ignition_mode == 'F├¡sica (Fio Laranja)':
+            command = f"ATSMS:SZCS#ACCLINE=1#ACC_CFG=0-000-000"
+        else: # 'Virtual por Aceler├┤metro'
+            command = f"ATSMS:SZCS#ACCLINE=0#ACC_CFG=0-000-000"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Ignition command validation failed: {str(e)}")
+        return command
+    
+    def format_speed_alert_command(self, enabled: bool, detection_time: int, speed_limit: int, alert_type: str) -> str:
+        """Format speed alert configuration command."""
+        enabled_str = 'ON' if enabled else 'OFF'
+        # When disabled, device expects a minimal SPEED,OFF# command (no extra numeric fields)
+        if not enabled:
+            command = f"ATSMS:SPEED,OFF#"
+        else:
+            alert_type_code = self._map_alert_type(alert_type)
+            command = f"ATSMS:SPEED,{enabled_str},{detection_time},{speed_limit},{alert_type_code}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Speed alert command validation failed: {str(e)}")
+        return command
+
+    def _generate_jammer_detection_command(self, values: Dict[str, Any]) -> Optional[str]:
+        """
+        Generate JAMMER command from specification-based parameter values.
+
+        Accepts {'value': bool}, {'enabled': bool}, or {'main': bool/int} formats
+        and returns the fully formatted ATSMS: command string.
+        """
+        try:
+            if 'value' in values:
+                enabled = values['value']
+            elif 'enabled' in values:
+                enabled = values['enabled']
+            elif 'main' in values:
+                enabled = values['main']
+            else:
+                enabled = False
+
+            if not isinstance(enabled, bool):
+                enabled = bool(enabled)
+
+            # Delegate to existing formatter which already implements minimal form for OFF
+            return self.format_jammer_detection_command(enabled)
+        except Exception as e:
+            self.logger.error(f"Error generating jammer detection command: {str(e)}")
+            return None
+    
+    def format_main_power_alert_command(self, enabled: bool, alert_type: str, detection_time: int, min_charge_time: int) -> str:
+        """Format main power alert configuration command."""
+        enabled_str = 'ON' if enabled else 'OFF'
+        alert_type_code = self._map_alert_type(alert_type)
+        command = f"ATSMS:POWERALM,{enabled_str},{alert_type_code},{int(detection_time)},{int(min_charge_time)}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Main power alert command validation failed: {str(e)}")
+        return command
+    
+    def format_angle_report_command(self, enabled: bool, min_speed: int, angle_variation: int) -> str:
+        """Format angle report configuration command."""
+        # Ensure formatting: min_speed -> 2 digits, angle_variation -> 3 digits
+        if enabled:
+            min_speed_str = f"{int(min_speed):02d}"
+            angle_variation_str = f"{int(angle_variation):03d}"
+            command = f"ATSMS:SZCS#ANGLEVALUE={min_speed_str}-{angle_variation_str}"
+        else:
+            command = f"ATSMS:SZCS#ANGLEVALUE=00-000"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Angle report command validation failed: {str(e)}")
+        return command
+    
+    def format_vibration_sensitivity_command(self, level: int) -> str:
+        """Format vibration sensitivity configuration command."""
+        command = f"ATSMS:SZCS#VIBL={level}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Vibration sensitivity command validation failed: {str(e)}")
+        return command
+    
+    def format_jammer_relay_command(self, output_operation: str, confirmation_time: int, speed_limit: int, param_d: int, param_e: int, param_f: int, param_g: str) -> str:
+        """Format jammer relay configuration command."""
+        operation_code = self._map_jammer_operation(output_operation)
+        param_g_code = self._map_param_g_value(param_g)
+        command = f"ATSMS:JAMRELAY,{operation_code},{confirmation_time},{speed_limit},{param_d},{param_e},{param_f},{param_g_code}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Jammer relay command validation failed: {str(e)}")
+        return command
+    
+    def _map_alert_type(self, alert_type: str) -> str:
+        """Map alert type UI value to device command value."""
+        alert_type_mapping = {
+            'Apenas GPRS': '0',
+            'GPRS+SMS': '1'
+        }
+        return alert_type_mapping.get(alert_type, '0')
+
+    def _map_jammer_operation(self, output_operation: str) -> str:
+        """Map jammer output operation UI value to device command value."""
+        operation_mapping = {
+            'Sem A├º├úo': '0',
+            'Ativar e Manter': '1',
+            'Ativar e Desativar com Jammer': '2'
+        }
+        return operation_mapping.get(output_operation, '0')
+
+    def _map_param_g_value(self, param_g: str) -> str:
+        """Map param_g UI value to device command value."""
+        param_g_mapping = {
+            'Manter ativada': '0',
+            'Manter desativada': '1'
+        }
+        return param_g_mapping.get(param_g, '0')
+
+    def _map_protocol_value(self, protocol: str) -> str:
+        """Map protocol UI value to device command value."""
+        protocol_mapping = {
+            'GT06 (0x60)': '0',
+            'CRX3 (0x22)': '1', 
+            'GT06 (0x12)': '2'
+        }
+        return protocol_mapping.get(protocol, '0')  # Default to GT06
+    
+    def format_protocol_command(self, protocol: str) -> str:
+        """Format protocol configuration command."""
+        protocol_code = self._map_protocol_value(protocol)
+        command = f"ATSMS:SZCS#GT06SEL={protocol_code}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Protocol command validation failed: {str(e)}")
+        return command
+    
+    def format_tcp_ack_command(self, tcp_ack: bool) -> str:
+        """Format TCP ACK configuration command."""
+        ack_value = '1' if tcp_ack else '0'
+        command = f"ATSMS:SZCS#POSBYACK={ack_value}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"TCP ACK command validation failed: {str(e)}")
+        return command
+    
+    def format_speed_buzzer_command(self, enabled: bool) -> str:
+        """Format speed buzzer configuration command."""
+        buzzer_value = '1' if enabled else '0'
+        command = f"ATSMS:SZCS#SPD_LED_SHOW={buzzer_value}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Speed buzzer command validation failed: {str(e)}")
+        return command
+    
+    def _map_sleep_mode_value(self, sleep_mode: str) -> str:
+        """Map sleep mode UI value to device command value."""
+        sleep_mode_mapping = {
+            'Desabilitado (Disabled)': '0',
+            'Sleep (Habilitado)': '1',
+            'Deep Sleep (Ultra-baixo)': '2'
+        }
+        return sleep_mode_mapping.get(sleep_mode, '0')  # Default to disabled
+    
+    def format_sleep_mode_command(self, sleep_mode: str) -> str:
+        """Format sleep mode configuration command."""
+        mode_code = self._map_sleep_mode_value(sleep_mode)
+        command = f"ATSMS:SZCS#SLPDISCONNECT={mode_code}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Sleep mode command validation failed: {str(e)}")
+        return command
+    
+    def format_sleep_time_command(self, sleep_time: int) -> str:
+        """Format sleep time configuration command."""
+        command = f"ATSMS:SZCS#SLEEPT={int(sleep_time)}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Sleep time command validation failed: {str(e)}")
+        return command
+    
+    def format_backup_battery_alert_command(self, enabled: bool) -> str:
+        """Format backup battery alert configuration command."""
+        state = 'ON' if enabled else 'OFF'
+        command = f"ATSMS:BATALM,{state},0#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Backup battery alert command validation failed: {str(e)}")
+        return command
+    
+    def format_jammer_detection_command(self, enabled: bool) -> str:
+        """Format jammer detection configuration command."""
+        state = 'ON' if enabled else 'OFF'
+        
+        if not enabled:
+            command = f"ATSMS:JAMMER,{state}#"
+        else:
+            command = f"ATSMS:JAMMER,{state},0#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Jammer detection command validation failed: {str(e)}")
+        return command
+    
+    def format_odometer_command(self, value: int) -> str:
+        """Format odometer configuration command."""
+        command = f"ATSMS:MILEAGE={value}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Odometer command validation failed: {str(e)}")
+        return command
+    
+    def format_hourmeter_command(self, value: int) -> str:
+        """Format hourmeter configuration command."""
+        command = f"ATSMS:ACCONT,{value}#"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Hourmeter command validation failed: {str(e)}")
+        return command
+
+    def format_distance_movement_action_command(self, value: str) -> str:
+        """Format distance movement action configuration command."""
+        # Map distance movement action to command value
+        distance_movement_action_mapping = {
+            'Automaticamente ativado ap├│s entrar no modo DEFENSE (quando a igni├º├úo ├® desligada)': '0',
+            'Envia um alerta - Apenas uma vez independente da IGN on ou off': '1',
+            'Envia um alerta uma vez e bloqueia o ve├¡culo - Apenas uma vez independente da IGN on ou off': '2'
+        }
+        
+        value_code = distance_movement_action_mapping.get(value, '0')
+        command = f"ATSMS:SZCS#MOVEALMFUN={value_code}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Distance movement action command validation failed: {str(e)}")
+        return command
+
+    def format_blind_area_speed_command(self, value: int) -> str:
+        """Format blind area speed configuration command."""
+        # Ensure value is within valid range (0-20)
+        if value < 0 or value > 20:
+            raise ValueError(f"Blind area speed value must be between 0 and 20, got {value}")
+        
+        command = f"ATSMS:SZCS#BLINDSPD={value}"
+        
+        if hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+            try:
+                self.command_validation_gateway.validate_command(command, source="bulk_commands")
+            except ValueError as e:
+                raise ValueError(f"Blind area speed command validation failed: {str(e)}")
+        return command
+
+    def _generate_apn_command(self, apn_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate APN command from flattened parameters.
+        
+        Accept multiple incoming key names for robustness: 'apn_server'|'apn'|'server' and
+        'apn_user'|'user', 'apn_password'|'password'. Ensure values are stringified and
+        return None if APN server is missing.
+        """
+        try:
+            # Accept several possible keys coming from different parts of the codebase
+            apn_server = apn_params.get('apn_server') or apn_params.get('apn') or apn_params.get('server') or ''
+            apn_user = apn_params.get('apn_user') or apn_params.get('user') or ''
+            apn_password = apn_params.get('apn_password') or apn_params.get('password') or ''
+    
+            # Normalize to strings and guard against None
+            apn_server = '' if apn_server is None else str(apn_server)
+            apn_user = '' if apn_user is None else str(apn_user)
+            apn_password = '' if apn_password is None else str(apn_password)
+    
+            if not apn_server.strip():
+                self.logger.warning("APN server is required for APN command")
+                return None
+    
+            return self.format_apn_command(apn_server, apn_user, apn_password)
+    
+        except Exception as e:
+            self.logger.error(f"Error generating APN command: {str(e)}")
+            return None
+    
+    def _generate_server_command(self, server_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate server command from flattened parameters.
+        
+        Be tolerant of different key names produced by various code paths:
+        accept 'server_address'|'address'|'server_ip'|'server_domain' and
+        'server_port'|'port'. Coerce port to integer and return None when required
+        pieces are missing.
+        """
+        try:
+            # Try multiple possible keys for address and port
+            server_address = (server_params.get('server_address') or
+                              server_params.get('address') or
+                              server_params.get('server_ip') or
+                              server_params.get('server_domain') or
+                              '')
+    
+            server_port = (server_params.get('server_port') or
+                           server_params.get('port') or
+                           '')
+    
+            # Normalize and validate
+            server_address = '' if server_address is None else str(server_address)
+    
+            if server_port is None or server_port == '':
+                self.logger.warning("Both server address and port are required for server command")
+                return None
+    
+            # Coerce port to integer where possible, fall back to 0
+            try:
+                server_port_int = int(float(server_port))
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid server port value '{server_port}', defaulting to 0")
+                server_port_int = 0
+    
+            if not server_address.strip():
+                self.logger.warning("Server address is required for server command")
+                return None
+    
+            return self.format_server_command(str(server_address), str(server_port_int))
+    
+        except Exception as e:
+            self.logger.error(f"Error generating server command: {str(e)}")
+            return None
+    
+    def _generate_timer_command(self, timer_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate timer command from flattened parameters."""
+        try:
+            moving_time = timer_params.get('moving_time')
+            stopped_time = timer_params.get('stopped_time')
+            
+            if moving_time is None or stopped_time is None:
+                self.logger.warning("Both moving and stopped times are required for timer command")
+                return None
+                
+            return self.format_timer_command(int(float(moving_time)), int(float(stopped_time)))
+            
+        except Exception as e:
+            self.logger.error(f"Error generating timer command: {str(e)}")
+            return None
+    
+    def _generate_heartbeat_command(self, hbt_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate heartbeat command from flattened parameters."""
+        try:
+            moving_hbt = hbt_params.get('moving_heartbeat')
+            stopped_hbt = hbt_params.get('stopped_heartbeat')
+            
+            if moving_hbt is None or stopped_hbt is None:
+                self.logger.warning("Both moving and stopped heartbeats are required for heartbeat command")
+                return None
+                
+            return self.format_hbt_command(int(float(moving_hbt)), int(float(stopped_hbt)))
+            
+        except Exception as e:
+            self.logger.error(f"Error generating heartbeat command: {str(e)}")
+            return None
+    
+    def _generate_ignition_command(self, ignition_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate ignition command from flattened parameters."""
+        try:
+            ignition_mode = ignition_params.get('ignition_mode')
+            on_voltage = ignition_params.get('on_voltage')
+            off_voltage = ignition_params.get('off_voltage')
+            
+            if not ignition_mode:
+                self.logger.warning("Ignition mode is required for ignition command")
+                return None
+                
+            return self.format_ignition_command(ignition_mode, on_voltage, off_voltage)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating ignition command: {str(e)}")
+            return None
+    
+    def _generate_speed_alert_command(self, speed_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate speed alert command from flattened parameters."""
+        try:
+            enabled = speed_params.get('enabled', False)
+            detection_time = speed_params.get('detection_time', 0)
+            speed_limit = speed_params.get('speed_limit', 0)
+            alert_type = speed_params.get('alert_type', 'Apenas GPRS')
+            
+            return self.format_speed_alert_command(enabled, detection_time, speed_limit, alert_type)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating speed alert command: {str(e)}")
+            return None
+    
+    def _generate_main_power_alert_command(self, power_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate main power alert command from flattened parameters."""
+        try:
+            enabled = power_params.get('enabled', False)
+            alert_type = power_params.get('alert_type', 'Apenas GPRS')
+            detection_time = power_params.get('detection_time', 10)
+            min_charge_time = power_params.get('min_charge_time', 10)
+            
+            return self.format_main_power_alert_command(enabled, alert_type, detection_time, min_charge_time)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating main power alert command: {str(e)}")
+            return None
+    
+    def _generate_angle_report_command(self, angle_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate angle report command from flattened parameters."""
+        try:
+            enabled = angle_params.get('enabled', False)
+            
+            # Use actual values from profile instead of defaults
+            min_speed_raw = angle_params.get('min_speed', '08')
+            angle_variation_raw = angle_params.get('angle_variation', '015')
+            
+            # Convert to int for the format_angle_report_command method but preserve original formatting
+            try:
+                min_speed = int(str(min_speed_raw))
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid min_speed value: {min_speed_raw}, using default 8")
+                min_speed = 8
+            
+            try:
+                angle_variation = int(str(angle_variation_raw))
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid angle_variation value: {angle_variation_raw}, using default 15")
+                angle_variation = 15
+            
+            self.logger.debug(f"Using angle_report values from profile: min_speed={min_speed}, angle_variation={angle_variation}")
+            
+            return self.format_angle_report_command(enabled, min_speed, angle_variation)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating angle report command: {str(e)}")
+            return None
+    
+    def _generate_vibration_command(self, vibration_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate vibration command from flattened parameters."""
+        try:
+            level = vibration_params.get('level', 1)
+            
+            return self.format_vibration_sensitivity_command(level)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating vibration command: {str(e)}")
+            return None
+    
+    def _generate_jammer_relay_command(self, jammer_params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate jammer relay command from flattened parameters."""
+        try:
+            output_operation = jammer_params.get('output_operation', 'Sem A├º├úo')
+            confirmation_time = jammer_params.get('confirmation_time', 80)
+            speed_limit = jammer_params.get('speed_limit', 5)
+            param_d = jammer_params.get('param_d', 0)
+            param_e = jammer_params.get('param_e', 0)
+            param_f = jammer_params.get('param_f', 0)
+            param_g = jammer_params.get('param_g', 'Manter ativada')
+            
+            return self.format_jammer_relay_command(output_operation, confirmation_time, speed_limit, param_d, param_e, param_f, param_g)
+            
+        except Exception as e:
+            self.logger.error(f"Error generating jammer relay command: {str(e)}")
+            return None
+
+    def _generate_motion_sensor_alert_command(self, params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate motion sensor alert command from flattened parameters."""
+        try:
+            enabled = params.get('enabled', False)
+            if not enabled:
+                command = "SENALM,OFF#"
+            else:
+                alert_type = params.get('alert_type', 'Apenas GPRS')
+                alert_type_mapping = {
+                    'Apenas GPRS': '0',
+                    'GPRS+SMS': '1'
+                }
+                alert_value = alert_type_mapping.get(alert_type, '0')
+                command = f"SENALM,ON,{alert_value}#"
+
+            if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+                full_command = f"ATSMS:{command}"
+                self.command_validation_gateway.validate_command(full_command, source="bulk_commands")
+
+            return command
+        except Exception as e:
+            self.logger.error(f"Error generating motion sensor alert command: {str(e)}")
+            return None
+
+    def _generate_acc_on_alert_command(self, params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate ACC ON alert command from flattened parameters."""
+        try:
+            value = params.get('value')
+            if value == 'Disabled':
+                command = "ACCALM,OFF#"
+            elif value == 'Alerta Enviado Apenas GPRS':
+                command = "ACCALM,ON,0#"
+            elif value == 'Alerta Enviado por SMS+GPRS':
+                command = "ACCALM,ON,1#"
+            else:
+                return None
+            
+            if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+                full_command = f"ATSMS:{command}"
+                self.command_validation_gateway.validate_command(full_command, source="bulk_commands")
+
+            return command
+        except Exception as e:
+            self.logger.error(f"Error generating acc on alert command: {str(e)}")
+            return None
+
+    def _generate_acc_off_alert_command(self, params: Dict[str, Any], validate_commands: bool) -> Optional[str]:
+        """Generate ACC OFF alert command from flattened parameters."""
+        try:
+            value = params.get('value')
+            if value == 'Desabilitado':
+                command = "ACCOFFALM,OFF#"
+            elif value == 'Alerta Enviado Apenas GPRS':
+                command = "ACCOFFALM,ON,0#"
+            elif value == 'Alerta Enviado por SMS+GPRS':
+                command = "ACCOFFALM,ON,1#"
+            else:
+                return None
+            
+            if validate_commands and hasattr(self, 'command_validation_gateway') and self.command_validation_gateway:
+                full_command = f"ATSMS:{command}"
+                self.command_validation_gateway.validate_command(full_command, source="bulk_commands")
+
+            return command
+        except Exception as e:
+            self.logger.error(f"Error generating acc off alert command: {str(e)}")
+            return None
+    
+    def _generate_individual_command(self, param_name: str, param_value: Any, validate_commands: bool) -> Optional[str]:
+        """Generate command for individual parameters."""
+        try:
+            # Map individual parameters to their command methods
+            individual_mapping = {
+                'protocol': lambda v: self.format_protocol_command(v),
+                'tcp_ack': lambda v: self.format_tcp_ack_command(v),
+                'speed_buzzer': lambda v: self.format_speed_buzzer_command(v),
+                'sleep_mode': lambda v: self.format_sleep_mode_command(v),
+                'sleep_time': lambda v: self.format_sleep_time_command(int(float(v)) if v is not None else 0),
+                'backup_battery_alert': lambda v: self.format_backup_battery_alert_command(v),
+                'jammer_detection': lambda v: self.format_jammer_detection_command(v),
+                'odometer': lambda v: self.format_odometer_command(v),
+                'hourmeter': lambda v: self.format_hourmeter_command(v),
+                'network_settings': lambda v: self.get_command('network_select', v),
+                'defense_settings': lambda v: self.get_command('defense_time', v),
+                'source_off_type': lambda v: self.get_command('relay_gps_check', v),
+                'relay_control': lambda v: self.get_command('relay_control', v),
+                'sends_control': lambda v: self.get_command('sends_control', v),
+                'acc_on_alert': lambda v: self._generate_acc_on_alert_command({'value': v}, validate_commands),
+                'acc_off_alert': lambda v: self._generate_acc_off_alert_command({'value': v}, validate_commands),
+                'distance_movement_action': lambda v: self.format_distance_movement_action_command(v),
+                'blind_area_speed': lambda v: self.format_blind_area_speed_command(int(float(v)) if v is not None else 0)
+            }
+            
+            if param_name in individual_mapping:
+                return individual_mapping[param_name](param_value)
+            else:
+                self.logger.debug(f"No individual command mapping for parameter: {param_name}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error generating individual command for {param_name}: {str(e)}")
+            return None
+
+    def get_validation_statistics(self) -> Dict[str, Any]:
+        """
+        Get validation statistics from the command validation gateway.
+        
+        Returns:
+            Dictionary with validation statistics
+        """
+        return self.validation_gateway.get_validation_statistics()
+    
+    def reset_validation_statistics(self):
+        """Reset validation statistics."""
+        self.validation_gateway.reset_statistics()
+    
+    def validate_parameters_before_bulk_send(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate parameters before generating bulk commands.
+        
+        Args:
+            parameters: Dictionary of parameter names and values
+            
+        Returns:
+            Dictionary with validation results and recommendations
+        """
+</document_content>
+</document>
+<document index="38">
+<source>.\services\device_communication_manager.py</source>
+<document_content>
+"""
+Device Communication Manager for the LT32 PRO Universal Profile System.
+
+This module provides a unified interface for device communication that integrates
+with existing device reader/writer services and uses parameter specifications
+for command formatting and response parsing.
+"""
+
+import asyncio
+import time
+from typing import Dict, List, Optional, Callable, Any, Tuple
+from datetime import datetime
+
+from models.parameter_spec import ParameterSpec, ParameterCommands
+from models.operation_result import ProfileOperationResult, ParameterOperationResult, OperationType
+from services.parameter_specification_parser import ParameterSpecificationParser
+from services.lt32pro_device_reader import LT32ProDeviceReader
+from services.lt32pro_device_writer import LT32ProDeviceWriter
+
+
+class DeviceCommunicationManager:
+    """
+    Manages device communication for reading and writing parameters using
+    the Parameter UI List specifications.
+    
+    This class provides a unified interface that integrates with existing
+    device services while using parameter specifications for proper command
+    formatting and response parsing.
+    """
+    
+    def __init__(self, serial_service, spec_parser: ParameterSpecificationParser):
+        """
+        Initialize the device communication manager.
+        
+        Args:
+            serial_service: The serial communication service instance
+            spec_parser: Parameter specification parser instance
+        """
+        self.serial_service = serial_service
+        self.spec_parser = spec_parser
+        
+        # Initialize device reader and writer
+        self.device_reader = LT32ProDeviceReader(serial_service)
+        self.device_writer = LT32ProDeviceWriter(serial_service)
+        
+        # Operation state
+        self._operation_cancelled = False
+        self._current_operation: Optional[str] = None
+    
+    async def read_all_parameters(self, progress_callback: Optional[Callable] = None) -> Dict[str, str]:
+        """
+        Read all parameters from the device based on parameter specifications.
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+                              Called with (current_step, total_steps, step_description, success)
+        
+        Returns:
+            Dict[str, str]: Dictionary mapping parameter names to raw device responses
+            
+        Raises:
+            ConnectionError: If device is not connected
+            RuntimeError: If operation fails
+        """
+        if not self.serial_service.is_connected:
+            raise ConnectionError("Device is not connected")
+        
+        self._operation_cancelled = False
+        self._current_operation = "read_all_parameters"
+        
+        try:
+            # Get all parameter specifications
+            all_specs = self.spec_parser.parse_specifications()
+            
+            # Filter parameters that have read commands
+            readable_params = []
+            for param_name, spec in all_specs.items():
+                if self._has_read_command(spec):
+                    readable_params.append((param_name, spec))
+            
+            if not readable_params:
+                return {}
+            
+            total_params = len(readable_params)
+            device_responses = {}
+            
+            # Read each parameter
+            for i, (param_name, spec) in enumerate(readable_params):
+                if self._operation_cancelled:
+                    break
+                
+                # Update progress
+                if progress_callback:
+                    progress_callback(i, total_params, f"Reading {param_name}", None)
+                
+                try:
+                    # Get the read command for this parameter
+                    read_command = self._get_read_command(spec)
+                    if read_command:
+                        # Execute the read command
+                        response = await self._execute_read_command(read_command, param_name)
+                        if response:
+                            device_responses[param_name] = response
+                            
+                            # Update progress with success
+                            if progress_callback:
+                                progress_callback(i + 1, total_params, 
+                                                f"Read {param_name}: {response[:50]}...", True)
+                        else:
+                            # Update progress with failure
+                            if progress_callback:
+                                progress_callback(i + 1, total_params, 
+                                                f"Failed to read {param_name}", False)
+                    
+                except Exception as e:
+                    # Log error but continue with other parameters
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"ERROR: Failed to read {param_name}: {str(e)}\n"
+                        )
+                    
+                    # Update progress with failure
+                    if progress_callback:
+                        progress_callback(i + 1, total_params, 
+                                        f"Error reading {param_name}: {str(e)}", False)
+                
+                # Small delay between commands
+                if i < total_params - 1:
+                    await asyncio.sleep(0.3)
+            
+            # Final progress update
+            if progress_callback:
+                success_count = len(device_responses)
+                progress_callback(total_params, total_params, 
+                                f"Completed: {success_count}/{total_params} parameters read", 
+                                success_count > 0)
+            
+            return device_responses
+            
+        finally:
+            self._current_operation = None
+    
+    async def write_all_parameters(self, parameters: Dict[str, Any], 
+                                 progress_callback: Optional[Callable] = None) -> Dict[str, bool]:
+        """
+        Write all parameters to the device based on parameter specifications.
+        
+        Args:
+            parameters: Dictionary mapping parameter names to values
+            progress_callback: Optional callback for progress updates
+                              Called with (current_step, total_steps, step_description, success)
+        
+        Returns:
+            Dict[str, bool]: Dictionary mapping parameter names to success status
+            
+        Raises:
+            ConnectionError: If device is not connected
+            ValueError: If parameters contain invalid values
+        """
+        if not self.serial_service.is_connected:
+            raise ConnectionError("Device is not connected")
+        
+        if not parameters:
+            raise ValueError("No parameters provided for writing")
+        
+        self._operation_cancelled = False
+        self._current_operation = "write_all_parameters"
+        
+        try:
+            all_specs = self.spec_parser.parse_specifications()
+            
+            writable_params = []
+            for param_name, value in parameters.items():
+                spec = all_specs.get(param_name)
+                if spec and self._has_write_command(spec):
+                    validation_result = spec.validate_value(value)
+                    if validation_result.is_valid:
+                        writable_params.append((param_name, value, spec))
+                    else:
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            error_msg = f"Validation failed for {param_name}: {', '.join(validation_result.errors)}"
+                            self.serial_service.app.log_frame.log_message(f"ERROR: {error_msg}\n")
+
+            if not writable_params:
+                return {}
+
+            total_params = len(writable_params)
+            write_results = {}
+
+            for i, (param_name, value, spec) in enumerate(writable_params):
+                if self._operation_cancelled:
+                    break
+
+                if progress_callback:
+                    progress_callback(i, total_params, f"Writing {param_name}", None)
+
+                try:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        try:
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Preparing to write parameter '{param_name}' with value: {repr(value)} and spec: {getattr(spec, 'name', 'unknown')}\n"
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        print(f"DEBUG: Preparing to write parameter '{param_name}' with value: {repr(value)} and spec: {getattr(spec, 'name', 'unknown')}")
+
+                    success = await self._execute_write_command(spec, param_name, value)
+                    write_results[param_name] = success
+
+                    if progress_callback:
+                        status_msg = "Success" if success else "Failed"
+                        progress_callback(i + 1, total_params,
+                                        f"{param_name}: {status_msg}", success)
+
+                except Exception as e:
+                    write_results[param_name] = False
+
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"ERROR: Failed to write {param_name}: {str(e)}\n"
+                        )
+
+                    if progress_callback:
+                        progress_callback(i + 1, total_params,
+                                        f"Error writing {param_name}: {str(e)}", False)
+                
+                if i < total_params - 1:
+                    await asyncio.sleep(0.5)
+
+            if progress_callback:
+                success_count = sum(1 for success in write_results.values() if success)
+                progress_callback(total_params, total_params,
+                                f"Completed: {success_count}/{total_params} parameters written",
+                                success_count > 0)
+
+            return write_results
+
+        finally:
+            self._current_operation = None
+    
+    def parse_device_response(self, command: str, response: str, param_spec: ParameterSpec) -> Optional[Dict[str, Any]]:
+        """
+        Parse device response based on parameter specifications.
+        
+        Args:
+            command: The command that was sent
+            response: Raw device response string
+            param_spec: Parameter specification for parsing context
+            
+        Returns:
+            Optional[Dict[str, Any]]: Parsed parameter values or None if parsing fails
+        """
+        if not response or not response.strip():
+            return None
+        
+        response = response.strip()
+        
+        try:
+            # Use basic parsing directly since ParameterCommands.parse_read_response
+            # is not properly implemented for our specific response formats
+            return self._parse_response_basic(response, param_spec)
+            
+        except Exception as e:
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"WARNING: Failed to parse response for {param_spec.name}: {str(e)}\n"
+                )
+            return None
+    
+    def format_parameter_for_device(self, param_spec: ParameterSpec, value: Any) -> Optional[str]:
+        """
+        Format parameter value for device command using DeviceCommandMapper.
+        
+        Args:
+            param_spec: Parameter specification
+            value: Parameter value to format
+            
+        Returns:
+            Optional[str]: Formatted device command or None if formatting fails
+        """
+        try:
+            # Use DeviceCommandMapper for proper value mapping and command generation
+            from services.device_command_mapper import DeviceCommandMapper
+            mapper = DeviceCommandMapper()
+            
+            # Prepare the value in the format expected by DeviceCommandMapper
+            if param_spec.fields and isinstance(value, dict):
+                # Complex parameter with multiple fields
+                # Check if value has nested structure with 'value' key (from profile files)
+                if 'value' in value and isinstance(value['value'], dict):
+                    # Extract the actual field values from the nested structure
+                    prepared_value = value['value']
+                else:
+                    # Value is already in the correct format
+                    prepared_value = value
+            else:
+                # Simple parameter - extract value if it's nested
+                if isinstance(value, dict) and 'value' in value:
+                    prepared_value = value['value']
+                else:
+                    prepared_value = value
+
+            # Diagnostic: log the prepared_value before passing to DeviceCommandMapper
+            try:
+                if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                    self.serial_service.app.log_frame.log_message(
+                        f"DEBUG: Prepared value for {param_spec.name}: {repr(prepared_value)}\n"
+                    )
+                else:
+                    print(f"DEBUG: Prepared value for {param_spec.name}: {repr(prepared_value)}")
+            except Exception:
+                pass
+            
+            # Generate command using DeviceCommandMapper
+            # Keep the full command (including ATSMS: prefix) so the serial layer sends exactly what the mapper produced.
+            full_command = mapper.get_command(param_spec.name, prepared_value, validate_command=False)
+            if not full_command:
+                return None
+            # Debug/log the full generated command so we can trace what is actually sent
+            try:
+                if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                    self.serial_service.app.log_frame.log_message(
+                        f"DEBUG: Formatted full command for {param_spec.name}: {full_command}\n"
+                    )
+                else:
+                    print(f"DEBUG: Formatted full command for {param_spec.name}: {full_command}")
+            except Exception:
+                # Ignore logging errors
+                pass
+            return full_command
+                    
+        except Exception as e:
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"ERROR: Failed to format parameter {param_spec.name}: {str(e)}\n"
+                )
+            return None
+    
+    def cancel_operation(self) -> None:
+        """Cancel the current operation."""
+        self._operation_cancelled = True
+        
+        # Cancel underlying operations
+        if hasattr(self.device_reader, 'cancel_operation'):
+            self.device_reader.cancel_operation()
+        if hasattr(self.device_writer, 'cancel_operation'):
+            self.device_writer.cancel_operation()
+    
+    def is_operation_cancelled(self) -> bool:
+        """Check if the current operation was cancelled."""
+        return self._operation_cancelled
+    
+    def get_current_operation(self) -> Optional[str]:
+        """Get the name of the current operation."""
+        return self._current_operation
+    
+    def get_supported_parameters(self) -> List[str]:
+        """
+        Get list of parameters supported by the device.
+        
+        Returns:
+            List[str]: List of supported parameter names
+        """
+        try:
+            all_specs = self.spec_parser.parse_specifications()
+            supported = []
+            
+            for param_name, spec in all_specs.items():
+                if self._has_read_command(spec) or self._has_write_command(spec):
+                    supported.append(param_name)
+            
+            return supported
+            
+        except Exception:
+            return []
+    
+    def _has_read_command(self, spec: ParameterSpec) -> bool:
+        """Check if parameter specification has a read command."""
+        return (spec.commands.read_command is not None or 
+                spec.commands.read_level is not None)
+    
+    def _has_write_command(self, spec: ParameterSpec) -> bool:
+        """Check if parameter specification has a write command."""
+        return (spec.commands.set_command is not None or 
+                spec.commands.set_physical is not None or
+                spec.commands.set_accelerometer is not None or
+                spec.commands.set_battery is not None or
+                spec.commands.set_level is not None)
+    
+    def _get_read_command(self, spec: ParameterSpec) -> Optional[str]:
+        """Get the appropriate read command for a parameter specification."""
+        if spec.commands.read_command:
+            return spec.commands.read_command
+        elif spec.commands.read_level:
+            return spec.commands.read_level
+        return None
+    
+    async def _execute_read_command(self, command: str, param_name: str) -> Optional[str]:
+        """
+        Execute a read command and return the response.
+        
+        Args:
+            command: Command to execute
+            param_name: Parameter name for logging
+            
+        Returns:
+            Optional[str]: Device response or None if failed
+        """
+        try:
+            # HACK: Extract the base command from the formatted command string to maintain
+            # compatibility with the LT32ProDeviceReader, which expects a base command.
+            parts = command.split('#')
+            if len(parts) > 1 and (parts[0] == 'CXCS' or parts[0] == 'SZCS'):
+                # For commands like "CXCS#ACCLINE#ACC_CFG", the base command is "ACCLINE"
+                base_command = parts[1]
+            else:
+                # For commands like "APN#", the base command is "APN"
+                base_command = command.rstrip('#')
+
+            # Use the existing device reader with the extracted base command
+            response = self.device_reader.read_single_parameter(
+                base_command,
+                timeout=self.device_reader.DEFAULT_COMMAND_TIMEOUT,
+                max_retries=2  # Reduce retries for faster operation
+            )
+            
+            return response
+            
+        except Exception as e:
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"ERROR: Failed to execute read command for {param_name}: {str(e)}\n"
+                )
+            return None
+    
+    async def _execute_write_command(self, spec: ParameterSpec, param_name: str, value: Any) -> bool:
+        """
+        Execute a write command for a parameter.
+        
+        Args:
+            spec: Parameter specification
+            param_name: Parameter name
+            value: Value to write
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Format the command using parameter specification
+            formatted_command = self.format_parameter_for_device(spec, value)
+            if not formatted_command:
+                return False
+            
+            # For now, use the serial service directly since the existing writer
+            # has hardcoded parameter mappings that don't match our specifications
+            success = self.serial_service.send_command(formatted_command, param_name)
+            
+            if success:
+                # Wait a bit for the response and check if it indicates success
+                await asyncio.sleep(3.0) # Increased timeout
+                # For now, assume success if command was sent successfully
+                # This could be enhanced with response validation
+                return True
+            
+            return False
+            
+        except Exception as e:
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"ERROR: Failed to execute write command for {param_name}: {str(e)}\n"
+                )
+            return False
+    
+    def _map_response_to_fields(self, parsed_data: Dict[str, Any], param_spec: ParameterSpec) -> Dict[str, Any]:
+        """
+        Map parsed response data to parameter fields.
+        
+        Args:
+            parsed_data: Raw parsed data from response
+            param_spec: Parameter specification for field mapping
+            
+        Returns:
+            Dict[str, Any]: Mapped field values
+        """
+        if not param_spec.fields:
+            # Simple parameter, return as-is
+            return parsed_data
+        
+        # Map to field names
+        mapped_data = {}
+        
+        # Try to map based on field order
+        field_values = list(parsed_data.values())
+        for i, field in enumerate(param_spec.fields):
+            if i < len(field_values):
+                mapped_data[field.name] = field_values[i]
+        
+        return mapped_data
+    
+    def _parse_response_basic(self, response: str, param_spec: ParameterSpec) -> Dict[str, Any]:
+        """
+        Basic response parsing fallback.
+        
+        Args:
+            response: Raw device response
+            param_spec: Parameter specification
+            
+        Returns:
+            Dict[str, Any]: Parsed values
+        """
+        # Remove common prefixes and suffixes
+        clean_response = response.strip().rstrip('#')
+        
+        # Handle different response formats based on parameter type
+        if param_spec.name == "apn_settings":
+            # APN format: "APN:server,user,password"
+            if clean_response.startswith("APN:"):
+                parts = clean_response[4:].split(',')
+                return {
+                    "apn": parts[0] if len(parts) > 0 else "",
+                    "user": parts[1] if len(parts) > 1 else "",
+                    "password": parts[2] if len(parts) > 2 else ""
+                }
+        elif param_spec.name == "server_settings":
+            # SERVER format: "SERVER:type,address,port,protocol"
+            if clean_response.startswith("SERVER:"):
+                parts = clean_response[7:].split(',')
+                return {
+                    "address": parts[1] if len(parts) > 1 else "",
+                    "port": parts[2] if len(parts) > 2 else ""
+                }
+        elif param_spec.name == "protocol":
+            # Protocol format: "GT06SEL=X"
+            if "GT06SEL=" in clean_response:
+                value = clean_response.split("=")[1]
+                return {"protocol": value}
+        elif param_spec.name == "tcp_ack":
+            # TCP ACK format: "POSBYACK=X"
+            if "POSBYACK=" in clean_response:
+                value = clean_response.split("=")[1]
+                return {"tcp_ack": value}
+        elif param_spec.name == "odometer":
+            # Odometer formats:
+            # - "MILEAGE=XXXXX" (direct format)
+            # - "Cur Mileage Value:XXXXKM" (verbose format)
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"DEBUG: Parsing odometer response: '{clean_response}'\n"
+                )
+            
+            if clean_response.startswith("MILEAGE="):
+                value = clean_response[8:]  # Remove "MILEAGE=" prefix
+                # Validate that it's numeric
+                try:
+                    int(value)
+                    result = {"odometer": value}
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed odometer from MILEAGE format: {result}\n"
+                        )
+                    return result
+                except ValueError:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Invalid odometer value in MILEAGE format: '{value}'\n"
+                        )
+                    return {"odometer": "0"}  # Default to 0 for invalid values
+            elif "Cur Mileage Value:" in clean_response:
+                # Extract value from "Cur Mileage Value:XXXXKM"
+                parts = clean_response.split(":")
+                if len(parts) >= 2:
+                    value_part = parts[1]
+                    # Remove "KM" suffix if present
+                    value = value_part.replace("KM", "").strip()
+                    # Validate that it's numeric
+                    try:
+                        int(value)
+                        result = {"odometer": value}
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Parsed odometer from verbose format: {result}\n"
+                            )
+                        return result
+                    except ValueError:
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Invalid odometer value in verbose format: '{value}'\n"
+                            )
+                        return {"odometer": "0"}  # Default to 0 for invalid values
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Malformed odometer response in verbose format: '{clean_response}'\n"
+                        )
+                    return {"odometer": "0"}  # Default to 0
+            else:
+                # Try to extract any numeric value
+                import re
+                numbers = re.findall(r'\d+', clean_response)
+                if numbers:
+                    result = {"odometer": numbers[-1]}  # Use last number found
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed odometer using fallback extraction: {result}\n"
+                        )
+                    return result
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: No numeric values found in odometer response: '{clean_response}'\n"
+                        )
+                    return {"odometer": "0"}  # Default to 0
+        elif param_spec.name == "hourmeter":
+            # Hourmeter formats:
+            # - "ACCONT=XXXXX" (direct format)
+            # - "Get ACC ON Time:XXXX Minute" (verbose format)
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"DEBUG: Parsing hourmeter response: '{clean_response}'\n"
+                )
+            
+            if clean_response.startswith("ACCONT="):
+                value = clean_response[7:]  # Remove "ACCONT=" prefix
+                # Validate that it's numeric
+                try:
+                    int(value)
+                    result = {"hourmeter": value}
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed hourmeter from ACCONT format: {result}\n"
+                        )
+                    return result
+                except ValueError:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Invalid hourmeter value in ACCONT format: '{value}'\n"
+                        )
+                    return {"hourmeter": "0"}  # Default to 0 for invalid values
+            elif "Get ACC ON Time:" in clean_response:
+                # Extract value from "Get ACC ON Time:XXXX Minute"
+                parts = clean_response.split(":")
+                if len(parts) >= 2:
+                    value_part = parts[1]
+                    # Remove "Minute" suffix if present
+                    value = value_part.replace("Minute", "").strip()
+                    # Validate that it's numeric
+                    try:
+                        int(value)
+                        result = {"hourmeter": value}
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Parsed hourmeter from verbose format: {result}\n"
+                            )
+                        return result
+                    except ValueError:
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"DEBUG: Invalid hourmeter value in verbose format: '{value}'\n"
+                            )
+                        return {"hourmeter": "0"}  # Default to 0 for invalid values
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Malformed hourmeter response in verbose format: '{clean_response}'\n"
+                        )
+                    return {"hourmeter": "0"}  # Default to 0
+            else:
+                # Try to extract any numeric value
+                import re
+                numbers = re.findall(r'\d+', clean_response)
+                if numbers:
+                    result = {"hourmeter": numbers[-1]}  # Use last number found
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: Parsed hourmeter using fallback extraction: {result}\n"
+                        )
+                    return result
+                else:
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: No numeric values found in hourmeter response: '{clean_response}'\n"
+                        )
+                    return {"hourmeter": "0"}  # Default to 0
+        
+        # Default: return the whole response as a single value
+        return {"value": clean_response}
+</document_content>
+</document>
+<document index="39">
+<source>.\services\device_communicator.py</source>
+<document_content>
+"""
+Device Communicator - Bridge to existing device communication methods.
+
+This module provides a simple wrapper around the existing device communication
+infrastructure to support profile operations. It focuses on parameter-by-parameter
+transmission with proper error handling and connection checking.
+"""
+
+import logging
+from typing import Dict, Any, Optional, List, Tuple
+import time
+import threading
+from datetime import datetime
+
+
+class DeviceCommunicator:
+    """Bridge to existing device communication methods for profile operations."""
+    
+    def __init__(self, app_instance):
+        """
+        Initialize the device communicator.
+        
+        Args:
+            app_instance: Main application instance with serial service and device mapper
+        """
+        self.app = app_instance
+        self.logger = logging.getLogger(__name__)
+        
+        # Get references to existing services
+        self.serial_service = getattr(app_instance, 'serial_service', None)
+        self.device_command_mapper = getattr(app_instance, 'device_command_mapper', None)
+        
+        # Connection timeout settings
+        self.connection_timeout = 5.0  # seconds
+        self.parameter_send_delay = 0.5  # delay between parameter sends
+        
+    def is_device_connected(self) -> bool:
+        """
+        Check if device is connected and responsive.
+        
+        Returns:
+            bool: True if device is connected, False otherwise
+        """
+        try:
+            if not self.serial_service:
+                self.logger.error("Serial service not available")
+                return False
+                
+            # Check basic connection status
+            if not self.serial_service.is_connected:
+                self.logger.debug("Serial service reports not connected")
+                return False
+                
+            # Check if serial port is available
+            if not hasattr(self.serial_service, 'serial_port') or not self.serial_service.serial_port:
+                self.logger.debug("Serial port not available")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error checking device connection: {str(e)}")
+            return False
+    
+    def send_parameter_to_device(self, param_name: str, param_value: str, 
+                               additional_params: Optional[Dict[str, str]] = None) -> bool:
+        """
+        Send a single parameter to the device.
+        
+        Args:
+            param_name: Name of the parameter to send
+            param_value: Value of the parameter
+            additional_params: Additional parameters needed for command generation
+            
+        Returns:
+            bool: True if parameter was sent successfully, False otherwise
+        """
+        try:
+            # Check device connection first
+            if not self.is_device_connected():
+                self.logger.error(f"Device not connected - cannot send parameter {param_name}")
+                return False
+                
+            # Check if device command mapper is available
+            if not self.device_command_mapper:
+                self.logger.error("Device command mapper not available")
+                return False
+                
+            # Prepare parameter values for command generation
+            param_values = {param_name: param_value}
+            if additional_params:
+                param_values.update(additional_params)
+                
+            # Generate command using device command mapper
+            try:
+                command = self.device_command_mapper.get_command(param_name, param_values)
+                if not command:
+                    self.logger.error(f"Could not generate command for parameter: {param_name}")
+                    return False
+                    
+            except Exception as e:
+                self.logger.error(f"Error generating command for {param_name}: {str(e)}")
+                return False
+            
+            # Send command to device
+            try:
+                success = self.serial_service.send_command(command, param_name)
+                if success:
+                    self.logger.debug(f"Successfully sent parameter {param_name} = {param_value}")
+                    # Add small delay between parameter sends
+                    time.sleep(self.parameter_send_delay)
+                    return True
+                else:
+                    self.logger.error(f"Failed to send command for parameter {param_name}")
+                    return False
+                    
+            except Exception as e:
+                self.logger.error(f"Error sending command for {param_name}: {str(e)}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Unexpected error sending parameter {param_name}: {str(e)}")
+            return False
+    
+    def get_parameter_from_device(self, param_name: str) -> Optional[str]:
+        """
+        Get a parameter value from the device.
+        
+        Args:
+            param_name: Name of the parameter to retrieve
+            
+        Returns:
+            str: Parameter value if successful, None otherwise
+        """
+        try:
+            # Check device connection first
+            if not self.is_device_connected():
+                self.logger.error(f"Device not connected - cannot get parameter {param_name}")
+                return None
+                
+            # Check if device command mapper is available
+            if not self.device_command_mapper:
+                self.logger.error("Device command mapper not available")
+                return None
+                
+            # Generate query command
+            try:
+                query_command = self.device_command_mapper.get_query_command(param_name)
+                if not query_command:
+                    self.logger.error(f"Could not generate query command for parameter: {param_name}")
+                    return None
+                    
+            except Exception as e:
+                self.logger.error(f"Error generating query command for {param_name}: {str(e)}")
+                return None
+            
+            # Send query command and wait for response
+            # Note: This is a simplified implementation
+            # In a real implementation, you would need to handle response parsing
+            try:
+                success = self.serial_service.send_command(query_command, f"query_{param_name}")
+                if success:
+                    # For now, return a placeholder - actual response parsing would be needed
+                    self.logger.debug(f"Query sent for parameter {param_name}")
+                    return "query_sent"  # Placeholder
+                else:
+                    self.logger.error(f"Failed to send query for parameter {param_name}")
+                    return None
+                    
+            except Exception as e:
+                self.logger.error(f"Error querying parameter {param_name}: {str(e)}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Unexpected error getting parameter {param_name}: {str(e)}")
+            return None
+    
+    def send_multiple_parameters(self, parameters: Dict[str, str], 
+                               progress_callback: Optional[callable] = None) -> Tuple[bool, List[str]]:
+        """
+        Send multiple parameters to the device with progress tracking.
+        
+        Args:
+            parameters: Dictionary of parameter names and values
+            progress_callback: Optional callback function for progress updates
+            
+        Returns:
+            Tuple[bool, List[str]]: (success, list of failed parameters)
+        """
+        failed_parameters = []
+        total_params = len(parameters)
+        processed_params = 0
+        
+        try:
+            # Check device connection first
+            if not self.is_device_connected():
+                self.logger.error("Device not connected - cannot send parameters")
+                return False, list(parameters.keys())
+            
+            # Send parameters one by one
+            for param_name, param_value in parameters.items():
+                try:
+                    # Update progress if callback provided
+                    if progress_callback:
+                        progress_callback(processed_params, total_params, param_name)
+                    
+                    # Send parameter
+                    success = self.send_parameter_to_device(param_name, param_value)
+                    
+                    if not success:
+                        failed_parameters.append(param_name)
+                        self.logger.warning(f"Failed to send parameter: {param_name}")
+                    
+                    processed_params += 1
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing parameter {param_name}: {str(e)}")
+                    failed_parameters.append(param_name)
+                    processed_params += 1
+            
+            # Final progress update
+            if progress_callback:
+                progress_callback(processed_params, total_params, "Complete")
+            
+            # Determine overall success
+            success = len(failed_parameters) == 0
+            
+            if success:
+                self.logger.info(f"Successfully sent all {total_params} parameters to device")
+            else:
+                self.logger.warning(f"Sent {total_params - len(failed_parameters)}/{total_params} parameters successfully")
+            
+            return success, failed_parameters
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected error sending multiple parameters: {str(e)}")
+            return False, list(parameters.keys())
+    
+    def get_multiple_parameters(self, param_names: List[str], 
+                              progress_callback: Optional[callable] = None) -> Tuple[Dict[str, str], List[str]]:
+        """
+        Get multiple parameter values from the device.
+        
+        Args:
+            param_names: List of parameter names to retrieve
+            progress_callback: Optional callback function for progress updates
+            
+        Returns:
+            Tuple[Dict[str, str], List[str]]: (retrieved parameters, failed parameter names)
+        """
+        retrieved_parameters = {}
+        failed_parameters = []
+        total_params = len(param_names)
+        processed_params = 0
+        
+        try:
+            # Check device connection first
+            if not self.is_device_connected():
+                self.logger.error("Device not connected - cannot get parameters")
+                return {}, param_names
+            
+            # Get parameters one by one
+            for param_name in param_names:
+                try:
+                    # Update progress if callback provided
+                    if progress_callback:
+                        progress_callback(processed_params, total_params, param_name)
+                    
+                    # Get parameter
+                    param_value = self.get_parameter_from_device(param_name)
+                    
+                    if param_value is not None:
+                        retrieved_parameters[param_name] = param_value
+                    else:
+                        failed_parameters.append(param_name)
+                        self.logger.warning(f"Failed to get parameter: {param_name}")
+                    
+                    processed_params += 1
+                    
+                except Exception as e:
+                    self.logger.error(f"Error getting parameter {param_name}: {str(e)}")
+                    failed_parameters.append(param_name)
+                    processed_params += 1
+            
+            # Final progress update
+            if progress_callback:
+                progress_callback(processed_params, total_params, "Complete")
+            
+            self.logger.info(f"Retrieved {len(retrieved_parameters)}/{total_params} parameters from device")
+            
+            return retrieved_parameters, failed_parameters
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected error getting multiple parameters: {str(e)}")
+            return {}, param_names
+    
+    def test_device_communication(self) -> Tuple[bool, str]:
+        """
+        Test device communication by sending a simple command.
+        
+        Returns:
+            Tuple[bool, str]: (success, status message)
+        """
+        try:
+            # Check basic connection
+            if not self.is_device_connected():
+                return False, "Device not connected"
+            
+            # Try to send a simple status command
+            if not self.serial_service or not self.device_command_mapper:
+                return False, "Required services not available"
+            
+            try:
+                # Send a simple status query
+                status_command = self.device_command_mapper.get_command('get_status', {})
+                if status_command:
+                    success = self.serial_service.send_command(status_command, 'get_status')
+                    if success:
+                        return True, "Device communication test successful"
+                    else:
+                        return False, "Failed to send test command"
+                else:
+                    return False, "Could not generate test command"
+                    
+            except Exception as e:
+                return False, f"Communication test failed: {str(e)}"
+                
+        except Exception as e:
+            self.logger.error(f"Error testing device communication: {str(e)}")
+            return False, f"Test error: {str(e)}"
+    
+    def get_device_info(self) -> Dict[str, str]:
+        """
+        Get basic device information (IMEI, version, etc.).
+        
+        Returns:
+            Dict[str, str]: Device information
+        """
+        device_info = {}
+        
+        try:
+            if not self.is_device_connected():
+                return device_info
+            
+            # Get device info from serial service if available
+            if hasattr(self.serial_service, 'device_info'):
+                device_info.update(self.serial_service.device_info)
+            
+            return device_info
+            
+        except Exception as e:
+            self.logger.error(f"Error getting device info: {str(e)}")
+            return device_info
+</document_content>
+</document>
+<document index="40">
+<source>.\services\enhanced_parameter_extractor.py</source>
+<document_content>
+"""
+Enhanced Parameter Extractor for LT32Pro Device Responses
+
+This module provides functionality to parse LT32Pro device responses and extract
+individual parameters for profile file creation and validation.
+"""
+
+import re
+from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class EnhancedParameterExtractor:
+    """
+    Extracts individual parameters from LT32Pro device responses.
+    
+    Converts device-specific response formats into standardized parameter
+    dictionaries for profile file creation and validation.
+    """
+    
+    # Protocol mapping for GT06SEL values
+    PROTOCOL_MAPPING = {
+        "0": "GT06",
+        "1": "GT06N", 
+        "2": "CRX",
+        "3": "CONCOX",
+        "4": "H02"
+    }
+    
+    def __init__(self):
+        """Initialize the parameter extractor."""
+        self.logger = logging.getLogger(__name__)
+    
+    def extract_parameters_from_responses(self, device_responses: Dict[str, str]) -> Dict[str, str]:
+        """
+        Convert device responses to individual parameters with comprehensive error handling.
+        
+        Args:
+            device_responses: Dictionary of command -> response mappings
+            
+        Returns:
+            Dictionary of extracted parameters
+            
+        Requirements: 5.1, 5.2 - Log errors and continue processing other parameters
+        """
+        parameters = {}
+        extraction_errors = []
+        successful_extractions = 0
+        
+        try:
+            # Process each response type with individual error handling
+            for command, response in device_responses.items():
+                try:
+                    if not response:
+                        self.logger.debug(f"Skipping empty response for command: {command}")
+                        continue
+                    
+                    extracted_params = {}
+                    
+                    # Parse APN responses
+                    if command.upper() in ['APN', 'ATSMS:APN#']:
+                        extracted_params = self._safe_parse_apn_response(response, command)
+                    
+                    # Parse SERVER responses
+                    elif command.upper() in ['SERVER', 'ATSMS:SERVER#']:
+                        extracted_params = self._safe_parse_server_response(response, command)
+                    
+                    # Parse READOK responses (IMEI, ICCID, GT06SEL, POSBYACK)
+                    elif 'READOK' in response.upper():
+                        extracted_params = self._safe_parse_readok_response(response, command)
+                    
+                    # Parse STATUS responses
+                    elif command.upper() in ['STATUS', 'ATSMS:STATUS#']:
+                        extracted_params = self._safe_parse_status_response(response, command)
+                    
+                    # Parse VERSION responses
+                    elif command.upper() in ['VERSION', 'ATSMS:VERSION#']:
+                        extracted_params = self._safe_parse_version_response(response, command)
+                    
+                    # Parse HOURMETER/ACCONT responses
+                    elif command.upper() in ['HOURMETER', 'ACCONT', 'ATSMS:ACCONT#']:
+                        extracted_params = self._safe_parse_hourmeter_response(response, command)
+                    
+                    # Parse ODOMETER/MILEAGE responses
+                    elif command.upper() in ['ODOMETER', 'MILEAGE', 'ATSMS:MILEAGE#']:
+                        extracted_params = self._safe_parse_odometer_response(response, command)
+                    
+                    else:
+                        self.logger.debug(f"No parser available for command: {command}")
+                        continue
+                    
+                    # Update parameters with extracted values
+                    if extracted_params:
+                        parameters.update(extracted_params)
+                        successful_extractions += 1
+                        self.logger.debug(f"Successfully extracted {len(extracted_params)} parameters from {command}")
+                    else:
+                        self.logger.warning(f"No parameters extracted from {command} response")
+                        
+                except Exception as e:
+                    error_msg = f"Failed to process {command} response: {str(e)}"
+                    extraction_errors.append(error_msg)
+                    self.logger.error(error_msg)
+                    # Continue processing other responses (Requirement 5.2)
+                    continue
+            
+            # Add default parameters with error handling
+            try:
+                parameters = self.add_default_parameters(parameters)
+            except Exception as e:
+                error_msg = f"Failed to add default parameters: {str(e)}"
+                extraction_errors.append(error_msg)
+                self.logger.error(error_msg)
+            
+            # Log extraction summary
+            total_responses = len(device_responses)
+            if extraction_errors:
+                self.logger.warning(f"Parameter extraction completed with {len(extraction_errors)} errors. "
+                                  f"Successfully processed {successful_extractions}/{total_responses} responses. "
+                                  f"Extracted {len(parameters)} total parameters.")
+            else:
+                self.logger.info(f"Successfully extracted {len(parameters)} parameters from {total_responses} device responses")
+            
+            return parameters
+            
+        except Exception as e:
+            # Handle catastrophic failure
+            error_msg = f"Critical error during parameter extraction: {str(e)}"
+            self.logger.error(error_msg)
+            extraction_errors.append(error_msg)
+            
+            # Return whatever parameters we managed to extract
+            return parameters
+    
+    def _parse_apn_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse APN response format: APN:server,user,password
+        
+        Args:
+            response: APN response string
+            
+        Returns:
+            Dictionary with apn_server, apn_user, apn_password
+        """
+        parameters = {}
+        
+        try:
+            # Match APN:server,user,password format
+            apn_match = re.search(r'APN:([^,]*),([^,]*),([^,\r\n]*)', response, re.IGNORECASE)
+            
+            if apn_match:
+                parameters['apn_server'] = apn_match.group(1).strip()
+                parameters['apn_user'] = apn_match.group(2).strip()
+                parameters['apn_password'] = apn_match.group(3).strip()
+                
+                self.logger.debug(f"Parsed APN: server={parameters['apn_server']}, "
+                                f"user={parameters['apn_user']}, password=***")
+            else:
+                self.logger.warning(f"Could not parse APN response: {response}")
+                
+        except Exception as e:
+            self.logger.error(f"Error parsing APN response '{response}': {e}")
+            
+        return parameters
+    
+    def _parse_server_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse SERVER response format: SERVER:0,IP,PORT,0
+        
+        Args:
+            response: SERVER response string
+            
+        Returns:
+            Dictionary with server_ip, server_port, server_type
+        """
+        parameters = {}
+        
+        try:
+            # Match SERVER:0,IP,PORT,0 format
+            server_match = re.search(r'SERVER:(\d+),([^,]+),(\d+),(\d+)', response, re.IGNORECASE)
+            
+            if server_match:
+                parameters['server_type'] = server_match.group(1).strip()
+                parameters['server_ip'] = server_match.group(2).strip()
+                parameters['server_port'] = server_match.group(3).strip()
+                parameters['server_protocol'] = server_match.group(4).strip()
+                
+                self.logger.debug(f"Parsed SERVER: ip={parameters['server_ip']}, "
+                                f"port={parameters['server_port']}, type={parameters['server_type']}")
+            else:
+                self.logger.warning(f"Could not parse SERVER response: {response}")
+                
+        except Exception as e:
+            self.logger.error(f"Error parsing SERVER response '{response}': {e}")
+            
+        return parameters
+    
+    def _parse_readok_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse READOK response formats:
+        - READOK: IMEI=value
+        - READOK: ICCID=value  
+        - READOK: GT06SEL=value
+        - READOK: POSBYACK=value
+        
+        Args:
+            response: READOK response string
+            
+        Returns:
+            Dictionary with extracted parameters
+        """
+        parameters = {}
+        
+        try:
+            # Parse IMEI
+            imei_match = re.search(r'READOK:\s*IMEI=([^\r\n]+)', response, re.IGNORECASE)
+            if imei_match:
+                imei_value = imei_match.group(1).strip()
+                parameters['device_imei'] = imei_value
+                parameters['device_id'] = imei_value
+                parameters['imei'] = imei_value
+                self.logger.debug(f"Parsed IMEI: {imei_value}")
+            
+            # Parse ICCID
+            iccid_match = re.search(r'READOK:\s*ICCID=([^\r\n]+)', response, re.IGNORECASE)
+            if iccid_match:
+                iccid_value = iccid_match.group(1).strip()
+                parameters['device_iccid'] = iccid_value
+                parameters['iccid'] = iccid_value
+                self.logger.debug(f"Parsed ICCID: {iccid_value}")
+            
+            # Parse GT06SEL (protocol)
+            protocol_match = re.search(r'READOK:\s*GT06SEL=([^\r\n]+)', response, re.IGNORECASE)
+            if protocol_match:
+                protocol_value = protocol_match.group(1).strip()
+                parameters['protocol'] = protocol_value
+                parameters['protocol_name'] = self.PROTOCOL_MAPPING.get(protocol_value, f"Unknown({protocol_value})")
+                self.logger.debug(f"Parsed Protocol: {protocol_value} -> {parameters['protocol_name']}")
+            
+            # Parse POSBYACK (TCP acknowledgment)
+            posbyack_match = re.search(r'READOK:\s*POSBYACK=([^\r\n]+)', response, re.IGNORECASE)
+            if posbyack_match:
+                posbyack_value = posbyack_match.group(1).strip()
+                parameters['tcp_ack'] = posbyack_value
+                parameters['tcp_acknowledgment'] = posbyack_value
+                self.logger.debug(f"Parsed POSBYACK: {posbyack_value}")
+                
+        except Exception as e:
+            self.logger.error(f"Error parsing READOK response '{response}': {e}")
+            
+        return parameters
+    
+    def _parse_status_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse STATUS response format: Battery:4.14V;GPRS:Online;GSM Signal Level:31;ACC:ON;GPS:Successful positioning
+        
+        Args:
+            response: STATUS response string
+            
+        Returns:
+            Dictionary with status parameters
+        """
+        parameters = {}
+        
+        try:
+            # Parse battery voltage
+            battery_match = re.search(r'Battery:([^;]+)', response, re.IGNORECASE)
+            if battery_match:
+                parameters['battery_voltage'] = battery_match.group(1).strip()
+            
+            # Parse GPRS status
+            gprs_match = re.search(r'GPRS:([^;]+)', response, re.IGNORECASE)
+            if gprs_match:
+                parameters['gprs_status'] = gprs_match.group(1).strip()
+            
+            # Parse GSM signal level
+            gsm_match = re.search(r'GSM Signal Level:([^;]+)', response, re.IGNORECASE)
+            if gsm_match:
+                parameters['gsm_signal_level'] = gsm_match.group(1).strip()
+            
+            # Parse ACC status
+            acc_match = re.search(r'ACC:([^;]+)', response, re.IGNORECASE)
+            if acc_match:
+                parameters['acc_status'] = acc_match.group(1).strip()
+            
+            # Parse GPS status
+            gps_match = re.search(r'GPS:([^;]+)', response, re.IGNORECASE)
+            if gps_match:
+                parameters['gps_status'] = gps_match.group(1).strip()
+            
+            # Parse hourmeter from "Get ACC ON Time:value Minute" format in status
+            acc_on_time_match = re.search(r'Get\s+ACC\s+ON\s+Time[=:](\d+)', response, re.IGNORECASE)
+            if acc_on_time_match:
+                parameters['acc_on_time'] = acc_on_time_match.group(1)
+                self.logger.debug(f"Extracted acc_on_time from status: {acc_on_time_match.group(1)}")
+            
+            # Parse odometer from "Cur Mileage Value:valueKM" format in status
+            cur_mileage_match = re.search(r'Cur\s+Mileage\s+Value[=:](\d+)', response, re.IGNORECASE)
+            if cur_mileage_match:
+                parameters['current_mileage'] = cur_mileage_match.group(1)
+                self.logger.debug(f"Extracted current_mileage from status: {cur_mileage_match.group(1)}")
+                
+            self.logger.debug(f"Parsed STATUS response with {len(parameters)} status parameters")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing STATUS response '{response}': {e}")
+            
+        return parameters
+    
+    def _parse_version_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse VERSION response format: LT32Pro_10F8A_B53_V6.56 2025-06-26
+        
+        Args:
+            response: VERSION response string
+            
+        Returns:
+            Dictionary with version parameters
+        """
+        parameters = {}
+        
+        try:
+            # Extract version information
+            version_match = re.search(r'(LT32Pro[^\s]+)\s*([^\r\n]*)', response.strip(), re.IGNORECASE)
+            if version_match:
+                parameters['device_version'] = version_match.group(1).strip()
+                if version_match.group(2).strip():
+                    parameters['firmware_date'] = version_match.group(2).strip()
+                
+                self.logger.debug(f"Parsed VERSION: {parameters['device_version']}")
+            else:
+                # Fallback: use entire response as version
+                parameters['device_version'] = response.strip()
+                
+        except Exception as e:
+            self.logger.error(f"Error parsing VERSION response '{response}': {e}")
+            
+        return parameters
+    
+    def add_default_parameters(self, parameters: Dict[str, str]) -> Dict[str, str]:
+        """
+        Add default values for commonly required parameters.
+        
+        Args:
+            parameters: Existing parameters dictionary
+            
+        Returns:
+            Parameters dictionary with default values added
+        """
+        defaults = {
+            'heartbeat_interval': '300',  # 5 minutes
+            'report_interval': '60',      # 1 minute
+            'timezone': '0',              # UTC
+            'device_name': self._generate_device_name(parameters),
+            'upload_interval': '30',      # 30 seconds
+            'sleep_mode': '0',           # Disabled
+            'power_save_mode': '0',      # Disabled
+            'tracking_mode': '1',        # Normal tracking
+        }
+        
+        # Only add defaults if they don't already exist
+        for key, value in defaults.items():
+            if key not in parameters:
+                parameters[key] = value
+        
+        self.logger.debug(f"Added {len(defaults)} default parameters")
+        return parameters
+    
+    def _generate_device_name(self, parameters: Dict[str, str]) -> str:
+        """
+        Generate a device name based on available parameters.
+        
+        Args:
+            parameters: Current parameters dictionary
+            
+        Returns:
+            Generated device name
+        """
+        # Use last 4 digits of IMEI if available
+        if 'device_imei' in parameters and parameters['device_imei']:
+            imei = parameters['device_imei']
+            if len(imei) >= 4:
+                return f"LT32Pro_{imei[-4:]}"
+        
+        # Use device version if available
+        if 'device_version' in parameters and parameters['device_version']:
+            version = parameters['device_version']
+            if 'LT32Pro' in version:
+                return version.split()[0]  # Take first part
+        
+        # Default name
+        return "LT32Pro_Device"
+    
+    def validate_extracted_parameters(self, parameters: Dict[str, str]) -> Dict[str, str]:
+        """
+        Validate and clean extracted parameters.
+        
+        Args:
+            parameters: Parameters to validate
+            
+        Returns:
+            Validated parameters dictionary
+        """
+        validated = {}
+        
+        for key, value in parameters.items():
+            if value is not None and str(value).strip():
+                validated[key] = str(value).strip()
+            else:
+                self.logger.warning(f"Skipping empty parameter: {key}")
+        
+        return validated
+    
+    def _safe_parse_apn_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse APN response with error handling."""
+        try:
+            return self._parse_apn_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing APN response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_server_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse SERVER response with error handling."""
+        try:
+            return self._parse_server_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing SERVER response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_readok_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse READOK response with error handling."""
+        try:
+            return self._parse_readok_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing READOK response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_status_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse STATUS response with error handling."""
+        try:
+            return self._parse_status_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing STATUS response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_version_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse VERSION response with error handling."""
+        try:
+            return self._parse_version_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing VERSION response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_hourmeter_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse HOURMETER response with error handling."""
+        try:
+            return self._parse_hourmeter_response(response, command)
+        except Exception as e:
+            self.logger.error(f"Error parsing HOURMETER response for {command}: {e}")
+            return {}
+    
+    def _safe_parse_odometer_response(self, response: str, command: str) -> Dict[str, str]:
+        """Safely parse ODOMETER response with error handling."""
+        try:
+            return self._parse_odometer_response(response)
+        except Exception as e:
+            self.logger.error(f"Error parsing ODOMETER response for {command}: {e}")
+            return {}
+    
+    def _parse_hourmeter_response(self, response: str, command: str = '') -> Dict[str, str]:
+        """
+        Parse HOURMETER/ACCONT response formats.
+        
+        Handles various formats:
+        - "ACCONT=5678"
+        - "Get ACC ON Time:5678 Minute"
+        - "Engine Hours: 1234 hours"
+        
+        Args:
+            response: Hourmeter response string
+            command: Command that generated this response
+            
+        Returns:
+            Dictionary with hourmeter parameters
+        """
+        parameters = {}
+        
+        try:
+            # Pattern to match ACCONT=value format
+            accont_match = re.search(r'ACCONT[=:](\d+)', response, re.IGNORECASE)
+            if accont_match:
+                # Use different parameter names based on the command to avoid conflicts
+                if command.upper() == 'ACCONT':
+                    param_name = 'accont'
+                else:
+                    param_name = 'hourmeter'
+                
+                parameters[param_name] = accont_match.group(1)
+                self.logger.debug(f"Extracted {param_name} from ACCONT format: {accont_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Get ACC ON Time:value Minute" format
+            acc_on_time_match = re.search(r'Get\s+ACC\s+ON\s+Time[=:](\d+)', response, re.IGNORECASE)
+            if acc_on_time_match:
+                parameters['acc_on_time'] = acc_on_time_match.group(1)
+                self.logger.debug(f"Extracted acc_on_time: {acc_on_time_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Engine Hours: value hours" format
+            engine_hours_match = re.search(r'Engine\s+Hours[=:]?\s*(\d+)', response, re.IGNORECASE)
+            if engine_hours_match:
+                parameters['engine_hours'] = engine_hours_match.group(1)
+                self.logger.debug(f"Extracted engine_hours: {engine_hours_match.group(1)}")
+                return parameters
+            
+            # Fallback: try to extract any numeric value
+            numeric_match = re.search(r'(\d+)', response)
+            if numeric_match:
+                parameters['hourmeter'] = numeric_match.group(1)
+                self.logger.debug(f"Extracted hourmeter (fallback): {numeric_match.group(1)}")
+                return parameters
+            
+            self.logger.warning(f"Could not parse hourmeter response: {response}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing hourmeter response '{response}': {e}")
+        
+        return parameters
+    
+    def _parse_odometer_response(self, response: str) -> Dict[str, str]:
+        """
+        Parse ODOMETER/MILEAGE response formats.
+        
+        Handles various formats:
+        - "MILEAGE=12345"
+        - "Cur Mileage Value:12345KM"
+        - "Odometer: 98765 km"
+        
+        Args:
+            response: Odometer response string
+            
+        Returns:
+            Dictionary with odometer parameters
+        """
+        parameters = {}
+        
+        try:
+            # Pattern to match MILEAGE=value format
+            mileage_match = re.search(r'MILEAGE[=:](\d+)', response, re.IGNORECASE)
+            if mileage_match:
+                parameters['odometer'] = mileage_match.group(1)
+                self.logger.debug(f"Extracted odometer from MILEAGE format: {mileage_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Cur Mileage Value:valueKM" format
+            cur_mileage_match = re.search(r'Cur\s+Mileage\s+Value[=:](\d+)', response, re.IGNORECASE)
+            if cur_mileage_match:
+                parameters['current_mileage'] = cur_mileage_match.group(1)
+                self.logger.debug(f"Extracted current_mileage: {cur_mileage_match.group(1)}")
+                return parameters
+            
+            # Pattern to match "Odometer: value km" format
+            odometer_match = re.search(r'Odometer[=:]?\s*(\d+)', response, re.IGNORECASE)
+            if odometer_match:
+                parameters['odometer'] = odometer_match.group(1)
+                self.logger.debug(f"Extracted odometer: {odometer_match.group(1)}")
+                return parameters
+            
+            # Fallback: try to extract any numeric value
+            numeric_match = re.search(r'(\d+)', response)
+            if numeric_match:
+                parameters['odometer'] = numeric_match.group(1)
+                self.logger.debug(f"Extracted odometer (fallback): {numeric_match.group(1)}")
+                return parameters
+            
+            self.logger.warning(f"Could not parse odometer response: {response}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing odometer response '{response}': {e}")
+        
+        return parameters
+</document_content>
+</document>
+<document index="41">
+<source>.\services\enhanced_parameter_reader.py</source>
+<document_content>
+
+</document_content>
+</document>
+<document index="42">
+<source>.\services\error_handling_service.py</source>
+<document_content>
+"""
+Error Handling Service - Provides centralized error handling and user feedback.
+
+This module provides a centralized service for handling errors, displaying
+appropriate messages, and managing reconnection attempts for the LT32Pro
+Device Configurator application.
+"""
+
+import threading
+import time
+from typing import Callable, Optional, Dict, Any, Tuple
+import datetime
+import tkinter as tk
+from tkinter import messagebox
+
+class ErrorHandlingService:
+    """Centralized error handling and user feedback service."""
+    
+    # Error categories
+    CONNECTION_ERROR = "connection"
+    VALIDATION_ERROR = "validation"
+    COMMAND_ERROR = "command"
+    DEVICE_ERROR = "device"
+    SYSTEM_ERROR = "system"
+    
+    # Error severity levels
+    SEVERITY_INFO = "info"
+    SEVERITY_WARNING = "warning"
+    SEVERITY_ERROR = "error"
+    SEVERITY_CRITICAL = "critical"
+    
+    # Connection error types
+    CONN_ERROR_PORT_NOT_FOUND = "port_not_found"
+    CONN_ERROR_PORT_IN_USE = "port_in_use"
+    CONN_ERROR_ACCESS_DENIED = "access_denied"
+    CONN_ERROR_TIMEOUT = "timeout"
+    CONN_ERROR_DEVICE_DISCONNECTED = "device_disconnected"
+    CONN_ERROR_NO_RESPONSE = "no_response"
+    CONN_ERROR_SIGNAL_LOST = "signal_lost"
+    CONN_ERROR_DEVICE_BUSY = "device_busy"
+    CONN_ERROR_INVALID_RESPONSE = "invalid_response"
+    CONN_ERROR_UNKNOWN = "unknown_connection_error"
+    CONN_ERROR_DRIVER_ISSUE = "driver_issue"
+    CONN_ERROR_HARDWARE_FAILURE = "hardware_failure"
+    CONN_ERROR_CABLE_ISSUE = "cable_issue"
+    CONN_ERROR_DEVICE_LOCKED = "device_locked"
+    
+    # Command error types
+    CMD_ERROR_INVALID_FORMAT = "invalid_format"
+    CMD_ERROR_TIMEOUT = "command_timeout"
+    CMD_ERROR_REJECTED = "command_rejected"
+    CMD_ERROR_UNKNOWN = "unknown_command_error"
+    
+    def __init__(self, app_instance):
+        """
+        Initialize the error handling service.
+        
+        Args:
+            app_instance: Reference to the main application instance
+        """
+        self.app = app_instance
+        self.reconnect_thread = None
+        self.stop_reconnect = False
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 3
+        self.reconnect_delay = 2  # seconds
+        self.auto_reconnect_enabled = True  # Enable auto-reconnect by default
+        self.last_error_time = {}  # Track last occurrence of each error type
+        self.error_count = {}  # Count occurrences of each error type
+        self.connection_status_history = []  # Track connection status changes
+        self.connection_quality = 100  # Connection quality percentage (100 = perfect)
+        
+        # Parameter-specific error handler
+        self.parameter_error_handler = None
+        
+        # Error message templates with placeholders
+        self.error_messages = {
+            # Connection errors
+            self.CONN_ERROR_PORT_NOT_FOUND: "COM port {port} not found. Please check your device connection and ensure the USB cable is properly connected.",
+            self.CONN_ERROR_PORT_IN_USE: "COM port {port} is already in use by another application. Please close any other programs that might be using this port.",
+            self.CONN_ERROR_ACCESS_DENIED: "Access denied to COM port {port}. Please check permissions or run the application as administrator.",
+            self.CONN_ERROR_TIMEOUT: "Connection timeout on port {port}. Device not responding within the expected time frame.",
+            self.CONN_ERROR_DEVICE_DISCONNECTED: "Device disconnected unexpectedly. Please check the physical connection and device power status.",
+            self.CONN_ERROR_NO_RESPONSE: "Device connected but not responding to commands on port {port}. The device may be in an error state.",
+            self.CONN_ERROR_SIGNAL_LOST: "Signal lost on port {port}. The connection was interrupted during communication.",
+            self.CONN_ERROR_DEVICE_BUSY: "Device on port {port} is busy processing another command. Please try again in a few moments.",
+            self.CONN_ERROR_INVALID_RESPONSE: "Invalid response received from device on port {port}. The device may be incompatible or in an error state.",
+            self.CONN_ERROR_DRIVER_ISSUE: "Possible driver issue detected on port {port}. Please verify that the correct USB drivers are installed.",
+            self.CONN_ERROR_HARDWARE_FAILURE: "Hardware failure detected on port {port}. The device may need service or replacement.",
+            self.CONN_ERROR_CABLE_ISSUE: "Possible cable issue detected on port {port}. Try using a different USB cable.",
+            self.CONN_ERROR_DEVICE_LOCKED: "Device on port {port} appears to be locked or in a protected state. Try power cycling the device.",
+            self.CONN_ERROR_UNKNOWN: "Unknown connection error: {error_message}",
+            
+            # Command errors
+            self.CMD_ERROR_INVALID_FORMAT: "Invalid command format: {command}",
+            self.CMD_ERROR_TIMEOUT: "Command timeout: {command}",
+            self.CMD_ERROR_REJECTED: "Command rejected by device: {command}",
+            self.CMD_ERROR_UNKNOWN: "Unknown command error: {error_message}"
+        }
+        
+        # Error resolution suggestions
+        self.error_resolutions = {
+            self.CONN_ERROR_PORT_NOT_FOUND: [
+                "Verify the device is properly connected to your computer",
+                "Try a different USB port",
+                "Check if the USB cable is damaged and replace if necessary",
+                "Restart the device and try again"
+            ],
+            self.CONN_ERROR_PORT_IN_USE: [
+                "Close any other applications that might be using the COM port",
+                "Check Device Manager to see which application is using the port",
+                "Restart your computer to release all COM ports"
+            ],
+            self.CONN_ERROR_ACCESS_DENIED: [
+                "Run the application as administrator",
+                "Check Windows security settings for blocked access",
+                "Verify you have proper permissions to access COM ports"
+            ],
+            self.CONN_ERROR_TIMEOUT: [
+                "Check if the device is powered on",
+                "Verify the device is in configuration mode",
+                "Try increasing the connection timeout in settings",
+                "Reset the device and try again"
+            ],
+            self.CONN_ERROR_DEVICE_DISCONNECTED: [
+                "Check the physical connection",
+                "Verify the device has power",
+                "Try a different USB cable",
+                "Check if the device needs to be reset"
+            ],
+            self.CONN_ERROR_DRIVER_ISSUE: [
+                "Install or reinstall the USB drivers for the device",
+                "Check Device Manager for driver warnings or errors",
+                "Download the latest drivers from the manufacturer's website"
+            ]
+        }
+        
+        # Initialize connection status indicator
+        self.connection_status_indicator = None
+        self.connection_status_timer = None
+        self.connection_quality_timer = None
+        
+        # Initialize parameter error handler
+        self._init_parameter_error_handler()
+    
+    def _init_parameter_error_handler(self):
+        """Initialize the parameter-specific error handler."""
+        try:
+            from services.parameter_error_handler import ParameterErrorHandler
+            self.parameter_error_handler = ParameterErrorHandler(self.app)
+            self.app.log_frame.log_message("INFO: Parameter error handler initialized\n")
+        except ImportError as e:
+            self.app.log_frame.log_message(f"WARNING: Failed to initialize parameter error handler: {str(e)}\n")
+            self.parameter_error_handler = None
+    
+    def handle_error(self, error_type: str, severity: str, context: Dict[str, Any] = None) -> None:
+        """
+        Handle an error with appropriate user feedback.
+        
+        Args:
+            error_type: The type of error (from class constants)
+            severity: The severity level (from class constants)
+            context: Optional context dictionary with error details
+        """
+        if context is None:
+            context = {}
+            
+        # Update error tracking
+        current_time = datetime.datetime.now()
+        self.last_error_time[error_type] = current_time
+        self.error_count[error_type] = self.error_count.get(error_type, 0) + 1
+        
+        # Get the error message template
+        message_template = self.error_messages.get(error_type, "Unknown error: {error_message}")
+        
+        # Format the error message with context
+        try:
+            error_message = message_template.format(**context)
+        except KeyError:
+            # Fallback if context doesn't have required keys
+            error_message = message_template.format(error_message=str(context))
+        
+        # Log the error with appropriate prefix based on severity
+        if severity == self.SEVERITY_ERROR or severity == self.SEVERITY_CRITICAL:
+            self.app.log_frame.log_message(f"ERROR: {error_message}\n")
+            
+            # For critical errors, show a dialog
+            if severity == self.SEVERITY_CRITICAL:
+                self.app.after(0, lambda: messagebox.showerror("Critical Error", error_message))
+        elif severity == self.SEVERITY_WARNING:
+            self.app.log_frame.log_message(f"WARNING: {error_message}\n")
+        else:
+            self.app.log_frame.log_message(f"INFO: {error_message}\n")
+        
+        # Handle connection errors specially
+        if error_type.startswith("conn_error_"):
+            self._handle_connection_error(error_type, context)
+            
+            # Add resolution suggestions for connection errors
+            if error_type in self.error_resolutions:
+                suggestions = self.error_resolutions[error_type]
+                self.app.log_frame.log_message(f"INFO: Suggested solutions:\n")
+                for i, suggestion in enumerate(suggestions, 1):
+                    self.app.log_frame.log_message(f"INFO: {i}. {suggestion}\n")
+    
+    def _handle_connection_error(self, error_type: str, context: Dict[str, Any]) -> None:
+        """
+        Handle connection errors with potential reconnection attempts.
+        
+        Args:
+            error_type: The specific connection error type
+            context: Error context dictionary
+        """
+        # Update connection status in UI
+        if hasattr(self.app, 'connection_frame'):
+            self.app.connection_frame.update_status(False)
+            
+            # Update connection quality based on error type
+            if error_type == self.CONN_ERROR_DEVICE_DISCONNECTED:
+                self._update_connection_quality(-30)  # Major issue
+            elif error_type in [self.CONN_ERROR_TIMEOUT, self.CONN_ERROR_NO_RESPONSE]:
+                self._update_connection_quality(-20)  # Moderate issue
+            elif error_type in [self.CONN_ERROR_SIGNAL_LOST, self.CONN_ERROR_INVALID_RESPONSE]:
+                self._update_connection_quality(-10)  # Minor issue
+        
+        # For unexpected disconnections or timeouts, attempt to reconnect if enabled
+        if self.auto_reconnect_enabled and error_type in [
+            self.CONN_ERROR_DEVICE_DISCONNECTED, 
+            self.CONN_ERROR_TIMEOUT,
+            self.CONN_ERROR_SIGNAL_LOST,
+            self.CONN_ERROR_NO_RESPONSE
+        ]:
+            port = context.get('port')
+            if port:
+                self._attempt_reconnection(port)
+    
+    def _update_connection_quality(self, change: int) -> None:
+        """
+        Update the connection quality metric.
+        
+        Args:
+            change: The change in quality (-100 to +100)
+        """
+        self.connection_quality = max(0, min(100, self.connection_quality + change))
+        
+        # Log significant quality changes
+        if change <= -20:
+            self.app.log_frame.log_message(f"WARNING: Connection quality degraded to {self.connection_quality}%\n")
+        elif change >= 10:
+            self.app.log_frame.log_message(f"INFO: Connection quality improved to {self.connection_quality}%\n")
+            
+        # Update the connection indicator if available
+        if hasattr(self.app, 'connection_frame') and hasattr(self.app.connection_frame, 'update_connection_quality'):
+            self.app.connection_frame.update_connection_quality(self.connection_quality)
+    
+    def _attempt_reconnection(self, port: Optional[str]) -> None:
+        """
+        Attempt to reconnect to the device.
+        
+        Args:
+            port: The COM port to reconnect to
+        """
+        # Don't start a new reconnection thread if one is already running
+        if self.reconnect_thread and self.reconnect_thread.is_alive():
+            return
+            
+        # Reset reconnection state
+        self.stop_reconnect = False
+        self.reconnect_attempts = 0
+        
+        # Log the start of reconnection attempts
+        self.app.log_frame.log_message(
+            f"INFO: Starting automatic reconnection to {port}...\n"
+        )
+        
+        # Start reconnection in a separate thread
+        self.reconnect_thread = threading.Thread(
+            target=self._reconnection_worker,
+            args=(port,),
+            daemon=True
+        )
+        self.reconnect_thread.start()
+        
+        # Update UI to show reconnection in progress
+        if hasattr(self.app, 'connection_frame'):
+            self.app.connection_frame.show_reconnecting_status()
+    
+    def _reconnection_worker(self, port: Optional[str]) -> None:
+        """
+        Worker thread for reconnection attempts.
+        
+        Args:
+            port: The COM port to reconnect to
+        """
+        if not port or not hasattr(self.app, 'serial_service'):
+            return
+            
+        while (not self.stop_reconnect and 
+               self.reconnect_attempts < self.max_reconnect_attempts):
+            
+            self.reconnect_attempts += 1
+            
+            # Calculate backoff delay (increases with each attempt)
+            current_delay = self.reconnect_delay * self.reconnect_attempts
+            
+            # Log reconnection attempt with progress bar
+            self.app.log_frame.log_message(
+                f"INFO: Reconnection attempt {self.reconnect_attempts}/{self.max_reconnect_attempts} "
+                f"[{'=' * self.reconnect_attempts}{' ' * (self.max_reconnect_attempts - self.reconnect_attempts)}]\n"
+            )
+            
+            # Update UI to show current reconnection attempt
+            if hasattr(self.app, 'connection_frame'):
+                self.app.after(0, self.app.connection_frame.update_reconnection_status, 
+                              self.reconnect_attempts, self.max_reconnect_attempts)
+            
+            # Attempt to reconnect
+            try:
+                self.app.serial_service.connect(port)
+                
+                # Check if connection was successful
+                if self.app.serial_service.is_connected:
+                    self.app.log_frame.log_message(f"INFO: Ô£ô Reconnection successful\n")
+                    
+                    # Update connection quality
+                    self._update_connection_quality(20)  # Successful reconnection improves quality
+                    
+                    # Reset reconnection UI
+                    if hasattr(self.app, 'connection_frame'):
+                        self.app.after(0, self.app.connection_frame.hide_reconnecting_status)
+                    
+                    return
+            except Exception as e:
+                # Log reconnection failure with details
+                error_type, context = self.parse_error_from_exception(e)
+                error_message = self.error_messages.get(error_type, str(e))
+                
+                try:
+                    formatted_error = error_message.format(**context)
+                except (KeyError, ValueError):
+                    formatted_error = str(e)
+                
+                self.app.log_frame.log_message(f"ERROR: Reconnection failed: {formatted_error}\n")
+            
+            # Wait before next attempt with backoff
+            for i in range(int(current_delay)):
+                if self.stop_reconnect:
+                    break
+                time.sleep(1)
+                
+                # Update countdown in UI
+                remaining = current_delay - i - 1
+                if remaining > 0 and hasattr(self.app, 'connection_frame'):
+                    self.app.after(0, self.app.connection_frame.update_reconnection_countdown, remaining)
+        
+        # Log if all reconnection attempts failed
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.app.log_frame.log_message(
+                f"ERROR: Failed to reconnect after {self.max_reconnect_attempts} attempts\n"
+            )
+            
+            # Show reconnection failure in UI
+            if hasattr(self.app, 'connection_frame'):
+                self.app.after(0, self.app.connection_frame.show_reconnection_failed)
+                
+            # Suggest manual reconnection
+            self.app.log_frame.log_message(
+                f"INFO: Please check your device connection and try reconnecting manually\n"
+            )
+    
+    def stop_reconnection(self) -> None:
+        """Stop any ongoing reconnection attempts."""
+        self.stop_reconnect = True
+        if self.reconnect_thread and self.reconnect_thread.is_alive():
+            self.reconnect_thread.join(timeout=1)
+            
+        # Reset reconnection UI
+        if hasattr(self.app, 'connection_frame'):
+            self.app.connection_frame.hide_reconnecting_status()
+            
+        self.app.log_frame.log_message("INFO: Automatic reconnection stopped\n")
+    
+    def set_auto_reconnect(self, enabled: bool) -> None:
+        """
+        Enable or disable automatic reconnection attempts.
+        
+        Args:
+            enabled: Whether to enable auto-reconnect
+        """
+        self.auto_reconnect_enabled = enabled
+        status = "enabled" if enabled else "disabled"
+        self.app.log_frame.log_message(f"INFO: Automatic reconnection {status}\n")
+    
+    def show_success_notification(self, message: str) -> None:
+        """
+        Show a success notification in the log.
+        
+        Args:
+            message: The success message to display
+        """
+        self.app.log_frame.log_message(f"INFO: Ô£ô {message}\n")
+    
+    def show_operation_progress(self, operation: str, progress: int, total: int) -> None:
+        """
+        Show operation progress in the log.
+        
+        Args:
+            operation: The operation name
+            progress: Current progress value
+            total: Total progress value
+        """
+        percentage = int((progress / total) * 100)
+        bar_length = 20
+        filled_length = int(bar_length * progress / total)
+        bar = 'Ôûê' * filled_length + 'Ôûæ' * (bar_length - filled_length)
+        
+        self.app.log_frame.log_message(
+            f"INFO: {operation}: {progress}/{total} ({percentage}%) [{bar}]\n"
+        )
+    
+    def get_connection_status_message(self, is_connected: bool, port: Optional[str] = None, 
+                                     quality: Optional[int] = None) -> str:
+        """
+        Get a detailed connection status message.
+        
+        Args:
+            is_connected: Whether the device is connected
+            port: Optional port name
+            quality: Optional connection quality percentage
+            
+        Returns:
+            Formatted status message
+        """
+        if is_connected:
+            base_message = f"Connected to {port}" if port else "Connected"
+            
+            if quality is not None:
+                if quality >= 90:
+                    return f"{base_message} (Excellent)"
+                elif quality >= 70:
+                    return f"{base_message} (Good)"
+                elif quality >= 40:
+                    return f"{base_message} (Fair)"
+                else:
+                    return f"{base_message} (Poor)"
+            return base_message
+        else:
+            return "Disconnected"
+    
+    def parse_error_from_exception(self, exception: Exception) -> tuple:
+        """
+        Parse an exception to determine error type and context.
+        
+        Args:
+            exception: The exception to parse
+            
+        Returns:
+            Tuple of (error_type, context_dict)
+        """
+        error_message = str(exception)
+        error_type = self.CONN_ERROR_UNKNOWN
+        context = {"error_message": error_message}
+        
+        # Check for common serial exception patterns
+        if "could not open port" in error_message:
+            if "PermissionError" in error_message:
+                error_type = self.CONN_ERROR_ACCESS_DENIED
+            elif "FileNotFoundError" in error_message:
+                error_type = self.CONN_ERROR_PORT_NOT_FOUND
+            else:
+                error_type = self.CONN_ERROR_PORT_IN_USE
+        elif "timeout" in error_message.lower():
+            error_type = self.CONN_ERROR_TIMEOUT
+        elif "disconnected" in error_message.lower():
+            error_type = self.CONN_ERROR_DEVICE_DISCONNECTED
+        elif "no response" in error_message.lower():
+            error_type = self.CONN_ERROR_NO_RESPONSE
+        elif "signal lost" in error_message.lower() or "connection lost" in error_message.lower():
+            error_type = self.CONN_ERROR_SIGNAL_LOST
+        elif "device busy" in error_message.lower() or "resource busy" in error_message.lower():
+            error_type = self.CONN_ERROR_DEVICE_BUSY
+        elif "invalid response" in error_message.lower() or "unexpected response" in error_message.lower():
+            error_type = self.CONN_ERROR_INVALID_RESPONSE
+        elif "driver" in error_message.lower():
+            error_type = self.CONN_ERROR_DRIVER_ISSUE
+        elif "hardware" in error_message.lower() or "failure" in error_message.lower():
+            error_type = self.CONN_ERROR_HARDWARE_FAILURE
+        elif "cable" in error_message.lower():
+            error_type = self.CONN_ERROR_CABLE_ISSUE
+        elif "locked" in error_message.lower() or "protected" in error_message.lower():
+            error_type = self.CONN_ERROR_DEVICE_LOCKED
+        
+        return error_type, context
+        
+    def create_connection_status_indicator(self, parent_frame):
+        """
+        Create a visual connection status indicator in the parent frame.
+        
+        Args:
+            parent_frame: The parent frame to place the indicator in
+        """
+        # Create a canvas for the status indicator
+        self.connection_status_indicator = tk.Canvas(
+            parent_frame, 
+            width=15, 
+            height=15, 
+            bg=parent_frame.cget("bg"),
+            highlightthickness=0
+        )
+        
+        # Draw the initial indicator (red circle for disconnected)
+        self.update_connection_indicator(False)
+        
+        return self.connection_status_indicator
+        
+    def update_connection_indicator(self, is_connected: bool, is_active: bool = False, quality: int = 100):
+        """
+        Update the visual connection status indicator.
+        
+        Args:
+            is_connected: Whether the device is connected
+            is_active: Whether there is active communication
+            quality: Connection quality percentage (0-100)
+        """
+        if not self.connection_status_indicator:
+            return
+            
+        # Clear previous indicator
+        self.connection_status_indicator.delete("all")
+        
+        # Set color based on connection status and quality
+        if is_connected:
+            if is_active:
+                # Bright green for active communication
+                color = "#00FF00"
+            else:
+                # Color based on connection quality
+                if quality >= 90:
+                    color = "#00CC00"  # Good green
+                elif quality >= 70:
+                    color = "#88CC00"  # Yellow-green
+                elif quality >= 40:
+                    color = "#CCCC00"  # Yellow
+                else:
+                    color = "#CC8800"  # Orange
+        else:
+            # Red for disconnected
+            color = "#FF0000"
+            
+        # Draw the indicator circle
+        self.connection_status_indicator.create_oval(
+            2, 2, 13, 13, 
+            fill=color, 
+            outline="#333333"
+        )
+        
+        # Cancel any existing flash timer
+        if self.connection_status_timer:
+            self.connection_status_indicator.after_cancel(self.connection_status_timer)
+            self.connection_status_timer = None
+            
+        # If active, schedule a return to normal state
+        if is_active and is_connected:
+            self.connection_status_timer = self.connection_status_indicator.after(
+                300, lambda: self.update_connection_indicator(True, False, quality)
+            )
+            
+    def flash_activity_indicator(self):
+        """Flash the connection indicator to show activity."""
+        if self.connection_status_indicator:
+            self.update_connection_indicator(True, True, self.connection_quality)
+            
+    def validate_connection_for_parameter_operation(self, operation_name: str) -> bool:
+        """
+        Validate connection before parameter operations with comprehensive checks.
+        
+        Args:
+            operation_name: Name of the parameter operation
+            
+        Returns:
+            True if connection is valid for parameter operations
+        """
+        if self.parameter_error_handler:
+            validation_result = self.parameter_error_handler.validate_connection_before_operation(operation_name)
+            
+            if not validation_result.is_valid:
+                # Log validation failure with details
+                self.app.log_frame.log_message(f"ERROR: Connection validation failed for {operation_name}\n")
+                self.app.log_frame.log_message(f"ERROR: {validation_result.error_message}\n")
+                self.app.log_frame.log_message(f"DEBUG: Connection quality: {validation_result.connection_quality}%\n")
+                
+                # Log suggested actions
+                if validation_result.suggested_actions:
+                    self.app.log_frame.log_message("INFO: Suggested solutions:\n")
+                    for i, action in enumerate(validation_result.suggested_actions[:3], 1):
+                        self.app.log_frame.log_message(f"INFO: {i}. {action}\n")
+                
+                return False
+            else:
+                # Log successful validation
+                self.app.log_frame.log_message(f"DEBUG: Connection validated for {operation_name} (quality: {validation_result.connection_quality}%)\n")
+                return True
+        else:
+            # Fallback validation
+            if not hasattr(self.app, 'serial_service') or not self.app.serial_service.is_connected:
+                self.app.log_frame.log_message(f"ERROR: No device connection for {operation_name}\n")
+                self.app.log_frame.log_message("INFO: Please connect to the device before performing parameter operations\n")
+                return False
+            
+            return True
+    
+    def handle_parameter_operation_failure(self, operation_type: str, parameter_name: str, 
+                                         error_message: str, context: dict = None):
+        """
+        Handle parameter operation failures with comprehensive error reporting.
+        
+        Args:
+            operation_type: Type of operation (read, write, validate)
+            parameter_name: Name of the parameter
+            error_message: Error message
+            context: Additional context information
+        """
+        if context is None:
+            context = {}
+        
+        # Add operation context
+        context.update({
+            'operation_type': operation_type,
+            'parameter_name': parameter_name,
+            'timestamp': datetime.datetime.now(),
+            'connection_quality': self.connection_quality
+        })
+        
+        # Determine severity based on operation type and error
+        if 'timeout' in error_message.lower():
+            severity = self.SEVERITY_ERROR
+            error_type = self.CONN_ERROR_TIMEOUT
+        elif 'invalid' in error_message.lower() or 'parsing' in error_message.lower():
+            severity = self.SEVERITY_WARNING
+            error_type = self.CONN_ERROR_INVALID_RESPONSE
+        elif 'connection' in error_message.lower():
+            severity = self.SEVERITY_CRITICAL
+            error_type = self.CONN_ERROR_DEVICE_DISCONNECTED
+        else:
+            severity = self.SEVERITY_ERROR
+            error_type = self.CONN_ERROR_UNKNOWN
+        
+        # Handle the error
+        self.handle_error(error_type, severity, context)
+        
+        # Provide operation-specific guidance
+        if operation_type == 'read':
+            self.app.log_frame.log_message("INFO: For parameter reading issues, try reading individual parameters instead of bulk operations\n")
+        elif operation_type == 'write':
+            self.app.log_frame.log_message("INFO: For parameter writing issues, verify the parameter value is valid and the device is in configuration mode\n")
+        elif operation_type == 'validate':
+            self.app.log_frame.log_message("INFO: For validation issues, check the parameter value against the specification\n")
+    
+    def start_connection_monitoring(self, interval_ms: int = 5000):
+        """
+        Start periodic connection quality monitoring.
+        
+        Args:
+            interval_ms: Monitoring interval in milliseconds
+        """
+        # Cancel any existing timer
+        if self.connection_quality_timer:
+            self.app.after_cancel(self.connection_quality_timer)
+            
+        # Schedule the next check
+        self.connection_quality_timer = self.app.after(
+            interval_ms, lambda: self._check_connection_quality(interval_ms)
+        )
+        
+    def _check_connection_quality(self, interval_ms: int):
+        """
+        Check connection quality and update indicators.
+        
+        Args:
+            interval_ms: Monitoring interval for rescheduling
+        """
+        if hasattr(self.app, 'serial_service') and self.app.serial_service.is_connected:
+            # Check time since last activity
+            if hasattr(self.app.serial_service, 'last_activity_time'):
+                time_since_activity = (datetime.datetime.now() - 
+                                      self.app.serial_service.last_activity_time).total_seconds()
+                
+                # Gradually improve connection quality if no issues
+                if time_since_activity < 10:  # Recent activity is good
+                    self._update_connection_quality(1)  # Small improvement
+                    
+            # Update the connection indicator
+            if hasattr(self.app, 'connection_frame'):
+                self.app.connection_frame.update_connection_quality(self.connection_quality)
+                
+        # Reschedule the check
+        self.connection_quality_timer = self.app.after(
+            interval_ms, lambda: self._check_connection_quality(interval_ms)
+        )
+    
+    def handle_parameter_timeout(self, parameter_name: str, command_sent: str, timeout_duration: float):
+        """
+        Handle parameter operation timeout errors with comprehensive feedback.
+        
+        Args:
+            parameter_name: Name of the parameter that timed out
+            command_sent: Command that was sent
+            timeout_duration: How long we waited before timing out
+        """
+        if self.parameter_error_handler:
+            error = self.parameter_error_handler.handle_communication_timeout(
+                parameter_name, command_sent, timeout_duration
+            )
+            
+            # Update connection quality based on timeout severity
+            quality_reduction = -20 if timeout_duration > 15.0 else -15 if timeout_duration > 10.0 else -10
+            self._update_connection_quality(quality_reduction)
+            
+            # Log comprehensive timeout information
+            self.app.log_frame.log_message(f"ERROR: Parameter timeout - {error.error_message}\n")
+            
+            # Show user-friendly error message for critical timeouts
+            if timeout_duration > 20.0 or self.connection_quality < 30:
+                user_message = self.parameter_error_handler.create_user_friendly_error_message(error)
+                self.app.log_frame.log_message(f"INFO: Timeout troubleshooting:\n{user_message}\n")
+            
+            return error
+        else:
+            # Enhanced fallback error handling
+            context = {
+                'parameter_name': parameter_name,
+                'command': command_sent,
+                'timeout_duration': timeout_duration,
+                'connection_quality': self.connection_quality
+            }
+            
+            self.handle_error(
+                self.CONN_ERROR_TIMEOUT,
+                self.SEVERITY_ERROR,
+                context
+            )
+            
+            # Provide additional timeout-specific guidance
+            self.app.log_frame.log_message(f"INFO: Timeout occurred after {timeout_duration:.1f}s for parameter {parameter_name}\n")
+            self.app.log_frame.log_message("INFO: Try increasing timeout settings or check device responsiveness\n")
+    
+    def handle_parameter_invalid_response(self, parameter_name: str, command_sent: str, 
+                                        response_received: str, expected_format: str = ""):
+        """
+        Handle invalid parameter response errors with detailed analysis.
+        
+        Args:
+            parameter_name: Name of the parameter
+            command_sent: Command that was sent
+            response_received: Invalid response received
+            expected_format: Expected response format
+        """
+        if self.parameter_error_handler:
+            error = self.parameter_error_handler.handle_invalid_response(
+                parameter_name, command_sent, response_received, expected_format
+            )
+            
+            # Update connection quality based on response type
+            if not response_received:
+                self._update_connection_quality(-15)  # Empty response is more serious
+            elif response_received.startswith("ERROR"):
+                self._update_connection_quality(-5)   # Device error response is less serious
+            else:
+                self._update_connection_quality(-10)  # Invalid format
+            
+            # Log detailed response analysis
+            self.app.log_frame.log_message(f"ERROR: Invalid response - {error.error_message}\n")
+            self.app.log_frame.log_message(f"DEBUG: Expected: {expected_format}\n")
+            self.app.log_frame.log_message(f"DEBUG: Received: '{response_received}'\n")
+            
+            # Show user-friendly error message for persistent issues
+            if self.connection_quality < 50:
+                user_message = self.parameter_error_handler.create_user_friendly_error_message(error)
+                self.app.log_frame.log_message(f"INFO: Response troubleshooting:\n{user_message}\n")
+            
+            return error
+        else:
+            # Enhanced fallback error handling
+            context = {
+                'parameter_name': parameter_name,
+                'command': command_sent,
+                'response_received': response_received,
+                'expected_format': expected_format,
+                'response_length': len(response_received)
+            }
+            
+            self.handle_error(
+                self.CONN_ERROR_INVALID_RESPONSE,
+                self.SEVERITY_WARNING,
+                context
+            )
+            
+            # Provide response-specific guidance
+            if not response_received:
+                self.app.log_frame.log_message("INFO: Device sent empty response - check if command is supported\n")
+            elif response_received.startswith("ERROR"):
+                self.app.log_frame.log_message("INFO: Device returned error - verify parameter command syntax\n")
+            else:
+                self.app.log_frame.log_message("INFO: Response format mismatch - check device firmware compatibility\n")
+    
+    def validate_connection_for_parameters(self, operation_name: str = "parameter operation"):
+        """
+        Validate connection before parameter operations.
+        
+        Args:
+            operation_name: Name of the operation being performed
+            
+        Returns:
+            ConnectionValidationResult or None if parameter handler not available
+        """
+        if self.parameter_error_handler:
+            return self.parameter_error_handler.validate_connection_before_operation(operation_name)
+        else:
+            # Basic validation fallback
+            if hasattr(self.app, 'serial_service') and self.app.serial_service.is_connected:
+                from services.parameter_error_handler import ConnectionValidationResult
+                return ConnectionValidationResult(
+                    is_valid=True,
+                    error_message=None,
+                    connection_quality=self.connection_quality,
+                    last_activity=getattr(self.app.serial_service, 'last_activity_time', None),
+                    suggested_actions=[]
+                )
+            else:
+                from services.parameter_error_handler import ConnectionValidationResult
+                return ConnectionValidationResult(
+                    is_valid=False,
+                    error_message="Device not connected",
+                    connection_quality=0,
+                    last_activity=None,
+                    suggested_actions=["Connect to device first"]
+                )
+    
+    def get_parameter_error_statistics(self):
+        """
+        Get parameter error statistics.
+        
+        Returns:
+            Dictionary with parameter error statistics or None
+        """
+        if self.parameter_error_handler:
+            return self.parameter_error_handler.get_error_statistics()
+        return None
+    
+    def clear_parameter_error_history(self):
+        """Clear parameter error history."""
+        if self.parameter_error_handler:
+            self.parameter_error_handler.clear_error_history()
+    
+    def set_parameter_timeout_threshold(self, timeout_seconds: float):
+        """
+        Set timeout threshold for parameter operations.
+        
+        Args:
+            timeout_seconds: Timeout threshold in seconds
+        """
+        if self.parameter_error_handler:
+            self.parameter_error_handler.set_timeout_threshold(timeout_seconds)
+</document_content>
+</document>
+<document index="43">
+<source>.\services\i18n_service.py</source>
+<document_content>
+import json
+import logging
+import os
+from utils.helpers import resource_path
+logger = logging.getLogger(__name__)
+from services.app_config_service import AppConfigService
+
+class I18nService:
+    """Handles internationalization and language switching."""
+
+    DEFAULT_LANGUAGE = "pt_BR"
+    
+    def __init__(self, language=None):
+        self.language_map = {}
+        self.current_language = None
+        
+        # Use the centralized app config service
+        self.app_config = AppConfigService()
+        
+        # Try to load saved language preference
+        if language is None:
+            try:
+                saved_language = self.app_config.get_language()
+                print(f"Loaded saved language preference: {saved_language}")
+                language = saved_language if saved_language else self.DEFAULT_LANGUAGE
+            except Exception as e:
+                print(f"Error loading language preference: {e}")
+                language = self.DEFAULT_LANGUAGE
+                
+        print(f"Initializing I18nService with language: {language}")
+        self.set_language(language)
+
+    def set_language(self, language_code):
+        """Loads a new language file from the assets/locales directory."""
+        locale_path = resource_path(os.path.join('assets', 'locales', f'{language_code}.json'))
+        try:
+            with open(locale_path, 'r', encoding='utf-8') as f:
+                self.language_map = json.load(f)
+                self.current_language = language_code
+                print(f"Loaded language: {language_code}")
+                
+                # Save the language preference
+                self.app_config.set_language(language_code)
+        except FileNotFoundError:
+            print(f"Error: Language file not found for code: {language_code}")
+            # Fallback to a default or handle the error appropriately
+            if not self.language_map: # if no language is loaded at all
+                self.language_map = {"error": "Language file missing"}
+
+    def get(self, key, default_value=''):
+        """Returns the translated string for a given key."""
+        if key in self.language_map:
+            value = self.language_map[key]
+        else:
+            fallback = default_value or f"_{key}_"
+            logger.warning(
+                "Missing translation key '%s' for language '%s'. Falling back to '%s'.",
+                key,
+                self.current_language,
+                fallback
+            )
+            value = fallback
+        # If the locale file contains escaped newline sequences (e.g. "\\n")
+        # convert them to real newlines so dialogs and labels render correctly.
+        try:
+            if isinstance(value, str):
+                value = value.replace('\\n', '\n').replace('\\r', '\r')
+        except Exception:
+            # If any unexpected type or issue occurs, fall back to the raw value
+            pass
+        return value
+    
+    def get_current_language(self):
+        """Returns the current language code."""
+        return self.current_language
+</document_content>
+</document>
+<document index="44">
+<source>.\services\lt32pro_command_formatter.py</source>
+<document_content>
+"""
+LT32Pro Command Formatter
+
+This module provides command formatting functionality for LT32Pro device communication
+via USB serial interface. All commands must be prefixed with "ATSMS:" for USB communication.
+"""
+
+import re
+from typing import Dict, List, Optional
+
+
+class LT32ProCommandFormatter:
+    """
+    Formats commands for LT32Pro device communication via USB serial interface.
+    
+    All commands sent via USB must be prefixed with "ATSMS:" and properly formatted
+    according to the LT32Pro protocol specification.
+    """
+    
+    # Command mappings for read operations
+    READ_COMMAND_MAPPINGS = {
+        'APN': 'APN#',
+        'SERVER': 'SERVER#',
+        'STATUS': 'STATUS#',
+        'VERSION': 'VERSION#',
+        'IMEI': 'CXCS#IMEI',
+        'ICCID': 'CXCS#ICCID',
+        'IMSI': 'CXCS#IMSI',
+        'GT06SEL': 'CXCS#GT06SEL',
+        'POSBYACK': 'CXCS#POSBYACK',
+        'NETSELECT': 'CXCS#NETSELECT',
+        'TERIID': 'CXCS#TERIID',
+        'TIMER': 'TIMER#',
+        'HBT': 'HBT#',
+        'ACCLINE': 'CXCS#ACCLINE#ACC_CFG',
+        'ACC_CFG': 'CXCS#ACCLINE#ACC_CFG',
+        'SPEED': 'SPEED#',
+        'SPD_LED_SHOW': 'CXCS#SPD_LED_SHOW',
+        'SLPDISCONNECT': 'CXCS#SLPDISCONNECT',
+        'SLEEPT': 'CXCS#SLEEPT',
+        'ANGLEVALUE': 'CXCS#ANGLEVALUE',
+        'BATALM': 'BATALM#',
+        'POWERALM': 'POWERALM#',
+        'VIBL': 'CXCS#VIBL',
+        'VIBCHK': 'CXCS#VIBCHK',
+        'JAMMER': 'JAMMER#',
+        'JAMRELAY': 'JAMRELAY#',
+        'JAMCFG': 'JAMCFG#',
+        'MILEAGE': 'MILEAGE#',
+        'ACCONT': 'ACCONT#',
+        'DEFENSE': 'DEFENSE#',
+        'SOURCE_OFF_TYPE': 'CXCS#SOURCE_OFF_TYPE',
+        'RELAY': 'RELAY#',
+        'SENDS': 'SENDS#',
+        'SENALM': 'SENALM#',
+        'MOVEALMFUN': 'CXCS#MOVEALMFUN',
+        'BATSLPVALUE': 'CXCS#BATSLPVALUE',
+        'BLINDSPD': 'CXCS#BLINDSPD',
+        'PARAM': 'PARAM#',
+    }
+    
+    # Alternative command mappings for devices that don't support CXCS# commands
+    ALTERNATIVE_READ_COMMANDS = {
+        'SLPDISCONNECT': ['CXCS#SLPDISCONNECT', 'STATUS#'],  # Fallback to STATUS for sleep info
+        'SLEEPT': ['CXCS#SLEEPT', 'STATUS#'],  # Fallback to STATUS for sleep time info
+        'ANGLEVALUE': ['CXCS#ANGLEVALUE'],
+        'VIBL': ['CXCS#VIBL'],
+        'VIBCHK': ['CXCS#VIBCHK'],
+        'GT06SEL': ['CXCS#GT06SEL'],
+        'POSBYACK': ['CXCS#POSBYACK'],
+        'NETSELECT': ['CXCS#NETSELECT'],
+        'SPD_LED_SHOW': ['CXCS#SPD_LED_SHOW'],
+        'IMEI': ['CXCS#IMEI', 'STATUS#'],
+        'ICCID': ['CXCS#ICCID', 'STATUS#'],
+        'IMSI': ['CXCS#IMSI', 'STATUS#'],
+        'ACCLINE': ['CXCS#ACCLINE#ACC_CFG'],
+        'ACC_CFG': ['CXCS#ACCLINE#ACC_CFG'],
+        'JAMCFG': ['JAMCFG#']
+    }
+    
+    # Commands that are known to work on most LT32Pro devices
+    RELIABLE_COMMANDS = [
+        'STATUS', 'VERSION', 'APN', 'SERVER', 'TIMER', 'HBT',
+        'SPEED', 'BATALM', 'POWERALM', 'JAMMER', 'JAMRELAY',
+        'MILEAGE', 'ACCONT'
+    ]
+    
+    # Command mappings for write operations
+    WRITE_COMMAND_MAPPINGS = {
+        'APN': 'APN,{value}#',
+        'SERVER': 'SERVER,{value}#',
+        'GT06SEL': 'SZCS#GT06SEL={value}',
+        'POSBYACK': 'SZCS#POSBYACK={value}',
+        'TIMER': 'TIMER,{value}#',
+        'HBT': 'HBT,{value}#',
+        'ACCLINE': 'SZCS#ACCLINE={value}#ACC_CFG={value2}',
+        'SPEED': 'SPEED,{value}#',
+        'SLPDISCONNECT': 'SZCS#SLPDISCONNECT={value}',
+        'SLEEPT': 'SZCS#SLEEPT={value}',
+        'ANGLEVALUE': 'SZCS#ANGLEVALUE={value}',
+        'BATALM': 'BATALM,{value}#',
+        'POWERALM': 'POWERALM,{value}#',
+        'VIBL': 'SZCS#VIBL={value}',
+        'JAMMER': 'JAMMER,{value}#',
+        'JAMRELAY': 'JAMRELAY,{value}#',
+        'MILEAGE': 'MILEAGE={value}#',
+        'ACCONT': 'ACCONT,{value}#',
+        'SOURCE_OFF_TYPE': 'SZCS#SOURCE_OFF_TYPE={value}',
+        'RELAY': 'RELAY,{value}#',
+        'SENDS': 'SENDS,{value}#',
+        'SENALM': 'SENALM,{value}#',
+        'BATSLPVALUE': 'SZCS#BATSLPVALUE={value}',
+    }
+    
+    # Valid protocol values for GT06SEL
+    VALID_PROTOCOLS = {'0', '1', '2'}
+    
+    # Valid TCP ACK values for POSBYACK
+    VALID_TCP_ACK = {'0', '1'}
+
+    # Commands that require quoting for values with spaces
+    COMMANDS_REQUIRING_QUOTES = {
+        'SOURCE_OFF_TYPE',
+    }
+    
+    def __init__(self):
+        """Initialize the command formatter."""
+        pass
+    
+    def format_read_command(self, command: str) -> str:
+        """
+        Format read commands with ATSMS prefix for USB communication.
+        """
+        if not command:
+            raise ValueError("Command cannot be empty")
+            
+        command = command.upper().strip()
+        
+        if command not in self.READ_COMMAND_MAPPINGS:
+            raise ValueError(f"Unsupported read command: {command}")
+        
+        base_command = self.READ_COMMAND_MAPPINGS[command]
+        formatted_command = f"ATSMS:{base_command}"
+        
+        return formatted_command
+    
+    def format_write_command(self, command: str, value: str) -> str:
+        """
+        Format write commands with ATSMS prefix for USB communication.
+        """
+        if not command:
+            raise ValueError("Command cannot be empty")
+        if not value:
+            raise ValueError("Value cannot be empty")
+            
+        command = command.upper().strip()
+        value = value.strip()
+        
+        if command not in self.WRITE_COMMAND_MAPPINGS:
+            raise ValueError(f"Unsupported write command: {command}")
+
+        # Special handling for JAMMER: when state is OFF, do not include the extra mode/field
+        if command == 'JAMMER':
+            # Accept values like 'OFF', 'OFF,0', 'ON,1' etc.
+            parts = [p.strip() for p in value.split(',') if p is not None]
+            if len(parts) == 0:
+                raise ValueError("JAMMER command requires at least a state value")
+            state = parts[0].upper()
+            if state == 'OFF':
+                return f"ATSMS:JAMMER,OFF#"
+            # For non-OFF states, preserve original formatting (include remaining parts if any)
+            rest = ','.join(parts[1:]) if len(parts) > 1 else ''
+            base = f"JAMMER,{state}"
+            if rest:
+                base = f"{base},{rest}"
+            base = f"{base}#"
+            return f"ATSMS:{base}"
+
+        # Special handling for SPEED: when state is OFF, do not include trailing numeric fields
+        if command == 'SPEED':
+            # Accept values like 'OFF', 'OFF,15,0,0', 'ON,80,1,0' etc.
+            parts = [p.strip() for p in value.split(',') if p is not None]
+            if len(parts) == 0:
+                raise ValueError("SPEED command requires at least a state value")
+            state = parts[0].upper()
+            if state == 'OFF':
+                return f"ATSMS:SPEED,OFF#"
+            # For non-OFF states, preserve original formatting and append '#'
+            rest = ','.join(parts[1:]) if len(parts) > 1 else ''
+            base = f"SPEED,{state}"
+            if rest:
+                base = f"{base},{rest}"
+            base = f"{base}#"
+            return f"ATSMS:{base}"
+
+        self._validate_write_command_value(command, value)
+
+        # For specific commands, if the value contains spaces, enclose it in quotes.
+        if command in self.COMMANDS_REQUIRING_QUOTES and ' ' in value:
+            value = f'"{value}"'
+
+        base_command = self.WRITE_COMMAND_MAPPINGS[command].format(value=value)
+        return f"ATSMS:{base_command}"
+    
+    def _validate_write_command_value(self, command: str, value: str) -> None:
+        """
+        Validate command values according to LT32Pro specifications.
+        """
+        if command == 'GT06SEL':
+            if value not in self.VALID_PROTOCOLS:
+                raise ValueError(f"Invalid protocol value: {value}. Must be one of {self.VALID_PROTOCOLS}")
+                
+        elif command == 'POSBYACK':
+            if value not in self.VALID_TCP_ACK:
+                raise ValueError(f"Invalid TCP ACK value: {value}. Must be one of {self.VALID_TCP_ACK}")
+                
+        elif command == 'APN':
+            parts = value.split(',')
+            if len(parts) != 3:
+                raise ValueError("APN value must be in format: server,user,password")
+            if not parts[0]:
+                raise ValueError("APN server cannot be empty")
+                
+        elif command == 'SERVER':
+            parts = value.split(',')
+            if len(parts) != 4:
+                raise ValueError("SERVER value must be in format: type,ip,port,protocol")
+            
+            try:
+                server_type = int(parts[0])
+                if server_type not in [0, 1]:
+                    raise ValueError("Server type must be 0 (IP) or 1 (domain)")
+                
+                port = int(parts[2])
+                if not (1 <= port <= 65535):
+                    raise ValueError("Port must be between 1 and 65535")
+                
+                protocol = int(parts[3])
+                if protocol != 0:
+                    raise ValueError("Protocol must be 0 (TCP)")
+                    
+            except ValueError as e:
+                if "invalid literal" in str(e):
+                    raise ValueError("SERVER numeric values must be valid integers")
+                raise
+    
+    def validate_command_syntax(self, formatted_command: str) -> bool:
+        """
+        Validate that a formatted command follows proper LT32Pro syntax.
+        """
+        if not formatted_command:
+            raise ValueError("Command cannot be empty")
+            
+        if not formatted_command.startswith("ATSMS:"):
+            raise ValueError("USB commands must start with 'ATSMS:' prefix")
+            
+        command_body = formatted_command[6:]
+        
+        valid_patterns = [
+            r'^[A-Z]+#$',                    # Simple commands like APN#, STATUS#
+            r'^[A-Z]+,.+#$',                 # Commands with values like APN,value#
+            r'^SZCS#[A-Z0-9]+$',            # Read commands like SZCS#IMEI, SZCS#GT06SEL
+            r'^SZCS#[A-Z0-9]+=.+$',         # Set commands like SZCS#GT06SEL=2
+            r'^CXCS#[A-Z0-9_]+$',           # Legacy read commands like CXCS#IMEI, CXCS#GT06SEL, CXCS#SPD_LED_SHOW
+            r'^CXCS#[A-Z0-9_]+#[A-Z0-9_]+$' # Multi-part legacy commands like CXCS#ACCLINE#ACC_CFG
+        ]
+        
+        for pattern in valid_patterns:
+            if re.match(pattern, command_body):
+                return True
+                
+        raise ValueError(f"Invalid command syntax: {formatted_command}")
+    
+    def get_supported_read_commands(self) -> List[str]:
+        """
+        Get list of supported read commands.
+        """
+        return list(self.READ_COMMAND_MAPPINGS.keys())
+    
+    def get_supported_write_commands(self) -> List[str]:
+        """
+        Get list of supported write commands.
+        """
+        return list(self.WRITE_COMMAND_MAPPINGS.keys())
+    
+    def is_read_command_supported(self, command: str) -> bool:
+        """
+        Check if a read command is supported.
+        """
+        return command.upper().strip() in self.READ_COMMAND_MAPPINGS
+    
+    def is_write_command_supported(self, command: str) -> bool:
+        """
+        Check if a write command is supported.
+        """
+        return command.upper().strip() in self.WRITE_COMMAND_MAPPINGS
+    
+    def get_alternative_read_commands(self, command: str) -> List[str]:
+        """
+        Get alternative read commands for devices that don't support CXCS# commands.
+        """
+        command = command.upper().strip()
+        return self.ALTERNATIVE_READ_COMMANDS.get(command, [])
+    
+    def has_alternative_commands(self, command: str) -> bool:
+        """
+        Check if a command has alternative formats available.
+        """
+        command = command.upper().strip()
+        return command in self.ALTERNATIVE_READ_COMMANDS
+
+</document_content>
+</document>
+<document index="45">
+<source>.\services\lt32pro_device_reader.py</source>
+<document_content>
+"""
+LT32ProDeviceReader - Minimal implementation that uses ConfigurationReaderService.
+
+This is a wrapper around ConfigurationReaderService to provide the interface
+expected by DeviceCommunicationManager while using the fixed odometer parsing logic.
+"""
+
+from services.configuration_reader_service import ConfigurationReaderService
+from services.i18n_service import I18nService
+from typing import Optional
+
+
+class LT32ProDeviceReader:
+    """Device reader that wraps ConfigurationReaderService for compatibility."""
+    
+    DEFAULT_COMMAND_TIMEOUT = 5.0
+    
+    def __init__(self, serial_service):
+        """Initialize the device reader."""
+        self.serial_service = serial_service
+        
+        # Use existing configuration reader from serial service if available
+        if hasattr(serial_service, 'configuration_reader') and serial_service.configuration_reader is not None:
+            self.config_reader = serial_service.configuration_reader
+        else:
+            # Fallback: Create ConfigurationReaderService instance
+            if hasattr(serial_service, 'app'):
+                app_instance = serial_service.app
+                if hasattr(app_instance, 'i18n'):
+                    i18n_service = app_instance.i18n
+                else:
+                    i18n_service = I18nService()
+            else:
+                # Create a minimal app-like object
+                app_instance = type('MockApp', (), {
+                    'serial_service': serial_service,
+                    'parameters_frame': None
+                })()
+                i18n_service = I18nService()
+            
+            self.config_reader = ConfigurationReaderService(app_instance, i18n_service)
+    
+    def read_single_parameter(self, command: str, timeout: float = None, max_retries: int = 2) -> str:
+        """
+        Read a single parameter from the device.
+        
+        Args:
+            command: Command to send (e.g., 'MILEAGE')
+            timeout: Timeout for the operation (ignored, uses config reader defaults)
+            max_retries: Maximum number of retries
+            
+        Returns:
+            str: Raw device response or empty string if failed
+        """
+        try:
+            # Use the ConfigurationReaderService approach which has the fixed
+            # response capture mechanism and proper waiting flag handling
+            if hasattr(self.config_reader, '_send_command_and_wait'):
+                # Use the direct method with proper response capture
+                response = self.config_reader._send_command_and_wait(command, timeout=timeout or 5.0)
+                
+                if response:
+                    # Log successful read
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"DEBUG: LT32ProDeviceReader successfully read {command}: {response}\n"
+                        )
+                    
+                    # Parse the response to extract just the numeric value for odometer/hourmeter
+                    parsed_value = self._extract_numeric_value_from_response(command, response)
+                    return parsed_value if parsed_value is not None else response
+                else:
+                    # Log the issue
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"WARNING: LT32ProDeviceReader failed to read {command} - no response\n"
+                        )
+                    return ""
+            else:
+                # Fallback approach: use the direct serial service method
+                if hasattr(self.serial_service, 'send_command') and hasattr(self.serial_service, 'response_buffer'):
+                    # Clear any existing responses
+                    self.serial_service.response_buffer.clear()
+                    
+                    # Format the command like ConfigurationReaderService does
+                    if hasattr(self.config_reader, 'command_formatter'):
+                        if self.config_reader.command_formatter.is_read_command_supported(command):
+                            formatted_command = self.config_reader.command_formatter.format_read_command(command)
+                        else:
+                            formatted_command = f"ATSMS:{command}#"
+                    else:
+                        formatted_command = f"ATSMS:{command}#"
+                    
+                    # Send the command
+                    success = self.serial_service.send_command(formatted_command, command)
+                    
+                    if success:
+                        # Wait a bit for the response
+                        import time
+                        time.sleep(1.0)  # Give device time to respond
+                        
+                        # Check if we got a response
+                        if self.serial_service.response_buffer:
+                            # Get the most recent response
+                            response = self.serial_service.response_buffer[-1]
+                            
+                            # Log successful read
+                            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                                self.serial_service.app.log_frame.log_message(
+                                    f"DEBUG: LT32ProDeviceReader successfully read {command}: {response}\n"
+                                )
+                            
+                            # Parse the response to extract just the numeric value for odometer/hourmeter
+                            parsed_value = self._extract_numeric_value_from_response(command, response)
+                            return parsed_value if parsed_value is not None else response
+                        else:
+                            # No response in buffer
+                            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                                self.serial_service.app.log_frame.log_message(
+                                    f"WARNING: LT32ProDeviceReader - no response in buffer for {command}\n"
+                                )
+                            return ""
+                    else:
+                        # Failed to send command
+                        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                            self.serial_service.app.log_frame.log_message(
+                                f"WARNING: LT32ProDeviceReader failed to send command {command}\n"
+                            )
+                        return ""
+                else:
+                    # Final fallback - return empty string
+                    if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                        self.serial_service.app.log_frame.log_message(
+                            f"WARNING: LT32ProDeviceReader - no suitable method available for {command}\n"
+                        )
+                    return ""
+                
+        except Exception as e:
+            # Log the error if possible
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"ERROR: Exception in LT32ProDeviceReader.read_single_parameter({command}): {str(e)}\n"
+                )
+            return ""
+
+    def _extract_numeric_value_from_response(self, command: str, response: str) -> Optional[str]:
+        """
+        Extract numeric value from device response for odometer and hourmeter parameters.
+        
+        Args:
+            command: Command that was sent
+            response: Raw device response
+            
+        Returns:
+            str: Extracted numeric value or None if not applicable
+        """
+        try:
+            # Handle odometer responses
+            if command == 'MILEAGE':
+                # Response formats:
+                # - "Cur Mileage Value:28KM"
+                # - "MILEAGE=28"
+                clean_response = response.strip()
+                
+                if "Cur Mileage Value:" in clean_response:
+                    # Extract value from "Cur Mileage Value:XXXXKM"
+                    parts = clean_response.split(":")
+                    if len(parts) >= 2:
+                        value_part = parts[1]
+                        # Remove "KM" suffix if present
+                        value = value_part.replace("KM", "").strip()
+                        # Validate that it's numeric
+                        try:
+                            int(value)
+                            return value
+                        except ValueError:
+                            return None
+                elif clean_response.startswith("MILEAGE="):
+                    # Extract value from "MILEAGE=XXXX"
+                    value = clean_response[8:]  # Remove "MILEAGE=" prefix
+                    # Validate that it's numeric
+                    try:
+                        int(value)
+                        return value
+                    except ValueError:
+                        return None
+            
+            # Handle hourmeter responses
+            elif command == 'ACCONT':
+                # Response formats:
+                # - "Get ACC ON Time:367 Minute"
+                # - "ACCONT=367"
+                clean_response = response.strip()
+                
+                if "Get ACC ON Time:" in clean_response:
+                    # Extract value from "Get ACC ON Time:XXXX Minute"
+                    parts = clean_response.split(":")
+                    if len(parts) >= 2:
+                        value_part = parts[1]
+                        # Remove "Minute" suffix if present
+                        value = value_part.replace("Minute", "").strip()
+                        # Validate that it's numeric
+                        try:
+                            int(value)
+                            return value
+                        except ValueError:
+                            return None
+                elif clean_response.startswith("ACCONT="):
+                    # Extract value from "ACCONT=XXXX"
+                    value = clean_response[7:]  # Remove "ACCONT=" prefix
+                    # Validate that it's numeric
+                    try:
+                        int(value)
+                        return value
+                    except ValueError:
+                        return None
+            
+            # For other parameters, return None to indicate no special handling needed
+            return None
+            
+        except Exception as e:
+            if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+                self.serial_service.app.log_frame.log_message(
+                    f"DEBUG: Failed to extract numeric value from {command} response '{response}': {str(e)}\n"
+                )
+            return None
+</document_content>
+</document>
+<document index="46">
+<source>.\services\lt32pro_device_writer.py</source>
+<document_content>
+"""
+LT32ProDeviceWriter - Minimal implementation for device writing.
+
+This is a placeholder implementation to satisfy the DeviceCommunicationManager
+import requirements. The actual writing functionality would need to be implemented
+based on the device communication protocol.
+"""
+
+
+class LT32ProDeviceWriter:
+    """Device writer placeholder implementation."""
+    
+    def __init__(self, serial_service):
+        """Initialize the device writer."""
+        self.serial_service = serial_service
+    
+    def write_single_parameter(self, command: str, value: str, timeout: float = None, max_retries: int = 2) -> bool:
+        """
+        Write a single parameter to the device.
+        
+        Args:
+            command: Command to send
+            value: Value to write
+            timeout: Timeout for the operation
+            max_retries: Maximum number of retries
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Placeholder implementation
+        # TODO: Implement actual device writing logic
+        if hasattr(self.serial_service, 'app') and hasattr(self.serial_service.app, 'log_frame'):
+            self.serial_service.app.log_frame.log_message(
+                f"INFO: LT32ProDeviceWriter.write_single_parameter({command}, {value}) - Not implemented\n"
+            )
+        return False
+</document_content>
+</document>
+<document index="47">
+<source>.\services\lt32pro_error_handler.py</source>
+<document_content>
+"""
+LT32Pro Error Handler
+
+Provides device-specific error handling with recovery strategies for LT32Pro communication.
+Handles connection errors, communication timeouts, protocol errors, and validation issues.
+"""
+
+import time
+import logging
+from typing import Dict, Optional, Tuple, List
+from enum import Enum
+
+
+class ErrorCategory(Enum):
+    """Categories of errors that can occur during LT32Pro operations."""
+    CONNECTION = "connection"
+    COMMUNICATION = "communication"
+    PROTOCOL = "protocol"
+    VALIDATION = "validation"
+    FILE = "file"
+
+
+class LT32ProError(Exception):
+    """Base exception for LT32Pro specific errors."""
+    
+    def __init__(self, message: str, category: ErrorCategory, details: Optional[Dict] = None):
+        super().__init__(message)
+        self.category = category
+        self.details = details or {}
+
+
+class ConnectionError(LT32ProError):
+    """Error related to device connection issues."""
+    
+    def __init__(self, message: str, details: Optional[Dict] = None):
+        super().__init__(message, ErrorCategory.CONNECTION, details)
+
+
+class CommunicationError(LT32ProError):
+    """Error related to device communication issues."""
+    
+    def __init__(self, message: str, details: Optional[Dict] = None):
+        super().__init__(message, ErrorCategory.COMMUNICATION, details)
+
+
+class ProtocolError(LT32ProError):
+    """Error related to protocol or command format issues."""
+    
+    def __init__(self, message: str, details: Optional[Dict] = None):
+        super().__init__(message, ErrorCategory.PROTOCOL, details)
+
+
+class ValidationError(LT32ProError):
+    """Error related to parameter validation issues."""
+    
+    def __init__(self, message: str, details: Optional[Dict] = None):
+        super().__init__(message, ErrorCategory.VALIDATION, details)
+
+
+class FileError(LT32ProError):
+    """Error related to profile file operations."""
+    
+    def __init__(self, message: str, details: Optional[Dict] = None):
+        super().__init__(message, ErrorCategory.FILE, details)
+
+
+class LT32ProErrorHandler:
+    """
+    Handles LT32Pro specific errors with recovery strategies.
+    
+    Provides error categorization, retry logic with exponential backoff,
+    partial data recovery, and user-friendly error messages.
+    """
+    
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0):
+        """
+        Initialize error handler.
+        
+        Args:
+            max_retries: Maximum number of retry attempts
+            base_delay: Base delay for exponential backoff (seconds)
+        """
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.logger = logging.getLogger(__name__)
+        
+        # Device error codes and their meanings
+        self.device_error_codes = {
+            "ERROR": "General command error",
+            "TIMEOUT": "Command timeout",
+            "INVALID": "Invalid command format",
+            "BUSY": "Device is busy processing another command",
+            "NODATA": "No data available",
+            "FAIL": "Command execution failed"
+        }
+    
+    def handle_communication_timeout(self, command: str, attempt: int) -> bool:
+        """
+        Handle command timeout with exponential backoff retry.
+        
+        Args:
+            command: The command that timed out
+            attempt: Current attempt number (0-based)
+            
+        Returns:
+            True if should retry, False if max retries exceeded
+        """
+        if attempt >= self.max_retries:
+            self.logger.error(f"Command '{command}' failed after {self.max_retries} attempts")
+            return False
+        
+        # Calculate exponential backoff delay
+        delay = self.base_delay * (2 ** attempt)
+        
+        self.logger.warning(
+            f"Command '{command}' timed out (attempt {attempt + 1}/{self.max_retries + 1}). "
+            f"Retrying in {delay:.1f} seconds..."
+        )
+        
+        time.sleep(delay)
+        return True
+    
+    def handle_invalid_response(self, command: str, response: str) -> Tuple[str, Dict[str, str]]:
+        """
+        Handle invalid device responses with partial data recovery.
+        
+        Args:
+            command: The command that generated the response
+            response: The invalid response received
+            
+        Returns:
+            Tuple of (cleaned_response, recovered_data)
+        """
+        self.logger.warning(f"Invalid response for command '{command}': {response}")
+        
+        recovered_data = {}
+        cleaned_response = response.strip()
+        
+        # Try to extract partial data from malformed responses
+        if ":" in cleaned_response:
+            try:
+                # Handle responses like "APN:server,user,pass" even if malformed
+                if cleaned_response.startswith("APN:"):
+                    parts = cleaned_response.split(":", 1)[1].split(",")
+                    if len(parts) >= 1:
+                        recovered_data["apn_server"] = parts[0].strip()
+                    if len(parts) >= 2:
+                        recovered_data["apn_user"] = parts[1].strip()
+                    if len(parts) >= 3:
+                        recovered_data["apn_password"] = parts[2].strip()
+                
+                # Handle SERVER responses
+                elif cleaned_response.startswith("SERVER:"):
+                    parts = cleaned_response.split(":", 1)[1].split(",")
+                    if len(parts) >= 2:
+                        recovered_data["server_ip"] = parts[1].strip()
+                    if len(parts) >= 3:
+                        recovered_data["server_port"] = parts[2].strip()
+                
+                # Handle READOK responses
+                elif "READOK:" in cleaned_response and "=" in cleaned_response:
+                    # Extract key=value pairs
+                    value_part = cleaned_response.split("READOK:")[-1].strip()
+                    if "=" in value_part:
+                        key, value = value_part.split("=", 1)
+                        recovered_data[key.strip().lower()] = value.strip()
+                
+            except Exception as e:
+                self.logger.error(f"Failed to recover partial data from response: {e}")
+        
+        return cleaned_response, recovered_data
+    
+    def handle_device_error_response(self, command: str, error_response: str) -> Tuple[bool, str]:
+        """
+        Handle device error responses with user-friendly messages.
+        
+        Args:
+            command: The command that generated the error
+            error_response: The error response from device
+            
+        Returns:
+            Tuple of (should_retry, user_friendly_message)
+        """
+        error_response = error_response.strip().upper()
+        
+        # Check for known error codes
+        for error_code, description in self.device_error_codes.items():
+            if error_code in error_response:
+                user_message = f"Device error for command '{command}': {description}"
+                
+                # Determine if we should retry based on error type
+                should_retry = error_code in ["TIMEOUT", "BUSY"]
+                
+                self.logger.error(f"Device error: {error_response} - {description}")
+                return should_retry, user_message
+        
+        # Handle unknown error responses
+        user_message = f"Unknown device error for command '{command}': {error_response}"
+        self.logger.error(f"Unknown device error: {error_response}")
+        
+        # Default to not retrying for unknown errors
+        return False, user_message
+    
+    def handle_connection_error(self, port: str, error: Exception) -> str:
+        """
+        Handle connection errors with specific troubleshooting guidance.
+        
+        Args:
+            port: The COM port that failed to connect
+            error: The connection error exception
+            
+        Returns:
+            User-friendly troubleshooting message
+        """
+        error_str = str(error).lower()
+        
+        if "access is denied" in error_str or "permission denied" in error_str:
+            return (
+                f"Cannot access COM port {port}. "
+                f"Troubleshooting steps:\n"
+                f"1. Close any other applications using the port\n"
+                f"2. Check if device is properly connected\n"
+                f"3. Try unplugging and reconnecting the device\n"
+                f"4. Restart the application with administrator privileges"
+            )
+        
+        elif "file not found" in error_str or "no such file" in error_str:
+            return (
+                f"COM port {port} not found. "
+                f"Troubleshooting steps:\n"
+                f"1. Check Device Manager for available COM ports\n"
+                f"2. Verify the LT32Pro device is connected via USB\n"
+                f"3. Install or update the device drivers\n"
+                f"4. Try a different USB cable or port"
+            )
+        
+        elif "timeout" in error_str:
+            return (
+                f"Connection to {port} timed out. "
+                f"Troubleshooting steps:\n"
+                f"1. Check if the device is powered on\n"
+                f"2. Verify the correct COM port is selected\n"
+                f"3. Try reducing the baud rate\n"
+                f"4. Check USB cable connection"
+            )
+        
+        else:
+            return (
+                f"Failed to connect to {port}: {error}. "
+                f"General troubleshooting steps:\n"
+                f"1. Check device connection and power\n"
+                f"2. Verify COM port settings\n"
+                f"3. Close other applications using the port\n"
+                f"4. Restart the device and try again"
+            )
+    
+    def categorize_error(self, error: Exception) -> ErrorCategory:
+        """
+        Categorize an error based on its type and message.
+        
+        Args:
+            error: The exception to categorize
+            
+        Returns:
+            The error category
+        """
+        if isinstance(error, LT32ProError):
+            return error.category
+        
+        error_str = str(error).lower()
+        
+        # Connection-related errors
+        if any(keyword in error_str for keyword in [
+            "connection", "port", "access denied", "permission denied", 
+            "file not found", "no such file", "device not found"
+        ]):
+            return ErrorCategory.CONNECTION
+        
+        # Communication-related errors
+        elif any(keyword in error_str for keyword in [
+            "timeout", "read", "write", "serial", "communication"
+        ]):
+            return ErrorCategory.COMMUNICATION
+        
+        # Protocol-related errors
+        elif any(keyword in error_str for keyword in [
+            "protocol", "command", "format", "syntax", "invalid response"
+        ]):
+            return ErrorCategory.PROTOCOL
+        
+        # Validation-related errors
+        elif any(keyword in error_str for keyword in [
+            "validation", "invalid", "missing", "required", "format"
+        ]):
+            return ErrorCategory.VALIDATION
+        
+        # File-related errors
+        elif any(keyword in error_str for keyword in [
+            "file", "directory", "path"
+        ]) and not any(keyword in error_str for keyword in [
+            "access denied", "permission denied", "port", "connection"
+        ]):
+            return ErrorCategory.FILE
+        
+        # Default to communication error
+        return ErrorCategory.COMMUNICATION
+    
+    def get_recovery_suggestions(self, category: ErrorCategory, error: Exception) -> List[str]:
+        """
+        Get recovery suggestions based on error category.
+        
+        Args:
+            category: The error category
+            error: The original exception
+            
+        Returns:
+            List of recovery suggestions
+        """
+        suggestions = []
+        
+        if category == ErrorCategory.CONNECTION:
+            suggestions.extend([
+                "Check device connection and power",
+                "Verify correct COM port selection",
+                "Close other applications using the port",
+                "Try unplugging and reconnecting the device",
+                "Check Device Manager for port availability"
+            ])
+        
+        elif category == ErrorCategory.COMMUNICATION:
+            suggestions.extend([
+                "Check device power and connection stability",
+                "Verify baud rate and communication settings",
+                "Try reducing communication speed",
+                "Check for electromagnetic interference",
+                "Restart the device and try again"
+            ])
+        
+        elif category == ErrorCategory.PROTOCOL:
+            suggestions.extend([
+                "Verify device firmware version compatibility",
+                "Check command format and syntax",
+                "Ensure proper ATSMS prefix for USB communication",
+                "Try basic commands first (STATUS, VERSION)",
+                "Consult device manual for command reference"
+            ])
+        
+        elif category == ErrorCategory.VALIDATION:
+            suggestions.extend([
+                "Check parameter values and formats",
+                "Verify required parameters are present",
+                "Validate IP addresses and port numbers",
+                "Check profile file format and structure",
+                "Use default values for optional parameters"
+            ])
+        
+        elif category == ErrorCategory.FILE:
+            suggestions.extend([
+                "Check file permissions and access rights",
+                "Verify file path exists and is accessible",
+                "Ensure sufficient disk space",
+                "Check file format and encoding",
+                "Try saving to a different location"
+            ])
+        
+        return suggestions
+    
+    def create_error_report(self, error: Exception, context: Dict[str, str] = None) -> Dict[str, any]:
+        """
+        Create a comprehensive error report.
+        
+        Args:
+            error: The exception that occurred
+            context: Additional context information
+            
+        Returns:
+            Dictionary containing error report details
+        """
+        category = self.categorize_error(error)
+        suggestions = self.get_recovery_suggestions(category, error)
+        
+        report = {
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "category": category.value,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "suggestions": suggestions,
+            "context": context or {}
+        }
+        
+        if isinstance(error, LT32ProError):
+            report["details"] = error.details
+        
+        return report
+</document_content>
+</document>
+<document index="48">
+<source>.\services\lt32pro_profile_validator.py</source>
+<document_content>
+"""
+LT32Pro Profile Validator
+
+This module provides comprehensive validation and compatibility checking for LT32Pro profile files.
+Requirements addressed: 2.1, 3.4, 5.7
+"""
+
+import configparser
+import ipaddress
+import os
+import shutil
+import re
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+
+class ValidationSeverity(Enum):
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
+
+
+@dataclass
+class ValidationIssue:
+    severity: ValidationSeverity
+    section: str
+    parameter: str
+    message: str
+    current_value: Optional[str] = None
+    suggested_value: Optional[str] = None
+
+
+class LT32ProProfileValidator:
+    """Comprehensive validator for LT32Pro profile files."""
+    
+    # Required sections and their mandatory parameters
+    REQUIRED_SECTIONS = {
+        'Profile_Info': ['profile_name', 'profile_version', 'created_date'],
+        'APN_Configuration': ['apn_server']
+    }
+    
+    # Optional sections and their parameters
+    OPTIONAL_SECTIONS = {
+        'Server_Configuration': ['server_ip', 'server_port', 'server_protocol'],
+        'Timer_Settings': ['timer_ign_on', 'timer_ign_off', 'heartbeat_interval'],
+        'Device_Parameters': ['vibration', 'sensitivity', 'device_imei', 'device_iccid', 'GT06SEL', 'POSBYACK'],
+        'Alert_Settings': ['movement_alert', 'power_alert', 'speed_limit']
+    }
+    
+    # Validation rules for parameters
+    VALIDATION_RULES = {
+        'server_ip': {'type': 'ip_address'},
+        'server_port': {'type': 'port', 'range': (1, 65535)},
+        'apn_server': {'type': 'string', 'max_length': 100, 'required': True},
+        'apn_user': {'type': 'string', 'max_length': 50},
+        'apn_password': {'type': 'string', 'max_length': 50},
+        'server_protocol': {'type': 'enum', 'values': ['TCP', 'UDP']},
+        'gt06_protocol': {'type': 'string', 'pattern': r'^GT06-0x[0-9A-Fa-f]{2}$'},
+        'timer_ign_on': {'type': 'integer', 'range': (1, 3600)},
+        'timer_ign_off': {'type': 'integer', 'range': (1, 3600)},
+        'heartbeat_interval': {'type': 'integer', 'range': (10, 3600)},
+        'heartbeat_ign_on': {'type': 'integer', 'range': (10, 3600)},
+        'heartbeat_ign_off': {'type': 'integer', 'range': (10, 3600)},
+        'vibration': {'type': 'integer', 'range': (1, 255)},
+        'sensitivity': {'type': 'integer', 'range': (1, 10)},
+        'speed_limit': {'type': 'integer', 'range': (1, 300)},
+        'movement_alert': {'type': 'boolean'},
+        'power_alert': {'type': 'boolean'},
+        'battery_alert': {'type': 'boolean'},
+        'device_imei': {'type': 'imei'},
+        'device_iccid': {'type': 'iccid'},
+        'protocol': {'type': 'integer', 'range': (0, 10)},
+        'tcp_ack': {'type': 'boolean'},
+        'GT06SEL': {'type': 'integer', 'range': (0, 2)},  # LT32Pro protocol selection: 0=GT06, 1=CRX3, 2=CRX
+        'POSBYACK': {'type': 'integer', 'range': (0, 1)},  # LT32Pro TCP ACK: 0=Disabled, 1=Enabled
+        'profile_version': {'type': 'version'}
+    }
+    
+    # Default values for optional parameters
+    DEFAULT_VALUES = {
+        'profile_version': '1.0',
+        'apn_user': '',
+        'apn_password': '',
+        'server_port': '8080',
+        'server_protocol': 'TCP',
+        'heartbeat_interval': '60',

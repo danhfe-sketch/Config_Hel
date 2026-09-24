@@ -1,0 +1,4328 @@
+            # Add suggestions for common errors
+            suggestions = self._get_apn_suggestions(value)
+            validation_result.error_message = self.i18n.get('validation_invalid_apn', '{param_name} deve ser um nome de host ou endere├ºo IP v├ílido').format(param_name=display_name)
+            if suggestions:
+                validation_result.error_message += f". Sugest├Áes: {', '.join(suggestions[:3])}"
+            
+            self._log_validation_result(param_name, value, validation_result)
+            return validation_result
+        
+        # Log successful validation
+        result = ValidationResult(is_valid=True)
+        self._log_validation_result(param_name, value, result)
+        return result
+    
+    def _validate_apn_credential(self, param_name: str, value: Any, rules: Dict) -> ValidationResult:
+        """
+        Validate APN credentials (username/password) with proper length and character checks.
+        
+        Args:
+            param_name: Name of the parameter being validated
+            value: Credential value to validate
+            rules: Validation rules for the parameter
+            
+        Returns:
+            ValidationResult with validation status
+        """
+        display_name = self.i18n.get(param_name, param_name)
+        
+        if not isinstance(value, str):
+            value = str(value)
+        
+        # Log validation attempt
+        self._log_validation_attempt(param_name, value, 'apn_credential_validation')
+        
+        # Check length constraints
+        min_length = rules.get('min_length', 0)
+        max_length = rules.get('max_length', 30)
+        
+        if len(value) < min_length:
+            result = ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_min_length', '{param_name} must be at least {min_length} characters').format(
+                    param_name=display_name, 
+                    min_length=min_length
+                ),
+                error_code='MIN_LENGTH'
+            )
+            self._log_validation_result(param_name, value, result)
+            return result
+        
+        if len(value) > max_length:
+            result = ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_max_length', '{param_name} must be at most {max_length} characters').format(
+                    param_name=display_name, 
+                    max_length=max_length
+                ),
+                error_code='MAX_LENGTH'
+            )
+            self._log_validation_result(param_name, value, result)
+            return result
+        
+        # Check for valid characters in credentials using compiled pattern
+        if value:
+            credential_pattern = self._get_compiled_pattern('apn_credential')
+            if credential_pattern:
+                is_valid = bool(credential_pattern.match(value))
+            else:
+                is_valid = bool(re.match(self.apn_credential_pattern, value))
+            
+            if not is_valid:
+                result = ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_invalid_apn_credential', '{param_name} contains invalid characters. Only letters, numbers, @, ., _, - are allowed').format(param_name=display_name),
+                    error_code='INVALID_APN_CREDENTIAL'
+                )
+                self._log_validation_result(param_name, value, result)
+                return result
+        
+        # Log successful validation
+        result = ValidationResult(is_valid=True)
+        self._log_validation_result(param_name, value, result)
+        return result
+    
+    def _validate_apn_format(self, apn_value: str) -> ValidationResult:
+        """
+        Validate APN format against multiple patterns (domain, IP, URL, simple name).
+        
+        Args:
+            apn_value: APN value to validate
+            
+        Returns:
+            ValidationResult with specific error details
+        """
+        # Check for consecutive dots (main issue from the bug report)
+        if '..' in apn_value:
+            return ValidationResult(
+                is_valid=False,
+                error_message="APN cannot contain consecutive dots",
+                error_code='CONSECUTIVE_DOTS'
+            )
+        
+        # Check for leading or trailing dots
+        if apn_value.startswith('.') or apn_value.endswith('.'):
+            return ValidationResult(
+                is_valid=False,
+                error_message="APN cannot start or end with a dot",
+                error_code='INVALID_DOT_POSITION'
+            )
+        
+        # Try to match against different APN format patterns using compiled patterns for performance
+        domain_pattern = self._get_compiled_pattern('apn_domain')
+        if domain_pattern and domain_pattern.match(apn_value):
+            return ValidationResult(is_valid=True)
+        
+        ip_pattern = self._get_compiled_pattern('apn_ip')
+        if ip_pattern and ip_pattern.match(apn_value):
+            return ValidationResult(is_valid=True)
+        
+        url_pattern = self._get_compiled_pattern('apn_url')
+        if url_pattern and url_pattern.match(apn_value):
+            return ValidationResult(is_valid=True)
+        
+        simple_pattern = self._get_compiled_pattern('apn_simple')
+        if simple_pattern and simple_pattern.match(apn_value):
+            return ValidationResult(is_valid=True)
+        
+        # Fallback to original patterns if compiled patterns are not available
+        if not domain_pattern:
+            if re.match(self.apn_domain_pattern, apn_value):
+                return ValidationResult(is_valid=True)
+            if re.match(self.apn_ip_pattern, apn_value):
+                return ValidationResult(is_valid=True)
+            if re.match(self.apn_url_pattern, apn_value):
+                return ValidationResult(is_valid=True)
+            if re.match(self.apn_simple_pattern, apn_value):
+                return ValidationResult(is_valid=True)
+        
+        # If none of the patterns match, return detailed error
+        return ValidationResult(
+            is_valid=False,
+            error_message="APN format is invalid. Must be a valid domain name, IP address, URL, or simple name",
+            error_code='INVALID_APN_FORMAT'
+        )
+    
+    def _get_apn_suggestions(self, invalid_apn: str) -> List[str]:
+        """
+        Get APN suggestions based on invalid input.
+        
+        Args:
+            invalid_apn: The invalid APN value
+            
+        Returns:
+            List of suggested APN values
+        """
+        suggestions = []
+        
+        # Fix consecutive dots
+        if '..' in invalid_apn:
+            fixed_apn = re.sub(r'\.+', '.', invalid_apn)
+            suggestions.append(fixed_apn)
+        
+        # Remove leading/trailing dots
+        cleaned_apn = invalid_apn.strip('.')
+        if cleaned_apn != invalid_apn and cleaned_apn:
+            suggestions.append(cleaned_apn)
+        
+        # Check for partial matches with common carriers
+        lower_apn = invalid_apn.lower()
+        for carrier, apns in self.common_carrier_apns.items():
+            if carrier in lower_apn:
+                suggestions.extend(apns)
+        
+        return list(set(suggestions))  # Remove duplicates
+    
+    def _log_validation_attempt(self, param_name: str, value: str, validation_type: str):
+        """
+        Log validation attempt for debugging and monitoring.
+        
+        Args:
+            param_name: Name of the parameter being validated
+            value: Value being validated (masked for sensitive data)
+            validation_type: Type of validation being performed
+        """
+        # Mask sensitive credential values
+        masked_value = value
+        if param_name in ['apn_password', 'password']:
+            masked_value = '*' * len(value) if value else ''
+        elif param_name == 'apn_user' and value:
+            masked_value = value[:2] + '*' * (len(value) - 2) if len(value) > 2 else '*' * len(value)
+        
+        self.logger.info(f"Validation attempt - Parameter: {param_name}, Type: {validation_type}, Value: {masked_value}, Timestamp: {datetime.now().isoformat()}")
+    
+    def _log_validation_result(self, param_name: str, value: str, result: ValidationResult):
+        """
+        Log validation result for debugging and monitoring.
+        
+        Args:
+            param_name: Name of the parameter that was validated
+            value: Value that was validated (masked for sensitive data)
+            result: ValidationResult object
+        """
+        # Mask sensitive credential values
+        masked_value = value
+        if param_name in ['apn_password', 'password']:
+            masked_value = '*' * len(value) if value else ''
+        elif param_name == 'apn_user' and value:
+            masked_value = value[:2] + '*' * (len(value) - 2) if len(value) > 2 else '*' * len(value)
+        
+        log_data = {
+            'parameter': param_name,
+            'value': masked_value,
+            'is_valid': result.is_valid,
+            'error_code': result.error_code,
+            'error_message': result.error_message,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        if result.is_valid:
+            self.logger.info(f"Validation success - {log_data}")
+        else:
+            self.logger.warning(f"Validation failure - {log_data}")
+    
+    def validate_apn_configuration(self, apn: str, username: str = "", password: str = "", 
+                                 source: str = 'api') -> ValidationResult:
+        """
+        Validate complete APN configuration including credentials.
+        
+        Args:
+            apn: APN name/address
+            username: APN username (optional)
+            password: APN password (optional)
+            
+        Returns:
+            ValidationResult for the complete APN configuration
+        """
+        start_time = datetime.now()
+        
+        # Validate APN name
+        apn_result = self._validate_apn('apn', apn, self.validation_rules.get('apn', {}))
+        if not apn_result.is_valid:
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            self.log_validation_attempt('apn', apn, 'apn_configuration', source, apn_result, execution_time)
+            return apn_result
+        
+        # Validate username if provided
+        if username:
+            user_result = self._validate_apn_credential('apn_user', username, self.validation_rules.get('apn_user', {}))
+            if not user_result.is_valid:
+                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                self.log_validation_attempt('apn_user', username, 'apn_configuration', source, user_result, execution_time)
+                return user_result
+        
+        # Validate password if provided
+        if password:
+            pass_result = self._validate_apn_credential('apn_password', password, self.validation_rules.get('apn_password', {}))
+            if not pass_result.is_valid:
+                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                self.log_validation_attempt('apn_password', password, 'apn_configuration', source, pass_result, execution_time)
+                return pass_result
+        
+        # Log successful complete validation
+        result = ValidationResult(is_valid=True)
+        execution_time = (datetime.now() - start_time).total_seconds() * 1000
+        
+        context = {
+            'apn': apn,
+            'username_provided': bool(username),
+            'password_provided': bool(password)
+        }
+        
+        self.log_validation_attempt('apn_configuration', 'complete', 'apn_configuration', source, result, execution_time, context)
+        self.logger.info(f"Complete APN configuration validation successful - APN: {apn}, Username provided: {bool(username)}, Password provided: {bool(password)}")
+        
+        return result
+    
+    def validate_connection_required(self, serial_service) -> ValidationResult:
+        """
+        Validate that device connection is available for operations that require it.
+        
+        Args:
+            serial_service: SerialService instance to check connection status
+            
+        Returns:
+            ValidationResult indicating if connection is available
+        """
+        if not hasattr(serial_service, 'is_connected') or not serial_service.is_connected:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_connection_required', 'Device connection is required for this operation'),
+                error_code='CONNECTION_REQUIRED'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def validate_profile_data(self, profile_data: Dict) -> ValidationResult:
+        """
+        Validate configuration profile data structure.
+        
+        Args:
+            profile_data: Dictionary containing profile configuration
+            
+        Returns:
+            ValidationResult indicating if profile data is valid
+        """
+        if not isinstance(profile_data, dict):
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_invalid_profile_format', 'Profile data must be a valid configuration object'),
+                error_code='INVALID_PROFILE_FORMAT'
+            )
+        
+        # Validate required sections
+        required_sections = ['version']
+        for section in required_sections:
+            if section not in profile_data:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=self.i18n.get('validation_missing_profile_section', 'Profile is missing required section: {section}').format(section=section),
+                    error_code='MISSING_PROFILE_SECTION'
+                )
+        
+        # Validate individual parameters in profile
+        errors = []
+        for section_name, section_data in profile_data.items():
+            if section_name == 'version':
+                continue
+                
+            if isinstance(section_data, dict):
+                for param_name, param_value in section_data.items():
+                    # Pass the whole section as context so conditional validations
+                    # (for example: skip speed_detection_time/speed_limit when
+                    # speed_alert_enabled is False) can make decisions based on
+                    # sibling fields.
+                    result = self.validate_parameter(param_name, param_value, context=section_data)
+                    if not result.is_valid:
+                        errors.append(f"{section_name}.{param_name}: {result.error_message}")
+        
+        if errors:
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_profile_errors', 'Profile validation errors: {errors}').format(errors="; ".join(errors)),
+                error_code='PROFILE_VALIDATION_ERRORS'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def get_parameter_info(self, param_name: str) -> Optional[Dict]:
+        """
+        Get validation rules and information for a parameter.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            Dictionary with parameter validation rules or None if not found
+        """
+        return self.validation_rules.get(param_name)
+    
+    def get_all_parameters(self) -> List[str]:
+        """
+        Get list of all supported parameter names.
+        
+        Returns:
+            List of parameter names
+        """
+        return list(self.validation_rules.keys())    
+
+    def validate_specification_parameter(self, section_name: str, param_name: str, field_name: str, value: Any, context: Optional[Dict[str, Any]] = None) -> ValidationResult:
+        """
+        Validate a parameter from the specification with proper field mapping.
+        
+        Args:
+            section_name: Name of the parameter section
+            param_name: Name of the parameter
+            field_name: Name of the specific field (for multi-field parameters)
+            value: Value to validate
+            context: Optional context for conditional validation
+            
+        Returns:
+            ValidationResult with validation status and error details
+        """
+        # Map specification field names to validation rule names
+        validation_key = self._get_validation_key(section_name, param_name, field_name)
+        
+        if validation_key:
+            return self.validate_parameter(validation_key, value, context)
+        else:
+            # If no specific validation rule exists, perform basic validation
+            return self._validate_basic_field(field_name, value)
+    
+    def _get_validation_key(self, section_name: str, param_name: str, field_name: str) -> Optional[str]:
+        """
+        Map specification parameter names to validation rule keys.
+        
+        Args:
+            section_name: Name of the parameter section
+            param_name: Name of the parameter
+            field_name: Name of the specific field
+            
+        Returns:
+            Validation rule key or None if not found
+        """
+        # Direct field name mapping
+        if field_name in self.validation_rules:
+            return field_name
+        
+        # Section-specific mapping
+        mapping = {
+            'network_parameters': {
+                'apn_settings': {
+                    'apn': 'apn',
+                    'user': 'apn_user',
+                    'password': 'apn_password'
+                },
+                'server_settings': {
+                    'address': 'server_address',
+                    'port': 'server_port'
+                }
+            },
+            'time_parameters': {
+                'report_intervals': {
+                    'moving_time': 'moving_time',
+                    'stopped_time': 'stopped_time'
+                },
+                'heartbeat_intervals': {
+                    'moving_heartbeat': 'moving_heartbeat',
+                    'stopped_heartbeat': 'stopped_heartbeat'
+                }
+            },
+            'service_parameters': {
+                'protocol': 'protocol',
+                'tcp_ack': 'tcp_ack'
+            },
+            'ignition': {
+                'ignition_type': {
+                    'ignition_mode': 'ignition_mode',
+                    'on_voltage': 'on_voltage',
+                    'off_voltage': 'off_voltage'
+                }
+            },
+            'speed': {
+                'speed_alert': {
+                    'detection_time': 'speed_detection_time',
+                    'speed_limit': 'speed_limit',
+                    'alert_type': 'speed_alert_type'
+                }
+            },
+            'power_saving': {
+                'sleep_mode': 'sleep_mode',
+                'sleep_time': 'sleep_time'
+            },
+            'angle': {
+                'angle_report': {
+                    'min_speed': 'angle_min_speed',
+                    'angle_variation': 'angle_variation'
+                }
+            },
+            'battery_alerts': {
+                'main_power_alert': {
+                    'detection_time': 'power_detection_time',
+                    'min_charge_time': 'min_charge_time',
+                    'alert_type': 'battery_alert_type'
+                }
+            },
+            'vibration_sensor': {
+                'vibration_sensitivity': {
+                    'level': 'vibration_level'
+                }
+            },
+            'jammer_detection': {
+                'jammer_relay_action': {
+                    'confirmation_time': 'jammer_confirmation_time',
+                    'speed_limit': 'jammer_speed_limit',
+                    'output_operation': 'jammer_output_operation'
+                }
+            },
+            'miscellaneous': {
+                'odometer': 'odometer',
+                'hourmeter': 'hourmeter'
+            }
+        }
+        
+        section_mapping = mapping.get(section_name, {})
+        param_mapping = section_mapping.get(param_name, {})
+        
+        if isinstance(param_mapping, dict):
+            return param_mapping.get(field_name)
+        else:
+            return param_mapping if param_mapping else None
+    
+    def _validate_basic_field(self, field_name: str, value: Any) -> ValidationResult:
+        """
+        Perform basic validation for fields without specific rules.
+        
+        Args:
+            field_name: Name of the field
+            value: Value to validate
+            
+        Returns:
+            ValidationResult with basic validation
+        """
+        # Basic validation for common field types
+        if value is None or (isinstance(value, str) and value.strip() == ''):
+            return ValidationResult(
+                is_valid=False,
+                error_message=self.i18n.get('validation_required_field', '{param_name} ├® obrigat├│rio e n├úo pode estar vazio').format(param_name=field_name),
+                error_code='REQUIRED_FIELD'
+            )
+        
+        return ValidationResult(is_valid=True)
+    
+    def get_validation_rules_for_specification(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all validation rules organized by specification sections.
+        
+        Returns:
+            Dictionary of validation rules organized by sections
+        """
+        return {
+            'network_parameters': {
+                'apn': self.validation_rules.get('apn'),
+                'apn_user': self.validation_rules.get('apn_user'),
+                'apn_password': self.validation_rules.get('apn_password'),
+                'server_address': self.validation_rules.get('server_address'),
+                'server_port': self.validation_rules.get('server_port')
+            },
+            'time_parameters': {
+                'moving_time': self.validation_rules.get('moving_time'),
+                'stopped_time': self.validation_rules.get('stopped_time'),
+                'moving_heartbeat': self.validation_rules.get('moving_heartbeat'),
+                'stopped_heartbeat': self.validation_rules.get('stopped_heartbeat')
+            },
+            'service_parameters': {
+                'protocol': self.validation_rules.get('protocol'),
+                'tcp_ack': self.validation_rules.get('tcp_ack')
+            },
+            'ignition': {
+                'ignition_mode': self.validation_rules.get('ignition_mode'),
+                'on_voltage': self.validation_rules.get('on_voltage'),
+                'off_voltage': self.validation_rules.get('off_voltage')
+            },
+            'speed': {
+                'speed_detection_time': self.validation_rules.get('speed_detection_time'),
+                'speed_limit': self.validation_rules.get('speed_limit'),
+                'speed_alert_type': self.validation_rules.get('speed_alert_type')
+            },
+            'power_saving': {
+                'sleep_mode': self.validation_rules.get('sleep_mode'),
+                'sleep_time': self.validation_rules.get('sleep_time')
+            },
+            'angle': {
+                'angle_min_speed': self.validation_rules.get('angle_min_speed'),
+                'angle_variation': self.validation_rules.get('angle_variation')
+            },
+            'battery_alerts': {
+                'power_detection_time': self.validation_rules.get('power_detection_time'),
+                'min_charge_time': self.validation_rules.get('min_charge_time'),
+                'battery_alert_type': self.validation_rules.get('battery_alert_type')
+            },
+            'vibration_sensor': {
+                'vibration_level': self.validation_rules.get('vibration_level')
+            },
+            'jammer_detection': {
+                'jammer_confirmation_time': self.validation_rules.get('jammer_confirmation_time'),
+                'jammer_speed_limit': self.validation_rules.get('jammer_speed_limit'),
+                'jammer_output_operation': self.validation_rules.get('jammer_output_operation')
+            },
+            'miscellaneous': {
+                'odometer': self.validation_rules.get('odometer'),
+                'hourmeter': self.validation_rules.get('hourmeter')
+            }
+        }
+    
+    def _init_debug_logging(self):
+        """Initialize enhanced debug logging configuration with comprehensive tracking."""
+        # Create dedicated validation logger
+        self.validation_logger = logging.getLogger(f"{__name__}.validation")
+        
+        # Set up structured logging formats for different log types
+        validation_formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s'
+        )
+        debug_formatter = logging.Formatter(
+            '%(asctime)s - DEBUG - %(funcName)s:%(lineno)d - %(message)s'
+        )
+        metrics_formatter = logging.Formatter(
+            '%(asctime)s - METRICS - %(message)s'
+        )
+        analytics_formatter = logging.Formatter(
+            '%(asctime)s - ANALYTICS - %(message)s'
+        )
+        
+        # Create file handlers for different log types
+        try:
+            import os
+            # Only create on-disk logs if explicitly enabled by environment/config
+            persist_logs = False
+            try:
+                persist_logs = bool(__import__('os').environ.get('PERSIST_VALIDATION_LOGS', 'false').lower() == 'true')
+            except Exception:
+                persist_logs = False
+
+            log_dir = os.path.join(os.getcwd(), 'logs')
+            if persist_logs:
+                os.makedirs(log_dir, exist_ok=True)
+
+            # If persistence is disabled, try to remove legacy logs folder to avoid leaving artifacts
+            if not persist_logs:
+                try:
+                    import shutil
+                    if os.path.exists(log_dir):
+                        shutil.rmtree(log_dir)
+                        self.logger.info(f"Removed legacy logs directory: {log_dir}")
+                except Exception:
+                    # Non-fatal cleanup errors
+                    pass
+            
+            # Main validation log
+            validation_log_file = os.path.join(log_dir, 'validation.log')
+            if persist_logs:
+                self.validation_file_handler = logging.FileHandler(validation_log_file, encoding='utf-8')
+                self.validation_file_handler.setFormatter(validation_formatter)
+                self.validation_logger.addHandler(self.validation_file_handler)
+            
+            # Debug log for detailed troubleshooting
+            debug_log_file = os.path.join(log_dir, 'validation_debug.log')
+            if persist_logs:
+                self.debug_file_handler = logging.FileHandler(debug_log_file, encoding='utf-8')
+                self.debug_file_handler.setFormatter(debug_formatter)
+            
+            # Metrics log for performance and analytics
+            metrics_log_file = os.path.join(log_dir, 'validation_metrics.log')
+            if persist_logs:
+                self.metrics_file_handler = logging.FileHandler(metrics_log_file, encoding='utf-8')
+                self.metrics_file_handler.setFormatter(metrics_formatter)
+            
+            # Analytics log for error pattern analysis
+            analytics_log_file = os.path.join(log_dir, 'validation_analytics.log')
+            if persist_logs:
+                self.analytics_file_handler = logging.FileHandler(analytics_log_file, encoding='utf-8')
+                self.analytics_file_handler.setFormatter(analytics_formatter)
+            
+            # Create separate loggers for different purposes
+            self.debug_logger = logging.getLogger(f"{__name__}.debug")
+            self.debug_logger.addHandler(self.debug_file_handler)
+            self.debug_logger.setLevel(logging.DEBUG)
+            
+            self.metrics_logger = logging.getLogger(f"{__name__}.metrics")
+            self.metrics_logger.addHandler(self.metrics_file_handler)
+            self.metrics_logger.setLevel(logging.INFO)
+            
+            self.analytics_logger = logging.getLogger(f"{__name__}.analytics")
+            self.analytics_logger.addHandler(self.analytics_file_handler)
+            self.analytics_logger.setLevel(logging.INFO)
+            
+            # Set initial log level
+            self.validation_logger.setLevel(logging.INFO)
+            
+        except Exception as e:
+            self.logger.warning(f"Could not set up validation log files: {e}")
+        
+        # Initialize enhanced validation analytics tracking
+        self._validation_analytics = {
+            'hourly_stats': defaultdict(lambda: {'attempts': 0, 'failures': 0, 'avg_time_ms': 0.0}),
+            'daily_stats': defaultdict(lambda: {'attempts': 0, 'failures': 0, 'avg_time_ms': 0.0}),
+            'error_frequency': defaultdict(int),
+            'parameter_trends': defaultdict(list),
+            'performance_tracking': deque(maxlen=1000),
+            'source_analytics': defaultdict(lambda: {'attempts': 0, 'failures': 0}),
+            'validation_rules_hit': defaultdict(int),
+            'error_recovery_patterns': defaultdict(list),
+            'user_behavior_patterns': defaultdict(list),
+            'validation_success_patterns': defaultdict(list),
+            'time_based_patterns': defaultdict(lambda: defaultdict(int)),
+            'correlation_patterns': defaultdict(lambda: defaultdict(int))
+        }
+        
+        # Initialize debug mode from environment or config
+        import os
+        self._debug_mode = os.getenv('VALIDATION_DEBUG', 'false').lower() == 'true'
+        
+        # Enhanced debug configuration
+        self._debug_config = {
+            'log_context': True,
+            'log_performance': True,
+            'log_error_patterns': True,
+            'log_suggestions': True,
+            'detailed_stack_traces': self._debug_mode,
+            'log_user_patterns': True,
+            'log_correlation_analysis': True,
+            'log_success_patterns': True,
+            'performance_profiling': self._debug_mode
+        }
+        
+        # Initialize validation success rate monitoring
+        self._success_rate_monitor = {
+            'window_size': 100,
+            'alert_threshold': 70.0,  # Alert if success rate drops below 70%
+            'recent_attempts': deque(maxlen=100),
+            'last_alert_time': None,
+            'alert_cooldown_minutes': 15
+        }
+        
+        if self._debug_mode:
+            self.validation_logger.setLevel(logging.DEBUG)
+            self.validation_logger.addHandler(self.debug_file_handler)
+            self.logger.info("Enhanced validation debug mode enabled with comprehensive tracking")
+    
+    def log_validation_attempt(self, parameter_name: str, value: str, validation_type: str, 
+                             source: str, result: ValidationResult, execution_time_ms: float = 0.0,
+                             context: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Log a validation attempt with structured data and comprehensive analytics.
+        
+        Args:
+            parameter_name: Name of the parameter being validated
+            value: Value being validated (will be masked for sensitive data)
+            validation_type: Type of validation performed
+            source: Source of the validation request ('ui', 'command', 'api', 'profile')
+            result: ValidationResult from the validation
+            execution_time_ms: Time taken for validation in milliseconds
+            context: Optional additional context information
+        """
+        with self._lock:
+            # Mask sensitive values
+            masked_value = self._mask_sensitive_value(parameter_name, value)
+            
+            # Create validation attempt record
+            attempt = ValidationAttempt(
+                timestamp=datetime.now(),
+                parameter_name=parameter_name,
+                value=masked_value,
+                validation_type=validation_type,
+                source=source,
+                result=result,
+                execution_time_ms=execution_time_ms,
+                context=context or {}
+            )
+            
+            # Store attempt in memory
+            self._validation_attempts.append(attempt)
+            
+            # Update metrics
+            self._update_validation_metrics(attempt)
+            
+            # Update analytics tracking
+            self._update_validation_analytics(attempt)
+            
+            # Log the attempt
+            self._log_structured_attempt(attempt)
+            
+            # Track error patterns and correlations
+            if not result.is_valid:
+                self._track_error_pattern(parameter_name, result.error_code, result.error_message)
+                self._analyze_error_correlations(attempt)
+            else:
+                self._track_success_patterns(attempt)
+            
+            # Monitor success rate and alert if needed
+            self._monitor_success_rate(attempt)
+            
+            # Log performance issues if detected
+            if execution_time_ms > self._performance_thresholds['slow_validation_ms']:
+                self._log_performance_issue(attempt)
+    
+    def _mask_sensitive_value(self, parameter_name: str, value: str) -> str:
+        """
+        Mask sensitive parameter values for logging.
+        
+        Args:
+            parameter_name: Name of the parameter
+            value: Value to potentially mask
+            
+        Returns:
+            Masked value for logging
+        """
+        sensitive_params = {'apn_password', 'password', 'apn_user'}
+        
+        if parameter_name.lower() in sensitive_params:
+            if not value:
+                return "[empty]"
+            elif len(value) <= 2:
+                return "*" * len(value)
+            else:
+                return value[0] + "*" * (len(value) - 2) + value[-1]
+        
+        return str(value)
+    
+    def _update_validation_metrics(self, attempt: ValidationAttempt) -> None:
+        """
+        Update validation metrics with the latest attempt.
+        
+        Args:
+            attempt: ValidationAttempt to process
+        """
+        self._metrics.total_attempts += 1
+        
+        if attempt.result.is_valid:
+            self._metrics.successful_validations += 1
+        else:
+            self._metrics.failed_validations += 1
+        
+        # Update success rate
+        self._metrics.success_rate = (
+            self._metrics.successful_validations / self._metrics.total_attempts * 100
+        )
+        
+        # Update average execution time
+        total_time = (self._metrics.average_execution_time_ms * (self._metrics.total_attempts - 1) + 
+                     attempt.execution_time_ms)
+        self._metrics.average_execution_time_ms = total_time / self._metrics.total_attempts
+        
+        # Update parameter-specific stats
+        param_stats = self._parameter_stats[attempt.parameter_name]
+        param_stats['attempts'] += 1
+        
+        if not attempt.result.is_valid:
+            param_stats['failures'] += 1
+        
+        # Update parameter failure rates
+        self._metrics.parameter_failure_rates[attempt.parameter_name] = (
+            param_stats['failures'] / param_stats['attempts'] * 100
+        )
+    
+    def _log_structured_attempt(self, attempt: ValidationAttempt) -> None:
+        """
+        Log validation attempt with structured format.
+        
+        Args:
+            attempt: ValidationAttempt to log
+        """
+        log_data = {
+            'timestamp': attempt.timestamp.isoformat(),
+            'parameter': attempt.parameter_name,
+            'value': attempt.value,
+            'validation_type': attempt.validation_type,
+            'source': attempt.source,
+            'is_valid': attempt.result.is_valid,
+            'error_code': attempt.result.error_code,
+            'execution_time_ms': attempt.execution_time_ms,
+            'context': attempt.context
+        }
+        
+        if attempt.result.is_valid:
+            self.validation_logger.info(f"VALIDATION_SUCCESS: {json.dumps(log_data)}")
+        else:
+            log_data['error_message'] = attempt.result.error_message
+            self.validation_logger.warning(f"VALIDATION_FAILURE: {json.dumps(log_data)}")
+        
+        # Debug mode: log additional details
+        if self._debug_mode:
+            debug_data = {
+                'suggested_value': attempt.result.suggested_value,
+                'warning_message': attempt.result.warning_message,
+                'validation_level': attempt.result.validation_level
+            }
+            self.validation_logger.debug(f"VALIDATION_DEBUG: {json.dumps(debug_data)}")
+    
+    def _track_error_pattern(self, parameter_name: str, error_code: str, error_message: str) -> None:
+        """
+        Track error patterns for analytics.
+        
+        Args:
+            parameter_name: Name of the parameter that failed validation
+            error_code: Error code from validation
+            error_message: Error message from validation
+        """
+        pattern_key = f"{parameter_name}:{error_code}"
+        self._error_patterns[pattern_key] += 1
+        
+        # Update common errors in metrics
+        self._metrics.common_errors[error_code] = self._metrics.common_errors.get(error_code, 0) + 1
+    
+    def _update_validation_analytics(self, attempt: ValidationAttempt) -> None:
+        """
+        Update comprehensive validation analytics with the latest attempt.
+        
+        Args:
+            attempt: ValidationAttempt to analyze
+        """
+        timestamp = attempt.timestamp
+        hour_key = timestamp.strftime('%Y-%m-%d %H:00')
+        day_key = timestamp.strftime('%Y-%m-%d')
+        
+        # Update hourly statistics
+        hourly_stats = self._validation_analytics['hourly_stats'][hour_key]
+        hourly_stats['attempts'] += 1
+        if not attempt.result.is_valid:
+            hourly_stats['failures'] += 1
+        
+        # Update average execution time for the hour
+        current_avg = hourly_stats['avg_time_ms']
+        current_count = hourly_stats['attempts']
+        hourly_stats['avg_time_ms'] = ((current_avg * (current_count - 1)) + attempt.execution_time_ms) / current_count
+        
+        # Update daily statistics
+        daily_stats = self._validation_analytics['daily_stats'][day_key]
+        daily_stats['attempts'] += 1
+        if not attempt.result.is_valid:
+            daily_stats['failures'] += 1
+        
+        # Update daily average execution time
+        current_avg = daily_stats['avg_time_ms']
+        current_count = daily_stats['attempts']
+        daily_stats['avg_time_ms'] = ((current_avg * (current_count - 1)) + attempt.execution_time_ms) / current_count
+        
+        # Track error frequency
+        if not attempt.result.is_valid:
+            self._validation_analytics['error_frequency'][attempt.result.error_code] += 1
+        
+        # Track parameter trends
+        trend_data = {
+            'timestamp': timestamp.isoformat(),
+            'is_valid': attempt.result.is_valid,
+            'execution_time_ms': attempt.execution_time_ms,
+            'source': attempt.source,
+            'error_code': attempt.result.error_code if not attempt.result.is_valid else None
+        }
+        self._validation_analytics['parameter_trends'][attempt.parameter_name].append(trend_data)
+        
+        # Keep only last 50 trend entries per parameter
+        if len(self._validation_analytics['parameter_trends'][attempt.parameter_name]) > 50:
+            self._validation_analytics['parameter_trends'][attempt.parameter_name] = \
+                self._validation_analytics['parameter_trends'][attempt.parameter_name][-50:]
+        
+        # Track performance data
+        performance_data = {
+            'timestamp': timestamp.isoformat(),
+            'parameter': attempt.parameter_name,
+            'execution_time_ms': attempt.execution_time_ms,
+            'validation_type': attempt.validation_type,
+            'source': attempt.source
+        }
+        self._validation_analytics['performance_tracking'].append(performance_data)
+        
+        # Update source analytics
+        source_stats = self._validation_analytics['source_analytics'][attempt.source]
+        source_stats['attempts'] += 1
+        if not attempt.result.is_valid:
+            source_stats['failures'] += 1
+        
+        # Track validation rules hit
+        rule_key = f"{attempt.parameter_name}:{attempt.validation_type}"
+        self._validation_analytics['validation_rules_hit'][rule_key] += 1
+        
+        # Track time-based patterns
+        time_pattern_key = timestamp.strftime('%H')  # Hour of day
+        self._validation_analytics['time_based_patterns'][time_pattern_key][attempt.parameter_name] += 1
+        
+        # Log analytics data if debug mode is enabled
+        if self._debug_mode and self._debug_config.get('log_user_patterns', False):
+            analytics_data = {
+                'parameter': attempt.parameter_name,
+                'source': attempt.source,
+                'hour': hour_key,
+                'day': day_key,
+                'execution_time_ms': attempt.execution_time_ms,
+                'is_valid': attempt.result.is_valid
+            }
+            self.analytics_logger.info(f"ANALYTICS_UPDATE: {json.dumps(analytics_data)}")
+    
+    def _analyze_error_correlations(self, attempt: ValidationAttempt) -> None:
+        """
+        Analyze error correlations to identify patterns in validation failures.
+        
+        Args:
+            attempt: Failed validation attempt to analyze
+        """
+        if attempt.result.is_valid:
+            return
+        
+        # Look for correlations with recent attempts
+        recent_attempts = list(self._validation_attempts)[-10:]  # Last 10 attempts
+        
+        # Analyze parameter correlation patterns
+        for recent_attempt in recent_attempts:
+            if recent_attempt.parameter_name != attempt.parameter_name and not recent_attempt.result.is_valid:
+                correlation_key = f"{recent_attempt.parameter_name}->{attempt.parameter_name}"
+                self._validation_analytics['correlation_patterns'][correlation_key][attempt.result.error_code] += 1
+        
+        # Analyze source correlation patterns
+        source_errors = [a for a in recent_attempts if a.source == attempt.source and not a.result.is_valid]
+        if len(source_errors) > 1:
+            error_pattern = {
+                'source': attempt.source,
+                'error_sequence': [a.result.error_code for a in source_errors[-5:]],  # Last 5 errors
+                'timestamp': attempt.timestamp.isoformat()
+            }
+            self._validation_analytics['error_recovery_patterns'][attempt.source].append(error_pattern)
+            
+            # Keep only last 20 error patterns per source
+            if len(self._validation_analytics['error_recovery_patterns'][attempt.source]) > 20:
+                self._validation_analytics['error_recovery_patterns'][attempt.source] = \
+                    self._validation_analytics['error_recovery_patterns'][attempt.source][-20:]
+        
+        # Log correlation analysis if debug mode is enabled
+        if self._debug_mode and self._debug_config.get('log_correlation_analysis', False):
+            correlation_data = {
+                'parameter': attempt.parameter_name,
+                'error_code': attempt.result.error_code,
+                'recent_errors': [a.result.error_code for a in recent_attempts if not a.result.is_valid],
+                'source_error_count': len(source_errors),
+                'timestamp': attempt.timestamp.isoformat()
+            }
+            self.analytics_logger.info(f"ERROR_CORRELATION: {json.dumps(correlation_data)}")
+    
+    def _track_success_patterns(self, attempt: ValidationAttempt) -> None:
+        """
+        Track patterns in successful validations to identify best practices.
+        
+        Args:
+            attempt: Successful validation attempt to analyze
+        """
+        if not attempt.result.is_valid:
+            return
+        
+        success_pattern = {
+            'parameter': attempt.parameter_name,
+            'value_length': len(str(attempt.value)),
+            'validation_type': attempt.validation_type,
+            'source': attempt.source,
+            'execution_time_ms': attempt.execution_time_ms,
+            'timestamp': attempt.timestamp.isoformat(),
+            'context_keys': list(attempt.context.keys()) if attempt.context else []
+        }
+        
+        self._validation_analytics['validation_success_patterns'][attempt.parameter_name].append(success_pattern)
+        
+        # Keep only last 30 success patterns per parameter
+        if len(self._validation_analytics['validation_success_patterns'][attempt.parameter_name]) > 30:
+            self._validation_analytics['validation_success_patterns'][attempt.parameter_name] = \
+                self._validation_analytics['validation_success_patterns'][attempt.parameter_name][-30:]
+        
+        # Log success patterns if debug mode is enabled
+        if self._debug_mode and self._debug_config.get('log_success_patterns', False):
+            self.analytics_logger.info(f"SUCCESS_PATTERN: {json.dumps(success_pattern)}")
+    
+    def _monitor_success_rate(self, attempt: ValidationAttempt) -> None:
+        """
+        Monitor validation success rate and alert if it drops below threshold.
+        
+        Args:
+            attempt: Latest validation attempt
+        """
+        # Add to recent attempts window
+        self._success_rate_monitor['recent_attempts'].append(attempt.result.is_valid)
+        
+        # Calculate current success rate
+        if len(self._success_rate_monitor['recent_attempts']) >= 10:  # Need at least 10 attempts
+            recent_successes = sum(self._success_rate_monitor['recent_attempts'])
+            success_rate = (recent_successes / len(self._success_rate_monitor['recent_attempts'])) * 100
+            
+            # Check if success rate is below threshold
+            if success_rate < self._success_rate_monitor['alert_threshold']:
+                current_time = datetime.now()
+                last_alert = self._success_rate_monitor['last_alert_time']
+                
+                # Check cooldown period
+                if (last_alert is None or 
+                    (current_time - last_alert).total_seconds() > 
+                    self._success_rate_monitor['alert_cooldown_minutes'] * 60):
+                    
+                    alert_data = {
+                        'current_success_rate': success_rate,
+                        'threshold': self._success_rate_monitor['alert_threshold'],
+                        'window_size': len(self._success_rate_monitor['recent_attempts']),
+                        'recent_failures': len(self._success_rate_monitor['recent_attempts']) - recent_successes,
+                        'timestamp': current_time.isoformat()
+                    }
+                    
+                    self.validation_logger.warning(f"SUCCESS_RATE_ALERT: {json.dumps(alert_data)}")
+                    self._success_rate_monitor['last_alert_time'] = current_time
+    
+    def _log_performance_issue(self, attempt: ValidationAttempt) -> None:
+        """
+        Log performance issues for slow validations.
+        
+        Args:
+            attempt: Validation attempt with performance issue
+        """
+        performance_data = {
+            'parameter': attempt.parameter_name,
+            'execution_time_ms': attempt.execution_time_ms,
+            'validation_type': attempt.validation_type,
+            'source': attempt.source,
+            'threshold_ms': self._performance_thresholds['slow_validation_ms'],
+            'timestamp': attempt.timestamp.isoformat(),
+            'context_size': len(attempt.context) if attempt.context else 0
+        }
+        
+        if attempt.execution_time_ms > self._performance_thresholds['very_slow_validation_ms']:
+            self.validation_logger.error(f"VERY_SLOW_VALIDATION: {json.dumps(performance_data)}")
+        else:
+            self.validation_logger.warning(f"SLOW_VALIDATION: {json.dumps(performance_data)}")
+        
+        # Log additional debug info if debug mode is enabled
+        if self._debug_mode and self._debug_config.get('performance_profiling', False):
+            debug_data = {
+                'parameter_rules': str(self.validation_rules.get(attempt.parameter_name, {})),
+                'value_length': len(str(attempt.value)),
+                'context': attempt.context
+            }
+            self.debug_logger.debug(f"PERFORMANCE_DEBUG: {json.dumps(debug_data)}")
+    
+    def get_validation_metrics(self) -> ValidationMetrics:
+        """
+        Get current validation metrics.
+        
+        Returns:
+            ValidationMetrics with current statistics
+        """
+        with self._lock:
+            return ValidationMetrics(
+                total_attempts=self._metrics.total_attempts,
+                successful_validations=self._metrics.successful_validations,
+                failed_validations=self._metrics.failed_validations,
+                success_rate=self._metrics.success_rate,
+                average_execution_time_ms=self._metrics.average_execution_time_ms,
+                common_errors=dict(self._metrics.common_errors),
+                parameter_failure_rates=dict(self._metrics.parameter_failure_rates)
+            )
+    
+    def get_validation_history(self, limit: int = 100) -> List[ValidationAttempt]:
+        """
+        Get recent validation attempts.
+        
+        Args:
+            limit: Maximum number of attempts to return
+            
+        Returns:
+            List of recent ValidationAttempt objects
+        """
+        with self._lock:
+            return list(self._validation_attempts)[-limit:]
+    
+    def get_error_analytics(self) -> Dict[str, Any]:
+        """
+        Get validation error analytics for troubleshooting.
+        
+        Returns:
+            Dictionary with error analytics data
+        """
+        with self._lock:
+            # Get most common error patterns
+            sorted_patterns = sorted(
+                self._error_patterns.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )
+            
+            # Get parameters with highest failure rates
+            high_failure_params = {
+                param: rate for param, rate in self._metrics.parameter_failure_rates.items()
+                if rate > 10.0  # More than 10% failure rate
+            }
+            
+            # Get recent error trends
+            recent_attempts = list(self._validation_attempts)[-100:]
+            recent_errors = [
+                attempt for attempt in recent_attempts 
+                if not attempt.result.is_valid
+            ]
+            
+            error_trend = {}
+            source_breakdown = {}
+            for attempt in recent_errors:
+                hour_key = attempt.timestamp.strftime('%Y-%m-%d %H:00')
+                error_trend[hour_key] = error_trend.get(hour_key, 0) + 1
+                source_breakdown[attempt.source] = source_breakdown.get(attempt.source, 0) + 1
+            
+            # Get validation success rate by source
+            source_success_rates = {}
+            for source in ['ui', 'command', 'api', 'profile']:
+                source_attempts = [a for a in self._validation_attempts if a.source == source]
+                if source_attempts:
+                    successful = sum(1 for a in source_attempts if a.result.is_valid)
+                    source_success_rates[source] = (successful / len(source_attempts)) * 100
+            
+            # Get most problematic parameters
+            problematic_params = {}
+            for param_name, stats in self._parameter_stats.items():
+                if stats['attempts'] > 5:  # Only consider parameters with enough attempts
+                    failure_rate = (stats['failures'] / stats['attempts']) * 100
+                    if failure_rate > 20:  # More than 20% failure rate
+                        problematic_params[param_name] = {
+                            'failure_rate': failure_rate,
+                            'total_attempts': stats['attempts'],
+                            'total_failures': stats['failures']
+                        }
+            
+            return {
+                'most_common_error_patterns': sorted_patterns[:10],
+                'high_failure_rate_parameters': high_failure_params,
+                'recent_error_trend': error_trend,
+                'error_source_breakdown': source_breakdown,
+                'source_success_rates': source_success_rates,
+                'problematic_parameters': problematic_params,
+                'total_error_patterns': len(self._error_patterns),
+                'performance_issues': self._get_performance_issues()
+            }
+    
+    def _get_performance_issues(self) -> List[Dict[str, Any]]:
+        """
+        Identify validation performance issues.
+        
+        Returns:
+            List of performance issues found
+        """
+        issues = []
+        
+        # Check for slow validations
+        slow_validations = [
+            attempt for attempt in self._validation_attempts
+            if attempt.execution_time_ms > self._performance_thresholds['slow_validation_ms']
+        ]
+        
+        if slow_validations:
+            avg_slow_time = sum(a.execution_time_ms for a in slow_validations) / len(slow_validations)
+            issues.append({
+                'type': 'slow_validation',
+                'count': len(slow_validations),
+                'average_time_ms': avg_slow_time,
+                'threshold_ms': self._performance_thresholds['slow_validation_ms']
+            })
+        
+        # Check for very slow validations
+        very_slow_validations = [
+            attempt for attempt in self._validation_attempts
+            if attempt.execution_time_ms > self._performance_thresholds['very_slow_validation_ms']
+        ]
+        
+        if very_slow_validations:
+            issues.append({
+                'type': 'very_slow_validation',
+                'count': len(very_slow_validations),
+                'parameters': list(set(a.parameter_name for a in very_slow_validations))
+            })
+        
+        return issues
+    
+    def enable_debug_mode(self) -> None:
+        """Enable debug mode for detailed validation logging."""
+        self._debug_mode = True
+        self.validation_logger.setLevel(logging.DEBUG)
+        self.validation_logger.info("Debug mode enabled")
+    
+    def disable_debug_mode(self) -> None:
+        """Disable debug mode."""
+        self._debug_mode = False
+        self.validation_logger.setLevel(logging.INFO)
+        self.validation_logger.info("Debug mode disabled")
+    
+    def is_debug_mode(self) -> bool:
+        """Check if debug mode is enabled."""
+        return self._debug_mode
+    
+    def clear_validation_history(self) -> None:
+        """Clear validation history and reset metrics."""
+        with self._lock:
+            self._validation_attempts.clear()
+            self._metrics = ValidationMetrics()
+            self._error_patterns.clear()
+            self._parameter_stats.clear()
+            self.validation_logger.info("Validation history and metrics cleared")
+    
+    def get_validation_insights(self) -> Dict[str, Any]:
+        """
+        Get validation insights and recommendations for improving validation success rates.
+        
+        Returns:
+            Dictionary with insights and recommendations
+        """
+        with self._lock:
+            insights = {
+                'recommendations': [],
+                'trends': {},
+                'health_score': 0.0,
+                'summary': {}
+            }
+            
+            # Calculate overall health score
+            if self._metrics.total_attempts > 0:
+                insights['health_score'] = self._metrics.success_rate
+            
+            # Generate recommendations based on error patterns
+            if self._metrics.success_rate < 80:
+                insights['recommendations'].append({
+                    'type': 'low_success_rate',
+                    'message': f'Overall validation success rate is {self._metrics.success_rate:.1f}%. Consider reviewing validation rules.',
+                    'priority': 'high'
+                })
+            
+            # Check for slow validations
+            if self._metrics.average_execution_time_ms > 50:
+                insights['recommendations'].append({
+                    'type': 'performance',
+                    'message': f'Average validation time is {self._metrics.average_execution_time_ms:.1f}ms. Consider optimizing validation logic.',
+                    'priority': 'medium'
+                })
+            
+            # Identify parameters that need attention
+            for param_name, rate in self._metrics.parameter_failure_rates.items():
+                if rate > 30:  # More than 30% failure rate
+                    insights['recommendations'].append({
+                        'type': 'parameter_issue',
+                        'message': f'Parameter "{param_name}" has {rate:.1f}% failure rate. Review validation rules or user guidance.',
+                        'priority': 'high',
+                        'parameter': param_name
+                    })
+            
+            # Analyze trends over time
+            recent_attempts = list(self._validation_attempts)[-50:]
+            if len(recent_attempts) >= 10:
+                recent_success_rate = sum(1 for a in recent_attempts if a.result.is_valid) / len(recent_attempts) * 100
+                if recent_success_rate < self._metrics.success_rate - 10:
+                    insights['trends']['declining_performance'] = True
+                    insights['recommendations'].append({
+                        'type': 'trend',
+                        'message': 'Recent validation success rate is declining. Monitor for system issues.',
+                        'priority': 'medium'
+                    })
+            
+            # Summary statistics
+            insights['summary'] = {
+                'total_validations': self._metrics.total_attempts,
+                'success_rate': self._metrics.success_rate,
+                'most_common_errors': list(self._metrics.common_errors.keys())[:5],
+                'parameters_monitored': len(self._parameter_stats),
+                'average_response_time_ms': self._metrics.average_execution_time_ms
+            }
+            
+            return insights
+    
+    def export_validation_data(self, filepath: str) -> bool:
+        """
+        Export validation data to a JSON file.
+        
+        Args:
+            filepath: Path to export file
+            
+        Returns:
+            True if export successful, False otherwise
+        """
+        try:
+            with self._lock:
+                export_data = {
+                    'export_timestamp': datetime.now().isoformat(),
+                    'metrics': asdict(self._metrics),
+                    'error_patterns': dict(self._error_patterns),
+                    'parameter_stats': dict(self._parameter_stats),
+                    'insights': self.get_validation_insights(),
+                    'recent_attempts': [
+                        {
+                            'timestamp': attempt.timestamp.isoformat(),
+                            'parameter_name': attempt.parameter_name,
+                            'value': attempt.value,
+                            'validation_type': attempt.validation_type,
+                            'source': attempt.source,
+                            'is_valid': attempt.result.is_valid,
+                            'error_code': attempt.result.error_code,
+                            'error_message': attempt.result.error_message,
+                            'execution_time_ms': attempt.execution_time_ms,
+                            'context': attempt.context
+                        }
+                        for attempt in list(self._validation_attempts)[-500:]  # Last 500 attempts
+                    ]
+                }
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            self.validation_logger.info(f"Validation data exported to {filepath}")
+            return True
+            
+        except Exception as e:
+            self.validation_logger.error(f"Failed to export validation data: {e}")
+            return False
+    
+    def generate_validation_report(self, include_details: bool = True) -> str:
+        """
+        Generate a human-readable validation report.
+        
+        Args:
+            include_details: Whether to include detailed statistics
+            
+        Returns:
+            Formatted validation report as string
+        """
+        with self._lock:
+            report_lines = []
+            report_lines.append("=" * 60)
+            report_lines.append("VALIDATION SERVICE REPORT")
+            report_lines.append("=" * 60)
+            report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            report_lines.append("")
+            
+            # Overall metrics
+            report_lines.append("OVERALL METRICS")
+            report_lines.append("-" * 20)
+            report_lines.append(f"Total Validations: {self._metrics.total_attempts}")
+            report_lines.append(f"Successful: {self._metrics.successful_validations}")
+            report_lines.append(f"Failed: {self._metrics.failed_validations}")
+            report_lines.append(f"Success Rate: {self._metrics.success_rate:.1f}%")
+            report_lines.append(f"Average Response Time: {self._metrics.average_execution_time_ms:.1f}ms")
+            report_lines.append("")
+            
+            # Error summary
+            if self._metrics.common_errors:
+                report_lines.append("MOST COMMON ERRORS")
+                report_lines.append("-" * 20)
+                for error_code, count in sorted(self._metrics.common_errors.items(), 
+                                              key=lambda x: x[1], reverse=True)[:5]:
+                    report_lines.append(f"{error_code}: {count} occurrences")
+                report_lines.append("")
+            
+            # Parameter failure rates
+            if self._metrics.parameter_failure_rates:
+                high_failure_params = {
+                    param: rate for param, rate in self._metrics.parameter_failure_rates.items()
+                    if rate > 10.0
+                }
+                if high_failure_params:
+                    report_lines.append("HIGH FAILURE RATE PARAMETERS")
+                    report_lines.append("-" * 30)
+                    for param, rate in sorted(high_failure_params.items(), 
+                                            key=lambda x: x[1], reverse=True):
+                        report_lines.append(f"{param}: {rate:.1f}% failure rate")
+                    report_lines.append("")
+            
+            # Performance issues
+            performance_issues = self._get_performance_issues()
+            if performance_issues:
+                report_lines.append("PERFORMANCE ISSUES")
+                report_lines.append("-" * 20)
+                for issue in performance_issues:
+                    if issue['type'] == 'slow_validation':
+                        report_lines.append(f"Slow validations detected: {issue['count']} validations > {issue['threshold_ms']}ms")
+                    elif issue['type'] == 'very_slow_validation':
+                        report_lines.append(f"Very slow validations: {issue['count']} validations")
+                        report_lines.append(f"Affected parameters: {', '.join(issue['parameters'])}")
+                report_lines.append("")
+            
+            # Insights and recommendations
+            insights = self.get_validation_insights()
+            if insights['recommendations']:
+                report_lines.append("RECOMMENDATIONS")
+                report_lines.append("-" * 15)
+                for rec in insights['recommendations']:
+                    priority_marker = "­ƒö┤" if rec['priority'] == 'high' else "­ƒƒí" if rec['priority'] == 'medium' else "­ƒƒó"
+                    report_lines.append(f"{priority_marker} {rec['message']}")
+                report_lines.append("")
+            
+            # Debug mode status
+            report_lines.append("SYSTEM STATUS")
+            report_lines.append("-" * 15)
+            report_lines.append(f"Debug Mode: {'Enabled' if self._debug_mode else 'Disabled'}")
+            report_lines.append(f"Validation History Size: {len(self._validation_attempts)}")
+            report_lines.append(f"Error Patterns Tracked: {len(self._error_patterns)}")
+            report_lines.append("")
+            
+            if include_details and self._validation_attempts:
+                report_lines.append("RECENT VALIDATION ATTEMPTS")
+                report_lines.append("-" * 30)
+                recent_attempts = list(self._validation_attempts)[-10:]
+                for attempt in recent_attempts:
+                    status = "Ô£ô" if attempt.result.is_valid else "Ô£ù"
+                    report_lines.append(
+                        f"{status} {attempt.timestamp.strftime('%H:%M:%S')} "
+                        f"{attempt.parameter_name}={attempt.value} "
+                        f"({attempt.source}) {attempt.execution_time_ms:.1f}ms"
+                    )
+                    if not attempt.result.is_valid:
+                        report_lines.append(f"    Error: {attempt.result.error_code} - {attempt.result.error_message}")
+                report_lines.append("")
+            
+            report_lines.append("=" * 60)
+            
+            return "\n".join(report_lines)
+    
+    def log_validation_summary(self) -> None:
+        """Log a summary of validation statistics."""
+        summary = {
+            'total_attempts': self._metrics.total_attempts,
+            'success_rate': self._metrics.success_rate,
+            'avg_execution_time_ms': self._metrics.average_execution_time_ms,
+            'common_errors': dict(list(self._metrics.common_errors.items())[:3]),
+            'debug_mode': self._debug_mode
+        }
+        
+        self.validation_logger.info(f"VALIDATION_SUMMARY: {json.dumps(summary)}")
+    
+    def reset_validation_metrics(self) -> None:
+        """Reset validation metrics while preserving configuration."""
+        with self._lock:
+            old_total = self._metrics.total_attempts
+            self._metrics = ValidationMetrics()
+            self._error_patterns.clear()
+            self._parameter_stats.clear()
+            
+            self.validation_logger.info(f"Validation metrics reset. Previous total attempts: {old_total}")
+    
+    def get_comprehensive_analytics(self) -> Dict[str, Any]:
+        """
+        Get comprehensive validation analytics including error patterns, trends, and correlations.
+        
+        Returns:
+            Dictionary with comprehensive analytics data
+        """
+        with self._lock:
+            analytics = {
+                'timestamp': datetime.now().isoformat(),
+                'basic_metrics': asdict(self._metrics),
+                'time_based_analytics': {
+                    'hourly_stats': dict(self._validation_analytics['hourly_stats']),
+                    'daily_stats': dict(self._validation_analytics['daily_stats']),
+                    'time_patterns': dict(self._validation_analytics['time_based_patterns'])
+                },
+                'error_analytics': {
+                    'error_frequency': dict(self._validation_analytics['error_frequency']),
+                    'error_correlations': dict(self._validation_analytics['correlation_patterns']),
+                    'error_recovery_patterns': dict(self._validation_analytics['error_recovery_patterns'])
+                },
+                'parameter_analytics': {
+                    'parameter_trends': dict(self._validation_analytics['parameter_trends']),
+                    'validation_rules_hit': dict(self._validation_analytics['validation_rules_hit']),
+                    'success_patterns': dict(self._validation_analytics['validation_success_patterns'])
+                },
+                'source_analytics': dict(self._validation_analytics['source_analytics']),
+                'performance_analytics': {
+                    'recent_performance': list(self._validation_analytics['performance_tracking'])[-50:],
+                    'slow_validations': [
+                        p for p in self._validation_analytics['performance_tracking']
+                        if p['execution_time_ms'] > self._performance_thresholds['slow_validation_ms']
+                    ][-20:],
+                    'performance_by_parameter': self._get_performance_by_parameter(),
+                    'performance_by_source': self._get_performance_by_source()
+                },
+                'user_behavior_analytics': {
+                    'user_patterns': dict(self._validation_analytics['user_behavior_patterns']),
+                    'success_rate_trends': self._get_success_rate_trends(),
+                    'common_user_errors': self._get_common_user_errors()
+                },
+                'system_health': {
+                    'debug_mode': self._debug_mode,
+                    'success_rate_monitor': dict(self._success_rate_monitor),
+                    'memory_usage': {
+                        'validation_attempts_count': len(self._validation_attempts),
+                        'error_patterns_count': len(self._error_patterns),
+                        'parameter_stats_count': len(self._parameter_stats)
+                    }
+                }
+            }
+            
+            return analytics
+    
+    def _get_performance_by_parameter(self) -> Dict[str, Dict[str, float]]:
+        """Get performance statistics grouped by parameter."""
+        performance_by_param = defaultdict(list)
+        
+        for perf_data in self._validation_analytics['performance_tracking']:
+            performance_by_param[perf_data['parameter']].append(perf_data['execution_time_ms'])
+        
+        result = {}
+        for param, times in performance_by_param.items():
+            if times:
+                result[param] = {
+                    'avg_time_ms': sum(times) / len(times),
+                    'max_time_ms': max(times),
+                    'min_time_ms': min(times),
+                    'sample_count': len(times)
+                }
+        
+        return result
+    
+    def _get_performance_by_source(self) -> Dict[str, Dict[str, float]]:
+        """Get performance statistics grouped by source."""
+        performance_by_source = defaultdict(list)
+        
+        for perf_data in self._validation_analytics['performance_tracking']:
+            performance_by_source[perf_data['source']].append(perf_data['execution_time_ms'])
+        
+        result = {}
+        for source, times in performance_by_source.items():
+            if times:
+                result[source] = {
+                    'avg_time_ms': sum(times) / len(times),
+                    'max_time_ms': max(times),
+                    'min_time_ms': min(times),
+                    'sample_count': len(times)
+                }
+        
+        return result
+    
+    def _get_success_rate_trends(self) -> Dict[str, float]:
+        """Get success rate trends over different time periods."""
+        if not self._validation_attempts:
+            return {}
+        
+        now = datetime.now()
+        trends = {}
+        
+        # Last hour success rate
+        hour_ago = now - timedelta(hours=1)
+        recent_hour = [a for a in self._validation_attempts if a.timestamp >= hour_ago]
+        if recent_hour:
+            hour_successes = sum(1 for a in recent_hour if a.result.is_valid)
+            trends['last_hour'] = (hour_successes / len(recent_hour)) * 100
+        
+        # Last day success rate
+        day_ago = now - timedelta(days=1)
+        recent_day = [a for a in self._validation_attempts if a.timestamp >= day_ago]
+        if recent_day:
+            day_successes = sum(1 for a in recent_day if a.result.is_valid)
+            trends['last_day'] = (day_successes / len(recent_day)) * 100
+        
+        # Last week success rate
+        week_ago = now - timedelta(weeks=1)
+        recent_week = [a for a in self._validation_attempts if a.timestamp >= week_ago]
+        if recent_week:
+            week_successes = sum(1 for a in recent_week if a.result.is_valid)
+            trends['last_week'] = (week_successes / len(recent_week)) * 100
+        
+        return trends
+    
+    def _get_common_user_errors(self) -> List[Dict[str, Any]]:
+        """Get most common user errors with context."""
+        error_details = defaultdict(lambda: {'count': 0, 'parameters': set(), 'sources': set()})
+        
+        for attempt in self._validation_attempts:
+            if not attempt.result.is_valid:
+                error_code = attempt.result.error_code
+                error_details[error_code]['count'] += 1
+                error_details[error_code]['parameters'].add(attempt.parameter_name)
+                error_details[error_code]['sources'].add(attempt.source)
+        
+        # Convert to list and sort by frequency
+        common_errors = []
+        for error_code, details in error_details.items():
+            common_errors.append({
+                'error_code': error_code,
+                'count': details['count'],
+                'affected_parameters': list(details['parameters']),
+                'sources': list(details['sources'])
+            })
+        
+        return sorted(common_errors, key=lambda x: x['count'], reverse=True)[:10]
+    
+    def get_debug_information(self, parameter_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get detailed debug information for troubleshooting validation issues.
+        
+        Args:
+            parameter_name: Optional parameter name to focus debug info on
+            
+        Returns:
+            Dictionary with debug information
+        """
+        with self._lock:
+            debug_info = {
+                'timestamp': datetime.now().isoformat(),
+                'debug_mode': self._debug_mode,
+                'debug_config': dict(self._debug_config),
+                'system_status': {
+                    'total_validation_attempts': len(self._validation_attempts),
+                    'error_patterns_tracked': len(self._error_patterns),
+                    'parameters_monitored': len(self._parameter_stats),
+                    'analytics_data_points': sum(len(trends) for trends in self._validation_analytics['parameter_trends'].values())
+                }
+            }
+            
+            if parameter_name:
+                # Focused debug info for specific parameter
+                debug_info['parameter_focus'] = {
+                    'parameter_name': parameter_name,
+                    'validation_rules': self.validation_rules.get(parameter_name, {}),
+                    'recent_attempts': [
+                        {
+                            'timestamp': a.timestamp.isoformat(),
+                            'value': a.value,
+                            'is_valid': a.result.is_valid,
+                            'error_code': a.result.error_code,
+                            'execution_time_ms': a.execution_time_ms,
+                            'source': a.source
+                        }
+                        for a in self._validation_attempts
+                        if a.parameter_name == parameter_name
+                    ][-10:],  # Last 10 attempts
+                    'error_patterns': {
+                        pattern: count for pattern, count in self._error_patterns.items()
+                        if pattern.startswith(f"{parameter_name}:")
+                    },
+                    'trends': self._validation_analytics['parameter_trends'].get(parameter_name, []),
+                    'success_patterns': self._validation_analytics['validation_success_patterns'].get(parameter_name, [])
+                }
+            else:
+                # General debug info
+                debug_info['recent_errors'] = [
+                    {
+                        'timestamp': a.timestamp.isoformat(),
+                        'parameter': a.parameter_name,
+                        'error_code': a.result.error_code,
+                        'error_message': a.result.error_message,
+                        'source': a.source,
+                        'execution_time_ms': a.execution_time_ms
+                    }
+                    for a in self._validation_attempts
+                    if not a.result.is_valid
+                ][-20:]  # Last 20 errors
+                
+                debug_info['performance_issues'] = self._get_performance_issues()
+                debug_info['correlation_analysis'] = dict(self._validation_analytics['correlation_patterns'])
+            
+            return debug_info
+    
+    def log_analytics_summary(self) -> None:
+        """Log a comprehensive analytics summary."""
+        analytics = self.get_comprehensive_analytics()
+        
+        summary = {
+            'total_attempts': analytics['basic_metrics']['total_attempts'],
+            'success_rate': analytics['basic_metrics']['success_rate'],
+            'avg_execution_time_ms': analytics['basic_metrics']['average_execution_time_ms'],
+            'top_errors': list(analytics['error_analytics']['error_frequency'].items())[:5],
+            'problematic_parameters': [
+                param for param, rate in analytics['basic_metrics']['parameter_failure_rates'].items()
+                if rate > 20.0
+            ],
+            'performance_issues_count': len(analytics['performance_analytics']['slow_validations']),
+            'debug_mode': analytics['system_health']['debug_mode']
+        }
+        
+        self.analytics_logger.info(f"ANALYTICS_SUMMARY: {json.dumps(summary)}")
+    
+    def enable_advanced_debugging(self, config: Optional[Dict[str, bool]] = None) -> None:
+        """
+        Enable advanced debugging with custom configuration.
+        
+        Args:
+            config: Optional debug configuration overrides
+        """
+        self._debug_mode = True
+        self.validation_logger.setLevel(logging.DEBUG)
+        self.validation_logger.addHandler(self.debug_file_handler)
+        
+        if config:
+            self._debug_config.update(config)
+        
+        debug_status = {
+            'debug_mode': True,
+            'config': dict(self._debug_config),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        self.validation_logger.info(f"ADVANCED_DEBUG_ENABLED: {json.dumps(debug_status)}")
+    
+    def get_validation_failure_analysis(self, hours: int = 24) -> Dict[str, Any]:
+        """
+        Analyze validation failures over a specified time period.
+        
+        Args:
+            hours: Number of hours to analyze (default: 24)
+            
+        Returns:
+            Dictionary with failure analysis
+        """
+        with self._lock:
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            recent_attempts = [a for a in self._validation_attempts if a.timestamp >= cutoff_time]
+            failed_attempts = [a for a in recent_attempts if not a.result.is_valid]
+            
+            if not recent_attempts:
+                return {'message': 'No validation attempts in the specified time period'}
+            
+            analysis = {
+                'time_period_hours': hours,
+                'total_attempts': len(recent_attempts),
+                'failed_attempts': len(failed_attempts),
+                'failure_rate': (len(failed_attempts) / len(recent_attempts)) * 100,
+                'failure_breakdown': {
+                    'by_parameter': defaultdict(int),
+                    'by_error_code': defaultdict(int),
+                    'by_source': defaultdict(int),
+                    'by_hour': defaultdict(int)
+                },
+                'patterns': {
+                    'consecutive_failures': [],
+                    'parameter_correlations': defaultdict(list),
+                    'time_correlations': defaultdict(list)
+                },
+                'recommendations': []
+            }
+            
+            # Analyze failure breakdown
+            for attempt in failed_attempts:
+                analysis['failure_breakdown']['by_parameter'][attempt.parameter_name] += 1
+                analysis['failure_breakdown']['by_error_code'][attempt.result.error_code] += 1
+                analysis['failure_breakdown']['by_source'][attempt.source] += 1
+                analysis['failure_breakdown']['by_hour'][attempt.timestamp.strftime('%H')] += 1
+            
+            # Find consecutive failures
+            consecutive_count = 0
+            for attempt in recent_attempts:
+                if not attempt.result.is_valid:
+                    consecutive_count += 1
+                else:
+                    if consecutive_count >= 3:  # 3 or more consecutive failures
+                        analysis['patterns']['consecutive_failures'].append({
+                            'count': consecutive_count,
+                            'ended_at': attempt.timestamp.isoformat()
+                        })
+                    consecutive_count = 0
+            
+            # Generate recommendations
+            if analysis['failure_rate'] > 30:
+                analysis['recommendations'].append({
+                    'type': 'high_failure_rate',
+                    'message': f"High failure rate ({analysis['failure_rate']:.1f}%) detected. Review validation rules and user guidance.",
+                    'priority': 'high'
+                })
+            
+            # Check for parameter-specific issues
+            for param, count in analysis['failure_breakdown']['by_parameter'].items():
+                if count > len(failed_attempts) * 0.3:  # Parameter accounts for >30% of failures
+                    analysis['recommendations'].append({
+                        'type': 'parameter_issue',
+                        'message': f"Parameter '{param}' has high failure rate. Consider reviewing validation rules or improving user guidance.",
+                        'priority': 'medium',
+                        'parameter': param
+                    })
+            
+            return analysis
+    
+    def _init_performance_optimizations(self):
+        """Initialize performance optimization components."""
+        # Initialize compiled regex patterns cache
+        self._compiled_patterns = {}
+        self._pattern_performance = defaultdict(list)
+        
+        # Initialize validation result cache
+        self._validation_cache = {}
+        self._cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'evictions': 0,
+            'size': 0
+        }
+        
+        # Initialize async validation components
+        self._async_validation_queue = asyncio.Queue() if self._perf_config.async_enabled else None
+        self._async_results = {}
+        
+        # Initialize performance monitoring
+        self._performance_monitor = {
+            'slow_validations': deque(maxlen=100),
+            'timeout_validations': deque(maxlen=50),
+            'cache_performance': deque(maxlen=1000),
+            'async_performance': deque(maxlen=1000)
+        }
+        
+        # Pre-compile commonly used regex patterns
+        self._precompile_regex_patterns()
+        
+        self.logger.info("Performance optimizations initialized")
+    
+    def _precompile_regex_patterns(self):
+        """Pre-compile commonly used regex patterns for better performance."""
+        patterns_to_compile = {
+            'apn_domain': self.apn_domain_pattern,
+            'apn_ip': self.apn_ip_pattern,
+            'apn_url': self.apn_url_pattern,
+            'apn_simple': self.apn_simple_pattern,
+            'apn_credential': self.apn_credential_pattern,
+            'ip_address': r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$',
+            'domain': r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$',
+            'phone': r'^[\d\s\-\(\)\+]+$',
+            'imei': r'^\d{15}$',
+            'iccid': r'^\d{19,20}$',
+            'imsi': r'^\d{15}$'
+        }
+        
+        with self._pattern_lock:
+            for pattern_name, pattern in patterns_to_compile.items():
+                try:
+                    start_time = time.time()
+                    compiled_pattern = re.compile(pattern)
+                    compile_time = (time.time() - start_time) * 1000
+                    
+                    self._compiled_patterns[pattern_name] = compiled_pattern
+                    self._pattern_performance[pattern_name].append({
+                        'compile_time_ms': compile_time,
+                        'timestamp': datetime.now()
+                    })
+                    
+                except re.error as e:
+                    self.logger.warning(f"Failed to compile pattern '{pattern_name}': {e}")
+    
+    def _get_compiled_pattern(self, pattern_name: str) -> Optional[re.Pattern]:
+        """Get a pre-compiled regex pattern."""
+        with self._pattern_lock:
+            return self._compiled_patterns.get(pattern_name)
+    
+    def _generate_cache_key(self, param_name: str, value: Any, context: Optional[Dict[str, Any]] = None) -> str:
+        """Generate a cache key for validation results."""
+        # Create a deterministic hash of the validation inputs
+        cache_data = {
+            'param': param_name,
+            'value': str(value),
+            'context': context or {}
+        }
+        
+        # Sort context keys for consistent hashing
+        if context:
+            cache_data['context'] = {k: v for k, v in sorted(context.items())}
+        
+        cache_string = json.dumps(cache_data, sort_keys=True)
+        return hashlib.md5(cache_string.encode()).hexdigest()
+    
+    def _get_cached_validation_result(self, cache_key: str) -> Optional[ValidationResult]:
+        """Get a cached validation result if available and not expired."""
+        if not self._perf_config.cache_enabled:
+            return None
+        
+        with self._cache_lock:
+            cache_entry = self._validation_cache.get(cache_key)
+            if not cache_entry:
+                self._cache_stats['misses'] += 1
+                self._performance_dashboard['cache_stats']['misses'] += 1
+                return None
+            
+            # Check if cache entry is expired
+            age_seconds = (datetime.now() - cache_entry.timestamp).total_seconds()
+            if age_seconds > self._perf_config.cache_ttl_seconds:
+                # Remove expired entry
+                del self._validation_cache[cache_key]
+                self._cache_stats['evictions'] += 1
+                self._cache_stats['misses'] += 1
+                self._performance_dashboard['cache_stats']['evictions'] += 1
+                return None
+            
+            # Update access statistics
+            cache_entry.access_count += 1
+            cache_entry.last_accessed = datetime.now()
+            
+            self._cache_stats['hits'] += 1
+            self._performance_dashboard['cache_stats']['hits'] += 1
+            
+            # Record cache performance
+            self._performance_monitor['cache_performance'].append({
+                'timestamp': datetime.now(),
+                'cache_key': cache_key[:8],  # First 8 chars for debugging
+                'age_seconds': age_seconds,
+                'access_count': cache_entry.access_count
+            })
+            
+            return cache_entry.result
+    
+    def _cache_validation_result(self, cache_key: str, result: ValidationResult) -> None:
+        """Cache a validation result."""
+        if not self._perf_config.cache_enabled:
+            return
+        
+        with self._cache_lock:
+            # Check cache size limit
+            if len(self._validation_cache) >= self._perf_config.cache_max_size:
+                # Remove oldest entries (LRU eviction)
+                self._evict_old_cache_entries()
+            
+            # Store the result
+            self._validation_cache[cache_key] = ValidationCacheEntry(
+                result=result,
+                timestamp=datetime.now(),
+                access_count=1,
+                last_accessed=datetime.now()
+            )
+            
+            self._cache_stats['size'] = len(self._validation_cache)
+    
+    def _evict_old_cache_entries(self) -> None:
+        """Evict old cache entries using LRU strategy."""
+        if not self._validation_cache:
+            return
+        
+        # Sort by last accessed time and remove oldest 25%
+        entries_by_access = sorted(
+            self._validation_cache.items(),
+            key=lambda x: x[1].last_accessed
+        )
+        
+        entries_to_remove = len(entries_by_access) // 4  # Remove 25%
+        if entries_to_remove == 0:
+            entries_to_remove = 1  # Remove at least one
+        
+        for i in range(entries_to_remove):
+            cache_key, _ = entries_by_access[i]
+            del self._validation_cache[cache_key]
+            self._cache_stats['evictions'] += 1
+            self._performance_dashboard['cache_stats']['evictions'] += 1
+    
+    async def validate_parameter_async(self, param_name: str, value: Any, 
+                                     context: Optional[Dict[str, Any]] = None,
+                                     source: str = 'async') -> ValidationResult:
+        """
+        Asynchronously validate a parameter value.
+        
+        Args:
+            param_name: Name of the parameter to validate
+            value: Value to validate
+            context: Optional context with other parameter values
+            source: Source of the validation request
+            
+        Returns:
+            ValidationResult with validation status
+        """
+        if not self._perf_config.async_enabled:
+            # Fall back to synchronous validation
+            return self.validate_parameter(param_name, value, context, source)
+        
+        start_time = datetime.now()
+        
+        try:
+            # Check cache first
+            cache_key = self._generate_cache_key(param_name, value, context)
+            cached_result = self._get_cached_validation_result(cache_key)
+            if cached_result:
+                return cached_result
+            
+            # Run validation in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                self._executor,
+                self.validate_parameter,
+                param_name, value, context, source
+            )
+            
+            # Cache the result
+            self._cache_validation_result(cache_key, result)
+            
+            # Update async statistics
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            self._metrics.async_validations += 1
+            self._performance_dashboard['async_stats']['completed'] += 1
+            
+            self._performance_monitor['async_performance'].append({
+                'timestamp': datetime.now(),
+                'parameter': param_name,
+                'execution_time_ms': execution_time,
+                'cached': False
+            })
+            
+            return result
+            
+        except asyncio.TimeoutError:
+            self._metrics.timeout_validations += 1
+            self._performance_dashboard['timeout_stats']['timeouts'] += 1
+            
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Validation timeout for {param_name}",
+                error_code='VALIDATION_TIMEOUT'
+            )
+        except Exception as e:
+            self.logger.error(f"Async validation error for {param_name}: {e}")
+            self._performance_dashboard['async_stats']['errors'] += 1
+            
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Validation error: {str(e)}",
+                error_code='VALIDATION_ERROR'
+            )
+    
+    def validate_parameter_with_timeout(self, param_name: str, value: Any,
+                                      context: Optional[Dict[str, Any]] = None,
+                                      source: str = 'timeout',
+                                      timeout_seconds: Optional[float] = None) -> ValidationResult:
+        """
+        Validate a parameter with a configurable timeout.
+        
+        Args:
+            param_name: Name of the parameter to validate
+            value: Value to validate
+            context: Optional context with other parameter values
+            source: Source of the validation request
+            timeout_seconds: Timeout in seconds (uses config default if None)
+            
+        Returns:
+            ValidationResult with validation status
+        """
+        timeout = timeout_seconds or self._perf_config.timeout_seconds
+        start_time = datetime.now()
+        
+        try:
+            # Check cache first
+            cache_key = self._generate_cache_key(param_name, value, context)
+            cached_result = self._get_cached_validation_result(cache_key)
+            if cached_result:
+                return cached_result
+            
+            # Run validation with timeout
+            future = self._executor.submit(
+                self.validate_parameter,
+                param_name, value, context, source
+            )
+            
+            result = future.result(timeout=timeout)
+            
+            # Cache the result
+            self._cache_validation_result(cache_key, result)
+            
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            # Monitor for slow validations
+            if execution_time > self._performance_thresholds['slow_validation_ms']:
+                self._performance_monitor['slow_validations'].append({
+                    'timestamp': datetime.now(),
+                    'parameter': param_name,
+                    'execution_time_ms': execution_time,
+                    'value_length': len(str(value)) if value else 0
+                })
+            
+            return result
+            
+        except FutureTimeoutError:
+            self._metrics.timeout_validations += 1
+            self._performance_dashboard['timeout_stats']['timeouts'] += 1
+            
+            self._performance_monitor['timeout_validations'].append({
+                'timestamp': datetime.now(),
+                'parameter': param_name,
+                'timeout_seconds': timeout,
+                'value_length': len(str(value)) if value else 0
+            })
+            
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Validation timeout ({timeout}s) for {param_name}",
+                error_code='VALIDATION_TIMEOUT'
+            )
+        except Exception as e:
+            self.logger.error(f"Timeout validation error for {param_name}: {e}")
+            
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Validation error: {str(e)}",
+                error_code='VALIDATION_ERROR'
+            )
+    
+    def validate_parameters_batch(self, parameters: Dict[str, Any],
+                                context: Optional[Dict[str, Any]] = None,
+                                source: str = 'batch') -> Dict[str, ValidationResult]:
+        """
+        Validate multiple parameters in batch with performance optimizations.
+        
+        Args:
+            parameters: Dictionary of parameter names and values
+            context: Optional context with additional parameter values
+            source: Source of the validation request
+            
+        Returns:
+            Dictionary of parameter names and their validation results
+        """
+        if not self._perf_config.batch_validation:
+            # Fall back to individual validation
+            return self.validate_parameter_group(parameters)
+        
+        start_time = datetime.now()
+        results = {}
+        cache_hits = 0
+        
+        # Merge parameters with context for comprehensive validation
+        full_context = {**(context or {}), **parameters}
+        
+        # Check cache for all parameters first
+        cached_results = {}
+        uncached_params = {}
+        
+        for param_name, value in parameters.items():
+            cache_key = self._generate_cache_key(param_name, value, full_context)
+            cached_result = self._get_cached_validation_result(cache_key)
+            
+            if cached_result:
+                cached_results[param_name] = cached_result
+                cache_hits += 1
+            else:
+                uncached_params[param_name] = value
+        
+        # Validate uncached parameters
+        if uncached_params:
+            if len(uncached_params) > 1 and self._perf_config.async_enabled:
+                # Use thread pool for parallel validation
+                with ThreadPoolExecutor(max_workers=min(4, len(uncached_params))) as executor:
+                    future_to_param = {
+                        executor.submit(self.validate_parameter, param_name, value, full_context, source): param_name
+                        for param_name, value in uncached_params.items()
+                    }
+                    
+                    for future in future_to_param:
+                        param_name = future_to_param[future]
+                        try:
+                            result = future.result(timeout=self._perf_config.timeout_seconds)
+                            results[param_name] = result
+                            
+                            # Cache the result
+                            cache_key = self._generate_cache_key(param_name, uncached_params[param_name], full_context)
+                            self._cache_validation_result(cache_key, result)
+                            
+                        except FutureTimeoutError:
+                            results[param_name] = ValidationResult(
+                                is_valid=False,
+                                error_message=f"Batch validation timeout for {param_name}",
+                                error_code='BATCH_VALIDATION_TIMEOUT'
+                            )
+                        except Exception as e:
+                            results[param_name] = ValidationResult(
+                                is_valid=False,
+                                error_message=f"Batch validation error: {str(e)}",
+                                error_code='BATCH_VALIDATION_ERROR'
+                            )
+            else:
+                # Sequential validation for small batches
+                for param_name, value in uncached_params.items():
+                    result = self.validate_parameter(param_name, value, full_context, source)
+                    results[param_name] = result
+                    
+                    # Cache the result
+                    cache_key = self._generate_cache_key(param_name, value, full_context)
+                    self._cache_validation_result(cache_key, result)
+        
+        # Combine cached and new results
+        results.update(cached_results)
+        
+        # Update performance metrics
+        execution_time = (datetime.now() - start_time).total_seconds() * 1000
+        batch_size = len(parameters)
+        
+        self._performance_dashboard['cache_stats']['batch_cache_hits'] += cache_hits
+        self._performance_dashboard['async_stats']['batch_validations'] += 1
+        
+        self.logger.debug(f"Batch validation completed: {batch_size} parameters, "
+                         f"{cache_hits} cache hits, {execution_time:.1f}ms")
+        
+        return results
+    
+    def get_performance_dashboard_data(self) -> Dict[str, Any]:
+        """
+        Get comprehensive performance dashboard data.
+        
+        Returns:
+            Dictionary with performance metrics and monitoring data
+        """
+        with self._cache_lock:
+            # Calculate cache hit rate
+            total_cache_requests = self._cache_stats['hits'] + self._cache_stats['misses']
+            cache_hit_rate = (self._cache_stats['hits'] / total_cache_requests * 100) if total_cache_requests > 0 else 0
+            
+            # Get recent performance data
+            recent_slow_validations = list(self._performance_monitor['slow_validations'])[-20:]
+            recent_timeouts = list(self._performance_monitor['timeout_validations'])[-10:]
+            recent_cache_performance = list(self._performance_monitor['cache_performance'])[-50:]
+            recent_async_performance = list(self._performance_monitor['async_performance'])[-50:]
+            
+            dashboard_data = {
+                'timestamp': datetime.now().isoformat(),
+                'cache_performance': {
+                    'enabled': self._perf_config.cache_enabled,
+                    'hit_rate_percent': cache_hit_rate,
+                    'total_hits': self._cache_stats['hits'],
+                    'total_misses': self._cache_stats['misses'],
+                    'total_evictions': self._cache_stats['evictions'],
+                    'current_size': self._cache_stats['size'],
+                    'max_size': self._perf_config.cache_max_size,
+                    'ttl_seconds': self._perf_config.cache_ttl_seconds,
+                    'recent_performance': recent_cache_performance
+                },
+                'async_performance': {
+                    'enabled': self._perf_config.async_enabled,
+                    'total_async_validations': self._metrics.async_validations,
+                    'threshold_ms': self._perf_config.async_threshold_ms,
+                    'recent_performance': recent_async_performance,
+                    'queue_size': self._async_validation_queue.qsize() if self._async_validation_queue else 0
+                },
+                'timeout_performance': {
+                    'timeout_seconds': self._perf_config.timeout_seconds,
+                    'total_timeouts': self._metrics.timeout_validations,
+                    'recent_timeouts': recent_timeouts
+                },
+                'regex_performance': {
+                    'optimization_enabled': self._perf_config.regex_optimization,
+                    'compiled_patterns_count': len(self._compiled_patterns),
+                    'pattern_performance': dict(self._pattern_performance)
+                },
+                'slow_validation_monitoring': {
+                    'threshold_ms': self._performance_thresholds['slow_validation_ms'],
+                    'very_slow_threshold_ms': self._performance_thresholds['very_slow_validation_ms'],
+                    'recent_slow_validations': recent_slow_validations,
+                    'slow_validation_count': len(self._performance_monitor['slow_validations'])
+                },
+                'batch_performance': {
+                    'enabled': self._perf_config.batch_validation,
+                    'stats': dict(self._performance_dashboard['async_stats'])
+                },
+                'overall_metrics': {
+                    'total_validations': self._metrics.total_attempts,
+                    'success_rate': self._metrics.success_rate,
+                    'average_execution_time_ms': self._metrics.average_execution_time_ms,
+                    'cache_hit_rate': cache_hit_rate
+                }
+            }
+            
+            return dashboard_data
+    
+    def optimize_regex_patterns(self) -> Dict[str, Any]:
+        """
+        Optimize regex patterns based on usage patterns and performance data.
+        
+        Returns:
+            Dictionary with optimization results
+        """
+        if not self._perf_config.regex_optimization:
+            return {'message': 'Regex optimization is disabled'}
+        
+        optimization_results = {
+            'timestamp': datetime.now().isoformat(),
+            'patterns_analyzed': 0,
+            'patterns_optimized': 0,
+            'performance_improvements': {},
+            'recommendations': []
+        }
+        
+        with self._pattern_lock:
+            for pattern_name, performance_data in self._pattern_performance.items():
+                optimization_results['patterns_analyzed'] += 1
+                
+                if not performance_data:
+                    continue
+                
+                # Analyze pattern performance
+                compile_times = [p['compile_time_ms'] for p in performance_data]
+                avg_compile_time = sum(compile_times) / len(compile_times)
+                
+                # Check if pattern needs optimization
+                if avg_compile_time > 10:  # More than 10ms average compile time
+                    optimization_results['recommendations'].append({
+                        'pattern': pattern_name,
+                        'issue': 'slow_compilation',
+                        'avg_compile_time_ms': avg_compile_time,
+                        'suggestion': 'Consider simplifying the regex pattern or using alternative validation methods'
+                    })
+                
+                # Record performance data
+                optimization_results['performance_improvements'][pattern_name] = {
+                    'compile_time_ms': avg_compile_time,
+                    'usage_count': len(performance_data),
+                    'last_used': performance_data[-1]['timestamp'].isoformat() if performance_data else None
+                }
+        
+        return optimization_results
+    
+    def clear_performance_cache(self) -> Dict[str, int]:
+        """
+        Clear the performance cache and return statistics.
+        
+        Returns:
+            Dictionary with cache clearing statistics
+        """
+        with self._cache_lock:
+            stats_before = {
+                'cache_size': len(self._validation_cache),
+                'cache_hits': self._cache_stats['hits'],
+                'cache_misses': self._cache_stats['misses'],
+                'cache_evictions': self._cache_stats['evictions']
+            }
+            
+            # Clear cache
+            self._validation_cache.clear()
+            
+            # Reset cache statistics
+            self._cache_stats = {
+                'hits': 0,
+                'misses': 0,
+                'evictions': 0,
+                'size': 0
+            }
+            
+            # Clear performance monitoring data
+            self._performance_monitor['cache_performance'].clear()
+            
+            self.logger.info("Performance cache cleared")
+            
+            return {
+                'cleared_entries': stats_before['cache_size'],
+                'previous_hits': stats_before['cache_hits'],
+                'previous_misses': stats_before['cache_misses'],
+                'previous_evictions': stats_before['cache_evictions']
+            }
+    
+    def configure_performance_settings(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update performance configuration settings.
+        
+        Args:
+            config: Dictionary with performance configuration updates
+            
+        Returns:
+            Dictionary with updated configuration
+        """
+        old_config = asdict(self._perf_config)
+        
+        # Update configuration
+        for key, value in config.items():
+            if hasattr(self._perf_config, key):
+                setattr(self._perf_config, key, value)
+            else:
+                self.logger.warning(f"Unknown performance config key: {key}")
+        
+        # Apply configuration changes
+        if 'cache_enabled' in config and not config['cache_enabled']:
+            self.clear_performance_cache()
+        
+        if 'regex_optimization' in config and config['regex_optimization']:
+            self._precompile_regex_patterns()
+        
+        new_config = asdict(self._perf_config)
+        
+        self.logger.info(f"Performance configuration updated: {config}")
+        
+        return {
+            'old_config': old_config,
+            'new_config': new_config,
+            'changes_applied': list(config.keys())
+        }    
+  
+  # Security-specific methods
+    def create_validation_bypass_token(self, security_context: SecurityContext, 
+                                     operation: str, duration_minutes: int = 60) -> Optional[str]:
+        """
+        Create secure validation bypass token with proper authorization
+        
+        Args:
+            security_context: Security context requesting the bypass
+            operation: Operation that needs bypass
+            duration_minutes: How long the bypass token is valid
+            
+        Returns:
+            Bypass token string or None if not authorized
+        """
+        if not self._security_enabled:
+            return None
+        
+        return self.security_service.create_bypass_token(security_context, operation, duration_minutes)
+    
+    def validate_with_bypass(self, param_name: str, value: Any, bypass_token: str,
+                           context: Optional[Dict[str, Any]] = None, 
+                           source: str = 'bypass', 
+                           security_context: Optional[SecurityContext] = None) -> ValidationResult:
+        """
+        Validate parameter with bypass token for emergency/admin use
+        
+        Args:
+            param_name: Name of the parameter to validate
+            value: Value to validate
+            bypass_token: Bypass token for validation override
+            context: Optional context with other parameter values
+            source: Source of the validation request
+            security_context: Security context for audit logging
+            
+        Returns:
+            ValidationResult with validation status
+        """
+        if not self._security_enabled:
+            return self.validate_parameter(param_name, value, context, source)
+        
+        if security_context is None:
+            security_context = SecurityContext(
+                user_id="bypass_user",
+                session_id="bypass",
+                ip_address="127.0.0.1",
+                user_agent="BypassValidation",
+                timestamp=datetime.now(),
+                security_level=SecurityLevel.CRITICAL,
+                permissions=["validation_bypass"]
+            )
+        
+        # Validate bypass token
+        token_valid, token_error = self.security_service.validate_bypass_token(
+            bypass_token, f"validate_{param_name}", security_context
+        )
+        
+        if not token_valid:
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Bypass validation failed: {token_error}",
+                error_code='BYPASS_INVALID'
+            )
+        
+        # Perform validation with bypass (skip some security checks)
+        original_security_enabled = self._security_enabled
+        try:
+            # Temporarily disable some security checks for bypass
+            self._security_enabled = False
+            result = self.validate_parameter(param_name, value, context, source, security_context)
+            
+            # Log bypass usage
+            self.security_service.audit_log(
+                AuditAction.VALIDATION_BYPASS,
+                security_context,
+                "parameter_validation",
+                param_name,
+                {
+                    "bypass_used": True,
+                    "original_validation_result": result.is_valid,
+                    "bypass_reason": "admin_override"
+                },
+                True,
+                f"Validation bypass used for parameter {param_name}"
+            )
+            
+            return result
+            
+        finally:
+            self._security_enabled = original_security_enabled
+    
+    def get_security_metrics(self) -> Dict[str, Any]:
+        """
+        Get security metrics for monitoring
+        
+        Returns:
+            Dictionary with security metrics
+        """
+        if not self._security_enabled:
+            return {"security_enabled": False}
+        
+        security_metrics = self.security_service.get_security_metrics()
+        validation_metrics = self.get_validation_metrics()
+        
+        return {
+            "security_enabled": True,
+            "security_metrics": security_metrics,
+            "validation_metrics": {
+                "total_attempts": validation_metrics.total_attempts,
+                "success_rate": validation_metrics.success_rate,
+                "cache_hit_rate": validation_metrics.cache_hit_rate
+            },
+            "integration_status": "active"
+        }
+    
+    def enable_security(self, enable: bool = True):
+        """
+        Enable or disable security features
+        
+        Args:
+            enable: Whether to enable security features
+        """
+        self._security_enabled = enable
+        self.logger.info(f"Security features {'enabled' if enable else 'disabled'}")
+    
+    def sanitize_input_for_logging(self, param_name: str, value: Any) -> str:
+        """
+        Sanitize input value for safe logging
+        
+        Args:
+            param_name: Parameter name
+            value: Parameter value
+            
+        Returns:
+            Sanitized string safe for logging
+        """
+        if not self._security_enabled:
+            return str(value)[:100]  # Simple truncation
+        
+        # Use security service for proper sanitization
+        if isinstance(value, str):
+            field_type = 'password' if 'password' in param_name.lower() else 'apn'
+            sanitized, _ = self.security_service.sanitize_apn_input(value, field_type)
+            
+            # Further mask sensitive data for logging
+            if 'password' in param_name.lower():
+                return "***" if sanitized else ""
+            elif len(sanitized) > 50:
+                return sanitized[:47] + "..."
+            else:
+                return sanitized
+        
+        return str(value)[:100]
+</document_content>
+</document>
+<document index="88">
+<source>.\services\widget_error_handling_service.py</source>
+<document_content>
+"""
+Widget Error Handling Service
+
+Centralized service for handling widget access errors, logging failures,
+and managing fallback strategies across the application.
+"""
+
+import logging
+import traceback
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Callable
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class ErrorSeverity(Enum):
+    """Error severity levels"""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+@dataclass
+class WidgetErrorReport:
+    """Comprehensive widget error report"""
+    timestamp: datetime
+    context: str
+    widget_type: str
+    error_message: str
+    exception_type: str
+    severity: ErrorSeverity
+    fallback_used: bool
+    fallback_description: str
+    widget_id: Optional[int] = None
+    stack_trace: Optional[str] = None
+    recovery_suggestions: List[str] = field(default_factory=list)
+    user_impact: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert error report to dictionary for logging"""
+        return {
+            'timestamp': self.timestamp.isoformat(),
+            'context': self.context,
+            'widget_type': self.widget_type,
+            'error_message': self.error_message,
+            'exception_type': self.exception_type,
+            'severity': self.severity.value,
+            'fallback_used': self.fallback_used,
+            'fallback_description': self.fallback_description,
+            'widget_id': self.widget_id,
+            'stack_trace': self.stack_trace,
+            'recovery_suggestions': self.recovery_suggestions,
+            'user_impact': self.user_impact
+        }
+
+
+class WidgetErrorHandlingService:
+    """
+    Centralized service for handling widget access errors and managing
+    application stability when UI enhancements fail.
+    """
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.error_reports: List[WidgetErrorReport] = []
+        self.error_counts: Dict[str, int] = {}
+        self.fallback_strategies: Dict[str, Callable] = {}
+        self.max_error_reports = 1000  # Limit memory usage
+        
+        # Configure logging
+        self._setup_logging()
+    
+    def _setup_logging(self):
+        """Set up comprehensive logging for widget errors"""
+        # Create formatter for detailed error logs
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # Create file handler for widget errors
+        try:
+            file_handler = logging.FileHandler('logs/widget_errors.log')
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(logging.WARNING)
+            self.logger.addHandler(file_handler)
+        except Exception:
+            # If we can't create log file, continue without file logging
+            pass
+        
+        # Ensure console logging is available
+        if not self.logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
+        
+        self.logger.setLevel(logging.DEBUG)
+    
+    def report_widget_error(self, widget: Any, context: str, exception: Exception = None,
+                           severity: ErrorSeverity = ErrorSeverity.ERROR,
+                           fallback_used: bool = False, fallback_description: str = "",
+                           user_impact: str = "", recovery_suggestions: List[str] = None) -> WidgetErrorReport:
+        """
+        Report a widget access error with comprehensive details.
+        
+        Args:
+            widget: The widget that caused the error
+            context: Context where the error occurred
+            exception: The exception that occurred
+            severity: Severity level of the error
+            fallback_used: Whether a fallback strategy was used
+            fallback_description: Description of fallback strategy
+            user_impact: Description of impact on user experience
+            recovery_suggestions: List of suggestions for recovery
+            
+        Returns:
+            WidgetErrorReport with complete error details
+        """
+        if recovery_suggestions is None:
+            recovery_suggestions = []
+        
+        # Create error report
+        error_report = WidgetErrorReport(
+            timestamp=datetime.now(),
+            context=context,
+            widget_type=type(widget).__name__ if widget else "Unknown",
+            error_message=str(exception) if exception else "Unknown error",
+            exception_type=type(exception).__name__ if exception else "Unknown",
+            severity=severity,
+            fallback_used=fallback_used,
+            fallback_description=fallback_description,
+            widget_id=id(widget) if widget else None,
+            stack_trace=self._get_stack_trace(exception),
+            recovery_suggestions=recovery_suggestions,
+            user_impact=user_impact
+        )
+        
+        # Store error report
+        self._store_error_report(error_report)
+        
+        # Log error based on severity
+        self._log_error_report(error_report)
+        
+        # Update error counts
+        self._update_error_counts(context)
+        
+        # Check if we need to take action based on error frequency
+        self._check_error_frequency(context)
+        
+        return error_report
+    
+    def _get_stack_trace(self, exception: Exception) -> Optional[str]:
+        """Get formatted stack trace from exception"""
+        if exception and hasattr(exception, '__traceback__'):
+            try:
+                return ''.join(traceback.format_tb(exception.__traceback__))
+            except Exception:
+                return None
+        return None
+    
+    def _store_error_report(self, error_report: WidgetErrorReport):
+        """Store error report with memory management"""
+        self.error_reports.append(error_report)
+        
+        # Limit memory usage by removing old reports
+        if len(self.error_reports) > self.max_error_reports:
+            # Remove oldest 10% of reports
+            remove_count = self.max_error_reports // 10
+            self.error_reports = self.error_reports[remove_count:]
+    
+    def _log_error_report(self, error_report: WidgetErrorReport):
+        """Log error report based on severity level"""
+        log_message = self._format_error_log_message(error_report)
+        
+        if error_report.severity == ErrorSeverity.CRITICAL:
+            self.logger.critical(log_message)
+        elif error_report.severity == ErrorSeverity.ERROR:
+            self.logger.error(log_message)
+        elif error_report.severity == ErrorSeverity.WARNING:
+            self.logger.warning(log_message)
+        else:
+            self.logger.info(log_message)
+        
+        # Also print to console for immediate visibility
+        severity_prefix = {
+            ErrorSeverity.CRITICAL: "CRITICAL",
+            ErrorSeverity.ERROR: "ERROR",
+            ErrorSeverity.WARNING: "WARNING",
+            ErrorSeverity.INFO: "INFO"
+        }
+        
+        print(f"[{severity_prefix[error_report.severity]}] Widget Error in {error_report.context}: {error_report.error_message}")
+        
+        if error_report.fallback_used:
+            print(f"  Fallback: {error_report.fallback_description}")
+        
+        if error_report.user_impact:
+            print(f"  User Impact: {error_report.user_impact}")
+    
+    def _format_error_log_message(self, error_report: WidgetErrorReport) -> str:
+        """Format error report for logging"""
+        lines = [
+            f"Widget Error Report - {error_report.context}",
+            f"  Widget Type: {error_report.widget_type}",
+            f"  Error: {error_report.error_message}",
+            f"  Exception Type: {error_report.exception_type}",
+            f"  Severity: {error_report.severity.value}",
+            f"  Fallback Used: {error_report.fallback_used}",
+        ]
+        
+        if error_report.fallback_description:
+            lines.append(f"  Fallback: {error_report.fallback_description}")
+        
+        if error_report.user_impact:
+            lines.append(f"  User Impact: {error_report.user_impact}")
+        
+        if error_report.recovery_suggestions:
+            lines.append(f"  Recovery Suggestions: {', '.join(error_report.recovery_suggestions)}")
+        
+        if error_report.stack_trace:
+            lines.append(f"  Stack Trace:\n{error_report.stack_trace}")
+        
+        return "\n".join(lines)
+    
+    def _update_error_counts(self, context: str):
+        """Update error frequency counts"""
+        self.error_counts[context] = self.error_counts.get(context, 0) + 1
+    
+    def _check_error_frequency(self, context: str):
+        """Check if error frequency requires action"""
+        count = self.error_counts.get(context, 0)
+        
+        # If we have too many errors in the same context, log a warning
+        if count > 5:
+            self.logger.warning(
+                f"High error frequency detected in context '{context}': {count} errors. "
+                f"Consider investigating the root cause."
+            )
+        
+        # If we have excessive errors, suggest disabling the feature
+        if count > 20:
+            self.logger.critical(
+                f"Excessive error frequency in context '{context}': {count} errors. "
+                f"Consider disabling this feature to improve application stability."
+            )
+    
+    def register_fallback_strategy(self, context: str, fallback_func: Callable):
+        """
+        Register a fallback strategy for a specific context.
+        
+        Args:
+            context: Context identifier
+            fallback_func: Function to call as fallback
+        """
+        self.fallback_strategies[context] = fallback_func
+    
+    def execute_fallback_strategy(self, context: str, *args, **kwargs) -> Any:
+        """
+        Execute registered fallback strategy for a context.
+        
+        Args:
+            context: Context identifier
+            *args, **kwargs: Arguments to pass to fallback function
+            
+        Returns:
+            Result of fallback function or None if no fallback registered
+        """
+        fallback_func = self.fallback_strategies.get(context)
+        if fallback_func:
+            try:
+                return fallback_func(*args, **kwargs)
+            except Exception as e:
+                self.report_widget_error(
+                    widget=None,
+                    context=f"fallback_{context}",
+                    exception=e,
+                    severity=ErrorSeverity.ERROR,
+                    fallback_used=False,
+                    user_impact="Fallback strategy also failed"
+                )
+        return None
+    
+    def get_error_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of widget errors for debugging and monitoring.
+        
+        Returns:
+            Dictionary with error summary statistics
+        """
+        if not self.error_reports:
+            return {
+                'total_errors': 0,
+                'error_contexts': {},
+                'severity_breakdown': {},
+                'fallback_usage': 0,
+                'recent_errors': []
+            }
+        
+        # Calculate statistics
+        total_errors = len(self.error_reports)
+        error_contexts = {}
+        severity_breakdown = {}
+        fallback_usage = 0
+        
+        for report in self.error_reports:
+            # Count by context
+            error_contexts[report.context] = error_contexts.get(report.context, 0) + 1
+            
+            # Count by severity
+            severity_key = report.severity.value
+            severity_breakdown[severity_key] = severity_breakdown.get(severity_key, 0) + 1
+            
+            # Count fallback usage
+            if report.fallback_used:
+                fallback_usage += 1
+        
+        # Get recent errors (last 10)
+        recent_errors = [
+            {
+                'context': report.context,
+                'widget_type': report.widget_type,
+                'error_message': report.error_message,
+                'severity': report.severity.value,
+                'timestamp': report.timestamp.isoformat()
+            }
+            for report in self.error_reports[-10:]
+        ]
+        
+        return {
+            'total_errors': total_errors,
+            'error_contexts': error_contexts,
+            'severity_breakdown': severity_breakdown,
+            'fallback_usage': fallback_usage,
+            'fallback_percentage': (fallback_usage / total_errors * 100) if total_errors > 0 else 0,
+            'recent_errors': recent_errors
+        }
+    
+    def export_error_log(self, file_path: str = None) -> str:
+        """
+        Export error log to file or return as string.
+        
+        Args:
+            file_path: Optional file path to save the log
+            
+        Returns:
+            Error log content as string
+        """
+        if not self.error_reports:
+            return "No widget errors recorded."
+        
+        log_lines = [
+            "Widget Error Log Export",
+            f"Generated: {datetime.now().isoformat()}",
+            f"Total Errors: {len(self.error_reports)}",
+            "=" * 50,
+            ""
+        ]
+        
+        for report in self.error_reports:
+            log_lines.extend([
+                f"[{report.timestamp.isoformat()}] {report.severity.value.upper()}",
+                f"Context: {report.context}",
+                f"Widget: {report.widget_type}",
+                f"Error: {report.error_message}",
+                f"Fallback: {report.fallback_description if report.fallback_used else 'None'}",
+                f"User Impact: {report.user_impact or 'None'}",
+                "-" * 30,
+                ""
+            ])
+        
+        log_content = "\n".join(log_lines)
+        
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(log_content)
+                print(f"Error log exported to: {file_path}")
+            except Exception as e:
+                print(f"Failed to export error log to {file_path}: {e}")
+        
+        return log_content
+    
+    def clear_error_history(self):
+        """Clear error history (useful for testing or after fixes)"""
+        self.error_reports.clear()
+        self.error_counts.clear()
+        self.logger.info("Widget error history cleared")
+    
+    def get_recovery_suggestions(self, context: str) -> List[str]:
+        """
+        Get recovery suggestions for a specific error context.
+        
+        Args:
+            context: Error context
+            
+        Returns:
+            List of recovery suggestions
+        """
+        # Get recent errors for this context
+        context_errors = [
+            report for report in self.error_reports[-50:]  # Last 50 errors
+            if report.context == context
+        ]
+        
+        if not context_errors:
+            return ["No specific suggestions available for this context"]
+        
+        # Collect all recovery suggestions for this context
+        suggestions = set()
+        for report in context_errors:
+            suggestions.update(report.recovery_suggestions)
+        
+        # Add general suggestions based on error patterns
+        general_suggestions = self._get_general_recovery_suggestions(context, context_errors)
+        suggestions.update(general_suggestions)
+        
+        return list(suggestions) if suggestions else ["No recovery suggestions available"]
+    
+    def _get_general_recovery_suggestions(self, context: str, errors: List[WidgetErrorReport]) -> List[str]:
+        """Get general recovery suggestions based on error patterns"""
+        suggestions = []
+        
+        # Analyze error patterns
+        widget_types = set(error.widget_type for error in errors)
+        exception_types = set(error.exception_type for error in errors)
+        
+        # Widget-specific suggestions
+        if 'TextInputElement' in widget_types:
+            suggestions.append("Consider using alternative widget access methods for TextInputElement")
+        
+        if 'CTkButton' in widget_types:
+            suggestions.append("Check parent widget availability before creating buttons")
+        
+        # Exception-specific suggestions
+        if 'AttributeError' in exception_types:
+            suggestions.append("Verify widget attributes exist before accessing them")
+        
+        if 'TclError' in exception_types:
+            suggestions.append("Ensure widgets are properly initialized before use")
+        
+        # Context-specific suggestions
+        if 'parent_resolution' in context:
+            suggestions.extend([
+                "Use robust parent resolution utilities",
+                "Implement fallback strategies for parent access",
+                "Consider alternative widget positioning methods"
+            ])
+        
+        if 'validation' in context:
+            suggestions.extend([
+                "Implement graceful validation fallbacks",
+                "Use console-based validation as last resort",
+                "Check widget binding capabilities before setup"
+            ])
+        
+        return suggestions
+
+
+# Global instance for easy access
+widget_error_service = WidgetErrorHandlingService()
+</document_content>
+</document>
+<document index="89">
+<source>.\ui\actions_frame.py</source>
+<document_content>
+import customtkinter as ctk
+from tkinter.messagebox import askyesno, showwarning
+
+class ActionsFrame(ctk.CTkFrame):
+    def __init__(self, master, i18n, serial_service):
+        super().__init__(master)
+        self.i18n = i18n
+        self.serial_service = serial_service
+
+        self.grid_columnconfigure(0, weight=1)
+
+        self.title_label = ctk.CTkLabel(self, text=self.i18n.get("actions"), font=ctk.CTkFont(weight="bold"))
+        self.title_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
+
+        self.send_all_button = ctk.CTkButton(
+            self, text=self.i18n.get("send_all"), command=self.send_all_parameters
+        )
+        self.send_all_button.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+
+        self.check_config_button = ctk.CTkButton(
+            self, text=self.i18n.get("check_config"), command=self.check_configuration
+        )
+        self.check_config_button.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+
+        self.reboot_button = ctk.CTkButton(
+            self, text=self.i18n.get("reboot_device"), command=self.reboot_device
+        )
+        self.reboot_button.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+
+        self.factory_reset_button = ctk.CTkButton(
+            self,
+            text=self.i18n.get("factory_reset"),
+            command=self.confirm_factory_reset,
+            fg_color="red",
+            hover_color="darkred"
+        )
+        self.factory_reset_button.grid(row=4, column=0, padx=10, pady=(5, 10), sticky="ew")
+
+    def send_all_parameters(self):
+        if self.serial_service.app.profile_operation_in_progress:
+            self.serial_service.app.log_frame.log_message("INFO: Suppressed send_all_parameters during profile operation.")
+            return
+        """Sends all current UI parameters to the device in the correct sequence."""
+        if not self.serial_service.is_connected:
+            title = self.i18n.get("error")
+            message = self.i18n.get("not_connected_error")
+            showwarning(title=title, message=message)
+            return
+            
+        # Use the new bulk command operation functionality
+        self.serial_service.send_all_parameters()
+        
+    def check_configuration(self):
+        """Retrieves and populates all device settings."""
+        if not self.serial_service.is_connected:
+            title = self.i18n.get("error")
+            message = self.i18n.get("not_connected_error")
+            showwarning(title=title, message=message)
+            return
+            
+        # Use the new check device configuration functionality
+        self.serial_service.check_device_configuration()
+
+    def reboot_device(self):
+        """Sends the command to reboot the device."""
+        if not self.serial_service.is_connected:
+            title = self.i18n.get("error")
+            message = self.i18n.get("not_connected_error")
+            showwarning(title=title, message=message)
+            return
+            
+        # Get the actual reboot command from the device command mapper
+        try:
+            if hasattr(self.serial_service.app, 'device_command_mapper'):
+                reboot_cmd = self.serial_service.app.device_command_mapper.get_command(
+                    'reset_device', None, confirm_destructive=True, validate_command=True
+                )
+                self.serial_service.send_command(reboot_cmd, 'reset_device')
+                self.serial_service.app.log_frame.log_message("INFO: Reboot command sent to device\n")
+            else:
+                self.serial_service.send_command("ATSMS:RESET#")
+                self.serial_service.app.log_frame.log_message("INFO: Reboot command sent using default command\n")
+        except Exception as e:
+            self.serial_service.app.log_frame.log_message(f"ERROR: Failed to send reboot command: {str(e)}\n")
+
+    def confirm_factory_reset(self):
+        """Shows a confirmation dialog before sending the factory reset command."""
+        if not self.serial_service.is_connected:
+            title = self.i18n.get("error")
+            message = self.i18n.get("not_connected_error")
+            showwarning(title=title, message=message)
+            return
+            
+        title = self.i18n.get("factory_reset_confirm_title")
+        message = self.i18n.get("factory_reset_confirm_message")
+        if askyesno(title, message):
+            # Get the actual factory reset command from the device command mapper
+            try:
+                if hasattr(self.serial_service.app, 'device_command_mapper'):
+                    factory_cmd = self.serial_service.app.device_command_mapper.get_command(
+                        'factory_reset', None, confirm_destructive=True, validate_command=True
+                    )
+                    self.serial_service.send_command(factory_cmd, 'factory_reset')
+                    self.serial_service.app.log_frame.log_message("INFO: Factory reset command sent to device\n")
+                else:
+                    self.serial_service.send_command("ATSMS:FACTORY#")
+                    self.serial_service.app.log_frame.log_message("INFO: Factory reset command sent using default command\n")
+            except Exception as e:
+                self.serial_service.app.log_frame.log_message(f"ERROR: Failed to send factory reset command: {str(e)}\n")
+    
+    def update_language_display(self):
+        """Updates all UI elements with the current language."""
+        # Update title
+        self.title_label.configure(text=self.i18n.get("actions"))
+        
+        # Update buttons
+        self.send_all_button.configure(text=self.i18n.get("send_all"))
+        self.check_config_button.configure(text=self.i18n.get("check_config"))
+        self.reboot_button.configure(text=self.i18n.get("reboot_device"))
+        self.factory_reset_button.configure(text=self.i18n.get("factory_reset"))
+</document_content>
+</document>
+<document index="90">
+<source>.\ui\apn_help_tooltip.py</source>
+<document_content>
+"""
+APN Help Tooltip Component
+
+Provides contextual help tooltips for APN fields with format examples
+and interactive guidance for users.
+"""
+
+import customtkinter as ctk
+import tkinter as tk
+from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass
+
+
+@dataclass
+class TooltipContent:
+    """Content for tooltip display"""
+    title: str
+    description: str
+    examples: List[str]
+    tips: List[str]
+    severity: str = "info"  # "info", "warning", "error"
+
+
+class APNHelpTooltip:
+    """Interactive tooltip for APN field help"""
+    
+    def __init__(self, parent_widget, field_name: str, i18n=None):
+        self.parent_widget = parent_widget
+        self.field_name = field_name
+        self.i18n = i18n or self._get_default_i18n()
+        
+        self.tooltip_window = None
+        self.is_visible = False
+        self.hover_timer = None
+        
+        # Content for different field types
+        self.tooltip_contents = self._initialize_tooltip_contents()
+        
+        # Bind events to parent widget
+        self._bind_events()
+    
+    def _get_default_i18n(self):
+        """Default i18n fallback"""
+        class DefaultI18n:
+            def get(self, key, default=None):
+                return default or key
+        return DefaultI18n()
+    
+    def _initialize_tooltip_contents(self) -> Dict[str, TooltipContent]:
+        """Initialize tooltip content for different field types"""
+        return {
+            'apn': TooltipContent(
+                title=self.i18n.get("apn_help_title", "APN Format Help"),
+                description=self.i18n.get("apn_help_desc", "Access Point Name (APN) identifies the network gateway for data connections."),
+                examples=[
+                    "internet.provider.com",
+                    "zap.vivo.com.br",
+                    "tim.br",
+                    "claro.com.br",
+                    "192.168.1.1"
+                ],
+                tips=[
+                    "Use domain format (e.g., provider.com) or IP address",
+                    "No spaces or special characters except dots and hyphens",
+                    "Maximum 100 characters",
+                    "Contact your carrier for the correct APN"
+                ]
+            ),
+            'apn_user': TooltipContent(
+                title=self.i18n.get("apn_user_help_title", "APN Username Help"),
+                description=self.i18n.get("apn_user_help_desc", "Username for APN authentication (optional for many carriers)."),
+                examples=[
+                    "user@provider.com",
+                    "mobile",
+                    "internet",
+                    "(leave empty if not required)"
+                ],
+                tips=[
+                    "Many carriers don't require a username",
+                    "Maximum 64 characters",
+                    "No quotes or angle brackets",
+                    "If username is provided, password is usually required"
+                ]
+            ),
+            'apn_password': TooltipContent(
+                title=self.i18n.get("apn_password_help_title", "APN Password Help"),
+                description=self.i18n.get("apn_password_help_desc", "Password for APN authentication (optional for many carriers)."),
+                examples=[
+                    "password123",
+                    "mobile",
+                    "internet",
+                    "(leave empty if not required)"
+                ],
+                tips=[
+                    "Many carriers don't require a password",
+                    "Maximum 64 characters",
+                    "No quotes or angle brackets",
+                    "If password is provided, username is usually required"
+                ]
+            )
+        }
+    
+    def _bind_events(self):
+        """Bind mouse events to parent widget"""
+        try:
+            # Bind to the widget itself
+            if hasattr(self.parent_widget, 'bind'):
+                self.parent_widget.bind('<Enter>', self._on_enter)
+                self.parent_widget.bind('<Leave>', self._on_leave)
+                self.parent_widget.bind('<Button-1>', self._on_click)
+            
+            # Also try to bind to internal entry widget for CustomTkinter widgets
+            if hasattr(self.parent_widget, '_entry'):
+                self.parent_widget._entry.bind('<Enter>', self._on_enter)
+                self.parent_widget._entry.bind('<Leave>', self._on_leave)
+                self.parent_widget._entry.bind('<Button-1>', self._on_click)
+                
+        except Exception as e:
+            print(f"Warning: Could not bind tooltip events: {e}")
+    
+    def _on_enter(self, event=None):
+        """Handle mouse enter event"""
+        if self.hover_timer:
+            self.parent_widget.after_cancel(self.hover_timer)
+        
+        # Show tooltip after delay
+        self.hover_timer = self.parent_widget.after(800, self._show_tooltip)
+    
+    def _on_leave(self, event=None):
+        """Handle mouse leave event"""
+        if self.hover_timer:
+            self.parent_widget.after_cancel(self.hover_timer)
+            self.hover_timer = None
+        
+        # Hide tooltip after short delay
+        self.parent_widget.after(200, self._hide_tooltip)
+    
+    def _on_click(self, event=None):
+        """Handle click event - toggle tooltip"""
+        if self.is_visible:
+            self._hide_tooltip()
+        else:
+            self._show_tooltip()
+    
+    def _show_tooltip(self):
+        """Show the tooltip window"""
+        if self.is_visible or not self.parent_widget.winfo_exists():
+            return
+        
+        try:
+            content = self.tooltip_contents.get(self.field_name)
+            if not content:
+                return
+            
+            # Create tooltip window
+            self.tooltip_window = tk.Toplevel(self.parent_widget)
+            self.tooltip_window.wm_overrideredirect(True)
+            self.tooltip_window.configure(bg='#2b2b2b', relief='solid', borderwidth=1)
+            
+            # Position tooltip
+            self._position_tooltip()
+            
+            # Create content frame
+            main_frame = tk.Frame(self.tooltip_window, bg='#2b2b2b', padx=10, pady=8)
+            main_frame.pack(fill='both', expand=True)
+            
+            # Title
+            title_label = tk.Label(
+                main_frame,
+                text=content.title,
+                font=('Arial', 10, 'bold'),
+                fg='#ffffff',
+                bg='#2b2b2b',
+                anchor='w'
+            )
+            title_label.pack(fill='x', pady=(0, 5))
+            
+            # Description
+            desc_label = tk.Label(
+                main_frame,
+                text=content.description,
+                font=('Arial', 9),
+                fg='#cccccc',
+                bg='#2b2b2b',
+                anchor='w',
+                wraplength=300,
+                justify='left'
+            )
+            desc_label.pack(fill='x', pady=(0, 8))
+            
+            # Examples section with enhanced formatting
+            if content.examples:
+                examples_label = tk.Label(
+                    main_frame,
+                    text="Examples:",
+                    font=('Arial', 9, 'bold'),
+                    fg='#4CAF50',
+                    bg='#2b2b2b',
+                    anchor='w'
+                )
+                examples_label.pack(fill='x', pady=(0, 2))
+                
+                for i, example in enumerate(content.examples[:4]):  # Limit to 4 examples
+                    # Add context for examples
+                    example_text = f"ÔÇó {example}"
+                    if self.field_name == 'apn' and i == 0:
+                        example_text += " (Brazilian carrier)"
+                    elif self.field_name == 'apn' and i == 1:
+                        example_text += " (Vivo Brazil)"
+                    elif self.field_name == 'apn' and i == 4:
+                        example_text += " (IP address format)"
+                    
+                    example_label = tk.Label(
+                        main_frame,
+                        text=example_text,
+                        font=('Arial', 8),
+                        fg='#90EE90',
+                        bg='#2b2b2b',
+                        anchor='w'
+                    )
+                    example_label.pack(fill='x', padx=(10, 0))
+            
+            # Tips section
+            if content.tips:
+                tips_label = tk.Label(
+                    main_frame,
+                    text="Tips:",
+                    font=('Arial', 9, 'bold'),
+                    fg='#2196F3',
+                    bg='#2b2b2b',
+                    anchor='w'
+                )
+                tips_label.pack(fill='x', pady=(8, 2))
+                
+                for tip in content.tips[:3]:  # Limit to 3 tips
+                    tip_label = tk.Label(
+                        main_frame,
+                        text=f"ÔÇó {tip}",
+                        font=('Arial', 8),
+                        fg='#87CEEB',
+                        bg='#2b2b2b',
+                        anchor='w',
+                        wraplength=280,
+                        justify='left'
+                    )
+                    tip_label.pack(fill='x', padx=(10, 0))
+            
+            self.is_visible = True
+            
+            # Auto-hide after 10 seconds
+            self.parent_widget.after(10000, self._hide_tooltip)
+            
+        except Exception as e:
+            print(f"Error showing tooltip: {e}")
+            self._hide_tooltip()
+    
+    def _position_tooltip(self):
+        """Position tooltip relative to parent widget"""
+        try:
+            # Get parent widget position
+            x = self.parent_widget.winfo_rootx()
+            y = self.parent_widget.winfo_rooty()
+            height = self.parent_widget.winfo_height()
+            
+            # Position tooltip below the widget
+            tooltip_x = x
+            tooltip_y = y + height + 5
+            
+            # Adjust if tooltip would go off screen
+            screen_width = self.tooltip_window.winfo_screenwidth()
+            screen_height = self.tooltip_window.winfo_screenheight()
+            
+            # Update tooltip to get its size
+            self.tooltip_window.update_idletasks()
+            tooltip_width = self.tooltip_window.winfo_reqwidth()
+            tooltip_height = self.tooltip_window.winfo_reqheight()
+            
+            # Adjust horizontal position
+            if tooltip_x + tooltip_width > screen_width:
+                tooltip_x = screen_width - tooltip_width - 10
+            
+            # Adjust vertical position
+            if tooltip_y + tooltip_height > screen_height:
+                tooltip_y = y - tooltip_height - 5
+            
+            self.tooltip_window.geometry(f"+{tooltip_x}+{tooltip_y}")
+            
+        except Exception as e:
+            print(f"Error positioning tooltip: {e}")
+    
+    def _hide_tooltip(self):
+        """Hide the tooltip window"""
+        if self.tooltip_window:
+            try:
+                self.tooltip_window.destroy()
+            except:
+                pass
+            self.tooltip_window = None
+        
+        self.is_visible = False
+    
+    def update_content(self, content: TooltipContent):
+        """Update tooltip content"""
+        self.tooltip_contents[self.field_name] = content
+        
+        # Refresh tooltip if currently visible
+        if self.is_visible:
+            self._hide_tooltip()
+            self.parent_widget.after(100, self._show_tooltip)
+    
+    def show_validation_help(self, validation_result):
+        """Show validation-specific help"""
+        if not validation_result or validation_result.is_valid:
+            return
+        
+        # Create validation-specific content
+        validation_content = TooltipContent(
+            title=f"Validation Error: {self.field_name.replace('_', ' ').title()}",
+            description=validation_result.error_message,
+            examples=validation_result.suggestions[:3] if validation_result.suggestions else [],
+            tips=[
+                "Check the format requirements above",
+                "Try one of the suggested corrections",
+                "Contact your carrier for the correct settings"
+            ],
+            severity="error"
+        )
+        
+        # Update content and show
+        self.update_content(validation_content)
+        self._show_tooltip()
+    
+    def destroy(self):
+        """Clean up tooltip"""
+        if self.hover_timer:
+            self.parent_widget.after_cancel(self.hover_timer)
+        self._hide_tooltip()
+
+
+class APNCarrierHelper:
+    """Interactive APN format helper with common carrier examples"""
+    
+    def __init__(self, parent, i18n=None):
+        self.parent = parent
+        self.i18n = i18n or self._get_default_i18n()
+        
+        # Common carrier configurations
+        self.carrier_configs = {
+            'Brazil': {
+                'Vivo': [
+                    {'apn': 'zap.vivo.com.br', 'user': 'vivo', 'password': 'vivo'},
+                    {'apn': 'vivo.br', 'user': '', 'password': ''},
+                ],
+                'TIM': [
+                    {'apn': 'tim.br', 'user': 'tim', 'password': 'tim'},
+                    {'apn': 'tim.com.br', 'user': '', 'password': ''},
+                ],
+                'Claro': [
+                    {'apn': 'claro.com.br', 'user': 'claro', 'password': 'claro'},
+                    {'apn': 'bandalarga.claro.com.br', 'user': '', 'password': ''},
+                ],
+                'Oi': [
+                    {'apn': 'gprs.oi.com.br', 'user': 'oi', 'password': 'oi'},
+                    {'apn': 'oi.com.br', 'user': '', 'password': ''},
+                ],
+                'Allcom': [
+                    {'apn': 'allcom.br', 'user': 'allcom', 'password': 'allcom'},
+                ]
+            },
+            'United States': {
+                'AT&T': [
+                    {'apn': 'phone', 'user': '', 'password': ''},
+                    {'apn': 'broadband', 'user': '', 'password': ''},
+                ],
+                'Verizon': [
+                    {'apn': 'vzwinternet', 'user': '', 'password': ''},
+                    {'apn': 'internet', 'user': '', 'password': ''},
+                ],
+                'T-Mobile': [
+                    {'apn': 'fast.t-mobile.com', 'user': '', 'password': ''},
+                    {'apn': 'epc.tmobile.com', 'user': '', 'password': ''},
+                ]
+            },
+            'International': {
+                'Vodafone': [
+                    {'apn': 'internet', 'user': '', 'password': ''},
+                    {'apn': 'live.vodafone.com', 'user': 'vodafone', 'password': 'vodafone'},
+                ],
+                'Orange': [
+                    {'apn': 'orange', 'user': 'orange', 'password': 'orange'},
+                    {'apn': 'orange.fr', 'user': '', 'password': ''},
+                ],
+                'Three': [
+                    {'apn': '3internet', 'user': '', 'password': ''},
+                    {'apn': 'three.co.uk', 'user': '', 'password': ''},
+                ]
+            }
+        }
+    
+    def _get_default_i18n(self):
+        """Default i18n fallback"""
+        class DefaultI18n:
+            def get(self, key, default=None):
+                return default or key
+        return DefaultI18n()
+    
+    def show_carrier_helper_dialog(self, callback=None):
+        """Show interactive carrier helper dialog"""
+        try:
+            # Create dialog window
+            dialog = ctk.CTkToplevel(self.parent)
+            dialog.title(self.i18n.get("carrier_helper_title", "APN Carrier Helper"))
+            dialog.geometry("600x500")
+            dialog.transient(self.parent)
+            dialog.grab_set()
+            
+            # Center the dialog
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (600 // 2)
+            y = (dialog.winfo_screenheight() // 2) - (500 // 2)
+            dialog.geometry(f"600x500+{x}+{y}")
+            
+            # Main frame
+            main_frame = ctk.CTkFrame(dialog)
+            main_frame.pack(fill='both', expand=True, padx=10, pady=10)
+            
+            # Title
+            title_label = ctk.CTkLabel(
+                main_frame,
+                text=self.i18n.get("carrier_helper_desc", "Select your carrier to get pre-configured APN settings"),
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            title_label.pack(pady=(10, 20))
+            
+            # Create scrollable frame for carriers
+            scroll_frame = ctk.CTkScrollableFrame(main_frame, height=350)
+            scroll_frame.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+            
+            # Add carrier sections
+            for country, carriers in self.carrier_configs.items():
+                # Country header
+                country_label = ctk.CTkLabel(
+                    scroll_frame,
+                    text=country,
+                    font=ctk.CTkFont(size=16, weight="bold")
+                )
+                country_label.pack(anchor='w', pady=(15, 5))
+                
+                # Carriers in this country
+                for carrier_name, configs in carriers.items():
+                    # Carrier frame
+                    carrier_frame = ctk.CTkFrame(scroll_frame)
+                    carrier_frame.pack(fill='x', pady=2, padx=10)
+                    
+                    # Carrier name
+                    carrier_label = ctk.CTkLabel(
+                        carrier_frame,
+                        text=carrier_name,
+                        font=ctk.CTkFont(size=12, weight="bold")
+                    )
+                    carrier_label.pack(anchor='w', padx=10, pady=(5, 0))
+                    
+                    # Configuration options
+                    for i, config in enumerate(configs):
+                        config_text = f"APN: {config['apn']}"
+                        if config['user']:
+                            config_text += f" | User: {config['user']}"
+                        if config['password']:
+                            config_text += f" | Password: {config['password']}"
+                        
+                        config_button = ctk.CTkButton(
+                            carrier_frame,
+                            text=config_text,
+                            command=lambda c=config: self._apply_carrier_config(c, callback, dialog),
+                            height=30,
+                            font=ctk.CTkFont(size=10)
+                        )
+                        config_button.pack(fill='x', padx=10, pady=2)
+                    
+                    # Add spacing after carrier
+                    ctk.CTkLabel(carrier_frame, text="", height=5).pack()
+            
+            # Close button
+            close_button = ctk.CTkButton(
+                main_frame,
+                text=self.i18n.get("close", "Close"),
+                command=dialog.destroy
+            )
+            close_button.pack(pady=10)
+            
+        except Exception as e:
+            print(f"Error showing carrier helper dialog: {e}")
+    
+    def _apply_carrier_config(self, config, callback, dialog):
+        """Apply selected carrier configuration"""
+        try:
+            if callback:
+                callback(config)
+            dialog.destroy()
+        except Exception as e:
+            print(f"Error applying carrier config: {e}")
+    
+    def get_carrier_suggestions(self, partial_input: str) -> List[Dict[str, str]]:
+        """Get carrier suggestions based on partial input"""
+        suggestions = []
+        partial_lower = partial_input.lower()
+        
+        for country, carriers in self.carrier_configs.items():
+            for carrier_name, configs in carriers.items():
+                # Check carrier name match
+                if partial_lower in carrier_name.lower():
+                    suggestions.extend(configs)
+                else:
+                    # Check APN match
+                    for config in configs:
+                        if partial_lower in config['apn'].lower():
+                            suggestions.append(config)
+        
+        # Remove duplicates and limit results
+        unique_suggestions = []
+        for suggestion in suggestions:
+            if suggestion not in unique_suggestions:
+                unique_suggestions.append(suggestion)
+        
+        return unique_suggestions[:10]
+</document_content>
+</document>
+<document index="91">
+<source>.\ui\custom_confirmation_dialog.py</source>
+<document_content>
+"""
+Custom Confirmation Dialog - Modern confirmation dialog matching application design.
+
+This module provides a confirmation dialog that matches the application's CustomTkinter
+design and supports internationalization.
+"""
+
+import customtkinter as ctk
+from typing import Optional
+
+
+class CustomConfirmationDialog:
+    """Custom confirmation dialog with modern design."""
+    
+    def __init__(self, parent, title: str, message: str, detail: str = "", icon_type: str = "warning"):
+        """
+        Initialize the custom confirmation dialog.
+        
+        Args:
+            parent: Parent window
+            title: Dialog title
+            message: Main message text
+            detail: Additional detail text
+            icon_type: Type of icon ("warning", "question", "info", "error")
+        """
+        self.parent = parent
+        self.result = False
+        
+        # Get i18n service from parent if available
+        self.i18n = getattr(parent, 'i18n', None) or getattr(parent, 'i18n_service', None)
+        
+        # Create the dialog window
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x300")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Ensure dialog uses the same theme as the application
+        # Get current theme from parent's theme service if available
+        if hasattr(parent, 'theme_service'):
+            current_theme = parent.theme_service.get_current_theme()
+            ctk.set_appearance_mode(current_theme)
+        else:
+            # Fallback to dark theme if theme service not available
+            ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        
+        # Center the dialog
+        self._center_dialog()
+        
+        # Create UI elements
+        self._create_ui(title, message, detail, icon_type)
+        
+        # Handle window close event
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        
+        # Focus on the dialog
+        self.dialog.focus()
+        
+        # Wait for the dialog to be closed
+        self.dialog.wait_window()
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        self.dialog.update_idletasks()
+        
+        if hasattr(self.parent, 'winfo_x') and hasattr(self.parent, 'winfo_y'):
+            parent_x = self.parent.winfo_rootx()
+            parent_y = self.parent.winfo_rooty()
+            parent_width = self.parent.winfo_width()
+            parent_height = self.parent.winfo_height()
+            
+            dialog_width = 500
+            dialog_height = 300
+            
+            x = parent_x + (parent_width // 2) - (dialog_width // 2)
+            y = parent_y + (parent_height // 2) - (dialog_height // 2)
+            
+            self.dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+    
+    def _create_ui(self, title: str, message: str, detail: str, icon_type: str):
+        """Create the dialog UI elements."""
+        # Configure grid
+        self.dialog.grid_columnconfigure(0, weight=1)
+        self.dialog.grid_rowconfigure(0, weight=1)
+        
+        # Create main frame
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        main_frame.grid_columnconfigure(1, weight=1)
+        
+        # Icon colors based on type
+        icon_colors = {
+            "warning": "#FFA500",  # Orange
+            "question": "#3B8ED0",  # Blue
+            "info": "#3B8ED0",     # Blue
+            "error": "#FF4444"     # Red
+        }
+        
+        # Icon symbols
+        icon_symbols = {
+            "warning": "!",
+            "question": "?",
+            "info": "i",
+            "error": "├ù"
+        }
+        
+        # Create icon
+        icon_color = icon_colors.get(icon_type, "#FFA500")
+        icon_symbol = icon_symbols.get(icon_type, "!")
+        
+        icon_label = ctk.CTkLabel(
+            main_frame,
+            text=icon_symbol,
+            width=50,
+            height=50,
+            fg_color=icon_color,
+            corner_radius=25,
+            text_color="white" if icon_type != "warning" else "black",
+            font=ctk.CTkFont(size=24, weight="bold")
+        )
+        icon_label.grid(row=0, column=0, padx=(10, 20), pady=10, sticky="nw")
+        
+        # Create text frame
+        text_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        text_frame.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="nsew")
+        text_frame.grid_columnconfigure(0, weight=1)
+        
+        # Main message
+        message_label = ctk.CTkLabel(
+            text_frame,
+            text=message,
+            font=ctk.CTkFont(size=14),
+            wraplength=350,
+            justify="left"
+        )
+        message_label.grid(row=0, column=0, pady=(0, 10), sticky="ew")
+        
+        # Detail message (if provided)
+        if detail:
+            detail_label = ctk.CTkLabel(
+                text_frame,
+                text=detail,
+                font=ctk.CTkFont(size=12),
+                wraplength=350,
+                justify="left",
+                text_color="gray70"
+            )
+            detail_label.grid(row=1, column=0, pady=(0, 10), sticky="ew")
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(10, 10), sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+        
+        # Get button texts from i18n if available
+        yes_text = "Sim"
+        no_text = "N├úo"
+        
+        if self.i18n:
+            yes_text = self.i18n.get("yes", "Sim")
+            no_text = self.i18n.get("no", "N├úo")
+        
+        # No button (left)
+        no_button = ctk.CTkButton(
+            button_frame,
+            text=no_text,
+            command=self._on_cancel,
+            width=100,
+            height=35,
+            fg_color="gray50",
+            hover_color="gray40"
+        )
+        no_button.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="e")
+        
+        # Yes button (right)
+        yes_button = ctk.CTkButton(
+            button_frame,
+            text=yes_text,
+            command=self._on_confirm,
+            width=100,
+            height=35
+        )
+        yes_button.grid(row=0, column=1, padx=(10, 0), pady=0, sticky="w")
+        
+        # Set focus on Yes button
+        yes_button.focus()
+    
+    def _on_confirm(self):
+        """Handle confirm button click."""
+        self.result = True
+        self.dialog.destroy()
+    
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        self.result = False
+        self.dialog.destroy()
+    
+    def get_result(self) -> bool:
+        """Get the dialog result."""
+        return self.result
+
+
+def show_confirmation_dialog(parent, title: str, message: str, detail: str = "", icon_type: str = "warning") -> bool:
+    """
+    Show a custom confirmation dialog.
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        message: Main message text
+        detail: Additional detail text
+        icon_type: Type of icon ("warning", "question", "info", "error")
+        
+    Returns:
+        True if user confirmed, False otherwise
+    """
+    dialog = CustomConfirmationDialog(parent, title, message, detail, icon_type)
+    return dialog.get_result()
+</document_content>
+</document>
+<document index="92">
+<source>.\ui\log_frame.py</source>
+<document_content>
+import customtkinter as ctk
+import pyperclip
+from tkinter import filedialog
+import datetime
+import os
+import re
+import time
+from collections import deque
+
+class LogFrame(ctk.CTkFrame):
+    # Maximum number of log entries to keep in memory
+    MAX_LOG_ENTRIES = 1000
+    
+    # Message type color mapping
+    MESSAGE_COLORS = {
+        "APP": "#4CAF50",      # Green for app commands
+        "DEV": "#2196F3",      # Blue for device responses
+        "INFO": "#9E9E9E",     # Gray for info messages
+        "ERROR": "#F44336",    # Red for errors
+        "WARNING": "#FF9800",  # Orange for warnings
+        "DEBUG": "#607D8B",    # Blue-gray for debug messages
+        "SYSTEM": "#9C27B0"    # Purple for system messages
+    }
+    
+    def __init__(self, master, i18n, serial_service):
+        super().__init__(master)
+        self.i18n = i18n
+        self.serial_service = serial_service
+        
+        # Use a deque to store log entries for better performance with large logs
+        self.log_entries = deque(maxlen=self.MAX_LOG_ENTRIES)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # --- Title and Actions ---
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="ew")
+        top_frame.grid_columnconfigure(0, weight=1)
+
+        self.title_label = ctk.CTkLabel(top_frame, text=self.i18n.get("serial_log"), font=ctk.CTkFont(weight="bold"))
+        self.title_label.grid(row=0, column=0, sticky="w")
+
+        self.copy_button = ctk.CTkButton(top_frame, text=self.i18n.get("copy_log"), width=80, command=self.copy_log)
+        self.copy_button.grid(row=0, column=1, padx=5)
+
+        self.export_button = ctk.CTkButton(top_frame, text=self.i18n.get("export_log"), width=80, command=self.export_log)
+        self.export_button.grid(row=0, column=2)
+
+        self.clear_button = ctk.CTkButton(top_frame, text=self.i18n.get("clear_log", "Clear"), width=80, command=self.clear_log)
+        self.clear_button.grid(row=0, column=3, padx=5)
+
+        # --- Log Text Area ---
+        self.log_textbox = ctk.CTkTextbox(self, state="disabled", wrap="word")
+        self.log_textbox.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
+        
+        # CustomTkinter's CTkTextbox doesn't support tag_configure
+        # We'll use a different approach for text coloring
+
+        # --- Free Command Section ---
+        command_frame = ctk.CTkFrame(self, fg_color="transparent")
+        command_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="ew")
+        command_frame.grid_columnconfigure(1, weight=1)
+
+        self.command_label = ctk.CTkLabel(command_frame, text=self.i18n.get("free_command"))
+        self.command_label.grid(row=0, column=0, padx=(0, 5), pady=5)
+
+        self.command_entry = ctk.CTkEntry(command_frame)
+        self.command_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.command_entry.bind("<Return>", self.send_free_command)
+
+        self.send_command_button = ctk.CTkButton(command_frame, text=self.i18n.get("send"), width=80, command=self.send_free_command)
+        self.send_command_button.grid(row=0, column=2, padx=(5, 0), pady=5)
+        
+        # --- Container do Hist├│rico de Comandos ---
+        # Pr├®-alocado e fixado para evitar pulos no layout
+        self.frame_historico = ctk.CTkFrame(command_frame, fg_color="transparent", height=24)
+        # RESOLU├ç├âO DO PULO HORIZONTAL: columnspan=3 faz o hist├│rico usar o espa├ºo total sem empurrar a coluna do meio
+        self.frame_historico.grid(row=1, column=0, columnspan=3, padx=(0, 5), pady=(0, 5), sticky="w")
+        
+        self.historico_comandos = []
+        self.botoes_historico = []
+        
+        # Last log update time to throttle updates for performance
+        self.last_log_update = 0
+        self.log_buffer = []
+        self.update_interval = 100  # milliseconds
+
+    def log_message(self, message):
+        """
+        Appends a message to the log text area with proper formatting and color coding.
+        Uses buffering for better performance with rapid log messages.
+        """
+        # Redirect DEBUG messages to console instead of UI log
+        if message.startswith("DEBUG:"):
+            # Print DEBUG messages to console
+            print(f"[DEBUG] {message[6:].strip()}")  # Remove "DEBUG:" prefix
+            return  # Don't add to UI log
+            
+        # Redirect specific INFO messages to console instead of UI log
+        # These are typically internal operation messages that are not critical for the user
+        info_redirect_patterns = [
+            "Profile loaded to UI successfully",
+            "UI updated successfully with loaded values",
+            "Log copied to clipboard",
+            "Profile saved from UI successfully",
+            "Parameters frame updated with processed device values",
+            "Configuration check complete - UI updated with device values",
+            "Device configuration loaded to UI",
+            "All parameters sent successfully",
+            "Successfully read"
+        ]
+        
+        if message.startswith("INFO:"):
+            message_content = message[5:].strip()  # Remove "INFO:" prefix
+            # Check if this INFO message should be redirected to console
+            for pattern in info_redirect_patterns:
+                if pattern in message_content:
+                    # Print INFO messages to console
+                    print(f"[INFO] {message_content}")
+                    return  # Don't add to UI log
+        
+        # Redirect SYSTEM messages to console instead of UI log
+        # These are typically internal messages that don't have a specific category
+        if not any(message.startswith(prefix) for prefix in ["APP:", "DEV:", "INFO:", "ERROR:", "WARNING:", "DEBUG:"]):
+            # Print SYSTEM messages to console
+            print(f"[SYSTEM] {message.strip()}")
+            return  # Don't add to UI log
+            
+        # Store the message in the deque for history
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log_entries.append((timestamp, message))
+        
+        # Add to buffer for batched updates
+        self.log_buffer.append(message)
+        
+        # Immediately update for critical messages or device responses (DEV:) to prevent delayed log rendering
+        if ("ERROR:" in message and ("connection" in message.lower() or "disconnected" in message.lower())) or message.startswith("DEV:"):
+            # Force immediate update for connection errors and device responses
+            self._update_log_display()
+            
+            # Ensure the log is visible by scrolling to the end
+            self.after(10, self.log_textbox.see, "end")
+            
+            # Flash the log area to draw attention for connection errors
+            if "ERROR:" in message:
+                self._flash_log_for_attention()
+        else:
+            # Check if we should update the display now for regular messages
+            current_time = time.time() * 1000  # Convert to milliseconds
+            if current_time - self.last_log_update > self.update_interval:
+                self._update_log_display()
+            else:
+                # Schedule an update to flush the buffer even if no new messages arrive
+                self.after(int(self.update_interval), self._update_log_display)
+                
+    def _get_theme_appropriate_background(self):
+        """
+        Get the theme-appropriate background color for the log textbox.
+        
+        Returns:
+            The appropriate background color for the current theme
+        """
+        current_mode = ctk.get_appearance_mode()
+        
+        if current_mode == "Dark":
+            # Default dark mode background for CTkTextbox
+            return ["#212121", "#2B2B2B"]  # CTkTextbox default dark colors
+        else:
+            # Default light mode background for CTkTextbox
+            return ["#F9F9FA", "#FFFFFF"]  # CTkTextbox default light colors
+
+    def _flash_log_for_attention(self, success=False):
+        """
+        Flash the log textbox background briefly to draw attention to important messages.
+        
+        Args:
+            success: If True, flash with green for success, otherwise red for errors
+        """
+        # Safety check - ensure textbox exists
+        if not hasattr(self, 'log_textbox') or self.log_textbox is None:
+            return
+        
+        try:
+            # Get the current theme mode to use appropriate colors
+            current_mode = ctk.get_appearance_mode()
+            
+            # Get the correct theme-appropriate background color
+            original_bg = self._get_theme_appropriate_background()
+            
+            # Flash with appropriate background color based on theme
+            if success:
+                if current_mode == "Dark":
+                    # Dark green for success in dark mode
+                    flash_color = "#1B4D3E"
+                else:
+                    # Light green for success in light mode
+                    flash_color = "#E0FFE0"
+            else:
+                if current_mode == "Dark":
+                    # Dark red for errors in dark mode
+                    flash_color = "#4D1B1B"
+                else:
+                    # Light red for errors in light mode
+                    flash_color = "#FFE0E0"
+            
+            self.log_textbox.configure(fg_color=flash_color)
+            
+            # Reset after a short delay to the proper theme-appropriate color
+            self.after(500, lambda: self.log_textbox.configure(fg_color=original_bg))
+            
+        except Exception as e:
+            # Silently handle any errors to avoid breaking the application
+            # This could happen if the widget is destroyed or not properly initialized
+            pass
+
+    def reset_log_background_to_theme(self):
+        """
+        Reset the log textbox background to the appropriate theme color.
+        This can be called externally if needed to fix background color issues.
+        """
+        if hasattr(self, 'log_textbox') and self.log_textbox is not None:
+            try:
+                theme_bg = self._get_theme_appropriate_background()
+                self.log_textbox.configure(fg_color=theme_bg)
+            except Exception:
+                # Silently handle any errors
+                pass
+    
+    def _update_log_display(self):
+        """Update the log display with all buffered messages."""
+        if not self.log_buffer:
+            return
+            
+        self.log_textbox.configure(state="normal")
+        
+        for message in self.log_buffer:
+            # Determine message type
+            if message.startswith("APP:"):
+                tag = "APP"
+                prefix_len = 4
+            elif message.startswith("DEV:"):
+                tag = "DEV"
+                prefix_len = 4
+            elif message.startswith("INFO:"):
+                tag = "INFO"
+                prefix_len = 5
+            elif message.startswith("ERROR:"):
+                tag = "ERROR"
+                prefix_len = 6
+            elif message.startswith("WARNING:"):
+                tag = "WARNING"
+                prefix_len = 8
+            elif message.startswith("DEBUG:"):
+                tag = "DEBUG"
+                prefix_len = 6
+            else:
+                tag = "SYSTEM"
+                prefix_len = 0
+            
+            # Format the message with a clear prefix
+            if prefix_len > 0:
+                formatted_prefix = f"[{tag}] "
+                formatted_message = formatted_prefix + message[prefix_len:]
+            else:
+                formatted_prefix = "[SYSTEM] "
+                formatted_message = formatted_prefix + message
+            
+            # Insert the message with a newline
+            self.log_textbox.insert("end", formatted_message + "\n")
+        
+        # Clear the buffer
+        self.log_buffer = []
+        
+        # Update the last update time
+        self.last_log_update = time.time() * 1000
+        
+        # Check if we need to trim the log for performance
+        self._trim_log_if_needed()
+        
+        self.log_textbox.configure(state="disabled")
+        self.log_textbox.see("end")
+    
+    def _trim_log_if_needed(self):
+        """
+        Trim the log text if it gets too large to maintain performance.
+        This keeps the most recent entries and removes older ones.
+        """
+        # Get the current number of lines
+        num_lines = int(self.log_textbox.index('end-1c').split('.')[0])
+        
+        # If we have more than MAX_LOG_ENTRIES lines, trim the log
+        if num_lines > self.MAX_LOG_ENTRIES:
+            # Calculate how many lines to remove
+            lines_to_remove = num_lines - self.MAX_LOG_ENTRIES
+            
+            # Delete the oldest lines
+            self.log_textbox.delete("1.0", f"{lines_to_remove + 1}.0")
+            
+            # Add a note that older entries were removed
+            self.log_textbox.insert("1.0", f"[INFO] Older log entries were removed to maintain performance.\n")
+
+    def clear_log(self):
+        """Clears the log text area."""
+        self.log_textbox.configure(state="normal")
+        self.log_textbox.delete("1.0", "end")
+        self.log_textbox.configure(state="disabled")
+        self.log_entries.clear()
+        self.log_buffer = []
+
+    def copy_log(self):
+        """Copies the entire log content to the clipboard."""
+        log_content = self.log_textbox.get("1.0", "end-1c")
+        if log_content:
+            pyperclip.copy(log_content)
+            # Show feedback that log was copied
+            self.log_message("INFO: Log copied to clipboard\n")
+
+    def export_log(self):
+        """Exports the log content to a text file with proper formatting."""
+        # Get the log content
+        log_content = self.log_textbox.get("1.0", "end-1c")
+        if not log_content:
+            self.log_message("WARNING: No log content to export\n")
+            return
+        
+        # Format the log content with timestamps and categorization
+        formatted_log = self.format_log_for_export(log_content)
+        
+        # Open file dialog to select save location
+        default_filename = f"LT32Pro_Log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("Log files", "*.log"), ("All files", "*.*")],
+            title=self.i18n.get("export_log"),
+            initialfile=default_filename
+        )
+        
+        if not file_path:
+            return  # User cancelled the dialog
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # Add header with export date and time
+                current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"LT32Pro Device Configurator - Log Export\n")
+                f.write(f"Export Date: {current_time}\n")
+                
+                # Add device information if available
+                if hasattr(self.serial_service, 'device_info'):
+                    if self.serial_service.device_info.get('imei'):
+                        f.write(f"Device IMEI: {self.serial_service.device_info['imei']}\n")
+                    if self.serial_service.device_info.get('iccid'):
+                        f.write(f"Device ICCID: {self.serial_service.device_info['iccid']}\n")
+                
+                f.write("-" * 50 + "\n\n")
+                
+                # Write the formatted log content
+                f.write(formatted_log)
+            
+            # Log success message
+            self.log_message(f"INFO: Log exported successfully to {os.path.basename(file_path)}\n")
+            
+            # Try to open the containing folder to show the user where the file was saved
+            try:
+                if os.name == 'nt':  # Windows
+                    os.startfile(os.path.dirname(file_path))
+                else:
+                    import subprocess
+                    subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
+            except Exception:
+                # Silently ignore if we can't open the folder
+                pass
+                
+        except Exception as e:
+            # Log error message
+            self.log_message(f"ERROR: Failed to export log: {str(e)}\n")
+
+    def format_log_for_export(self, log_content):
+        """
+        Format the log content for export with timestamps and clear categorization.
+        
+        Args:
+            log_content: The raw log content from the text box
+            
+        Returns:
+            Formatted log content with timestamps and categorization
+        """
+        lines = log_content.split('\n')
+        formatted_lines = []
+        
+        # Use the actual log entries with their timestamps if available

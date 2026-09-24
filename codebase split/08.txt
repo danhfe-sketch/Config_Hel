@@ -1,0 +1,4329 @@
+from datetime import datetime
+from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass, asdict
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+from components.apn_validation_component import APNValidationComponent, ValidationResult
+from services.apn_security_service import APNSecurityService, SecurityContext, SecurityLevel, AuditAction
+
+
+@dataclass
+class APNConfiguration:
+    """Data class representing an APN configuration"""
+    id: str
+    apn: str
+    username: str
+    password: str
+    carrier_name: str
+    country: str
+    created_date: str
+    last_used: str
+    success_count: int
+    description: str = ""
+    is_favorite: bool = False
+
+
+class APNConfigurationManager:
+    """Manages APN configurations with encrypted storage and suggestions"""
+    
+    CONFIG_FILE = "apn_configurations.json"
+    ENCRYPTION_KEY_FILE = "apn_key.key"
+    
+    def __init__(self):
+        """Initialize the APN Configuration Manager"""
+        self.validator = APNValidationComponent()
+        self.security_service = APNSecurityService()
+        self.configurations = []
+        self.encryption_key = self._get_or_create_encryption_key()
+        self._load_configurations()
+    
+    def save_successful_configuration(self, apn: str, username: str = "", password: str = "", 
+                                    carrier_name: str = "", country: str = "", 
+                                    description: str = "", security_context: Optional[SecurityContext] = None) -> bool:
+        """
+        Save a successful APN configuration for future use with security audit logging
+        
+        Args:
+            apn: APN name/address
+            username: Optional username
+            password: Optional password
+            carrier_name: Optional carrier name
+            country: Optional country
+            description: Optional description
+            security_context: Security context for audit logging
+            
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        # Create default security context if not provided
+        if security_context is None:
+            security_context = SecurityContext(
+                user_id="system",
+                session_id="config_save",
+                ip_address="127.0.0.1",
+                user_agent="APNConfigManager",
+                timestamp=datetime.now(),
+                security_level=SecurityLevel.MEDIUM,
+                permissions=[]
+            )
+        
+        # Security: Input sanitization
+        apn_sanitized, apn_issues = self.security_service.sanitize_apn_input(apn, "apn")
+        username_sanitized, user_issues = self.security_service.sanitize_apn_input(username, "username")
+        password_sanitized, pass_issues = self.security_service.sanitize_apn_input(password, "password")
+        
+        # Log sanitization issues if any
+        all_issues = apn_issues + user_issues + pass_issues
+        if all_issues:
+            self.security_service.audit_log(
+                AuditAction.SECURITY_VIOLATION,
+                security_context,
+                "configuration_sanitization",
+                "apn_config",
+                {"sanitization_issues": all_issues},
+                True,
+                f"Input sanitization applied during config save: {', '.join(all_issues)}"
+            )
+        # Validate configuration before saving (use sanitized values)
+        validation_result = self.validator.validate_apn_configuration(apn_sanitized, username_sanitized, password_sanitized)
+        if not validation_result.is_valid:
+            # Security audit: Log failed configuration save attempt
+            self.security_service.audit_log(
+                AuditAction.CONFIGURATION_CREATE,
+                security_context,
+                "apn_configuration",
+                f"apn:{apn_sanitized}",
+                {"validation_error": validation_result.error_message},
+                False,
+                f"Cannot save invalid APN configuration: {validation_result.error_message}"
+            )
+            print(f"Cannot save invalid APN configuration: {validation_result.error_message}")
+            return False
+        
+        # Check if configuration already exists (use sanitized values)
+        existing_config = self._find_existing_configuration(apn_sanitized, username_sanitized)
+        if existing_config:
+            # Update existing configuration
+            existing_config.last_used = datetime.now().isoformat()
+            existing_config.success_count += 1
+            if description:
+                existing_config.description = description
+            if carrier_name:
+                existing_config.carrier_name = carrier_name
+            if country:
+                existing_config.country = country
+            
+            # Security audit: Log configuration update
+            self.security_service.audit_log(
+                AuditAction.CONFIGURATION_UPDATE,
+                security_context,
+                "apn_configuration",
+                existing_config.id,
+                {"success_count": existing_config.success_count},
+                True,
+                f"Updated existing APN configuration: {existing_config.id}"
+            )
+        else:
+            # Create new configuration (use sanitized values)
+            config_id = self._generate_config_id(apn_sanitized, username_sanitized)
+            new_config = APNConfiguration(
+                id=config_id,
+                apn=apn_sanitized,
+                username=username_sanitized,
+                password=password_sanitized,
+                carrier_name=carrier_name or self._detect_carrier(apn_sanitized),
+                country=country or self._detect_country(apn_sanitized),
+                created_date=datetime.now().isoformat(),
+                last_used=datetime.now().isoformat(),
+                success_count=1,
+                description=description
+            )
+            self.configurations.append(new_config)
+            
+            # Security audit: Log new configuration creation
+            self.security_service.audit_log(
+                AuditAction.CONFIGURATION_CREATE,
+                security_context,
+                "apn_configuration",
+                config_id,
+                {"apn": apn_sanitized, "carrier": new_config.carrier_name},
+                True,
+                f"Created new APN configuration: {config_id}"
+            )
+        
+        return self._save_configurations()
+    
+    def get_saved_configurations(self) -> List[APNConfiguration]:
+        """
+        Get all saved APN configurations
+        
+        Returns:
+            List of APNConfiguration objects
+        """
+        # Sort by success count and last used date
+        sorted_configs = sorted(
+            self.configurations,
+            key=lambda x: (x.is_favorite, x.success_count, x.last_used),
+            reverse=True
+        )
+        return sorted_configs
+    
+    def suggest_configurations(self, partial_input: str) -> List[APNConfiguration]:
+        """
+        Suggest APN configurations based on partial input
+        
+        Args:
+            partial_input: Partial APN input from user
+            
+        Returns:
+            List of matching APNConfiguration objects
+        """
+        if not partial_input:
+            # Return most successful configurations
+            return self.get_saved_configurations()[:5]
+        
+        partial_lower = partial_input.lower()
+        suggestions = []
+        
+        # Find configurations that match the partial input
+        for config in self.configurations:
+            score = 0
+            
+            # Exact match gets highest score
+            if config.apn.lower() == partial_lower:
+                score = 100
+            # Starts with partial input
+            elif config.apn.lower().startswith(partial_lower):
+                score = 80
+            # Contains partial input
+            elif partial_lower in config.apn.lower():
+                score = 60
+            # Carrier name matches
+            elif partial_lower in config.carrier_name.lower():
+                score = 40
+            # Description matches
+            elif partial_lower in config.description.lower():
+                score = 20
+            
+            if score > 0:
+                # Boost score based on success count and favorites
+                if config.is_favorite:
+                    score += 20
+                score += min(config.success_count * 2, 20)  # Max 20 points from success count
+                
+                suggestions.append((score, config))
+        
+        # Sort by score and return top suggestions
+        suggestions.sort(key=lambda x: x[0], reverse=True)
+        return [config for score, config in suggestions[:10]]
+    
+    def delete_configuration(self, config_id: str) -> bool:
+        """
+        Delete a saved APN configuration
+        
+        Args:
+            config_id: ID of configuration to delete
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        original_count = len(self.configurations)
+        self.configurations = [config for config in self.configurations if config.id != config_id]
+        
+        if len(self.configurations) < original_count:
+            return self._save_configurations()
+        
+        return False
+    
+    def update_configuration(self, config_id: str, **kwargs) -> bool:
+        """
+        Update an existing APN configuration
+        
+        Args:
+            config_id: ID of configuration to update
+            **kwargs: Fields to update
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        config = self._find_configuration_by_id(config_id)
+        if not config:
+            return False
+        
+        # Update allowed fields
+        allowed_fields = ['apn', 'username', 'password', 'carrier_name', 'country', 
+                         'description', 'is_favorite']
+        
+        for field, value in kwargs.items():
+            if field in allowed_fields:
+                setattr(config, field, value)
+        
+        # Validate if APN-related fields were updated
+        if any(field in kwargs for field in ['apn', 'username', 'password']):
+            validation_result = self.validator.validate_apn_configuration(
+                config.apn, config.username, config.password
+            )
+            if not validation_result.is_valid:
+                print(f"Cannot update to invalid APN configuration: {validation_result.error_message}")
+                return False
+        
+        return self._save_configurations()
+    
+    def get_configuration_by_id(self, config_id: str) -> Optional[APNConfiguration]:
+        """
+        Get a specific configuration by ID
+        
+        Args:
+            config_id: Configuration ID
+            
+        Returns:
+            APNConfiguration object or None if not found
+        """
+        return self._find_configuration_by_id(config_id)
+    
+    def get_carrier_configurations(self, carrier_name: str) -> List[APNConfiguration]:
+        """
+        Get all configurations for a specific carrier
+        
+        Args:
+            carrier_name: Name of the carrier
+            
+        Returns:
+            List of APNConfiguration objects for the carrier
+        """
+        carrier_lower = carrier_name.lower()
+        return [
+            config for config in self.configurations
+            if carrier_lower in config.carrier_name.lower()
+        ]
+    
+    def get_usage_statistics(self) -> Dict[str, any]:
+        """
+        Get usage statistics for saved configurations
+        
+        Returns:
+            Dictionary with usage statistics
+        """
+        if not self.configurations:
+            return {
+                'total_configurations': 0,
+                'most_used_carrier': 'None',
+                'average_success_count': 0,
+                'favorite_count': 0
+            }
+        
+        # Calculate statistics
+        total_configs = len(self.configurations)
+        carrier_counts = {}
+        total_success = 0
+        favorite_count = 0
+        
+        for config in self.configurations:
+            # Count carriers
+            carrier = config.carrier_name or 'Unknown'
+            carrier_counts[carrier] = carrier_counts.get(carrier, 0) + 1
+            
+            # Sum success counts
+            total_success += config.success_count
+            
+            # Count favorites
+            if config.is_favorite:
+                favorite_count += 1
+        
+        most_used_carrier = max(carrier_counts.items(), key=lambda x: x[1])[0] if carrier_counts else 'None'
+        average_success = total_success / total_configs if total_configs > 0 else 0
+        
+        return {
+            'total_configurations': total_configs,
+            'most_used_carrier': most_used_carrier,
+            'average_success_count': round(average_success, 1),
+            'favorite_count': favorite_count,
+            'carrier_distribution': carrier_counts
+        }
+    
+    def export_configurations(self, file_path: str, include_passwords: bool = False) -> bool:
+        """
+        Export configurations to a file
+        
+        Args:
+            file_path: Path to export file
+            include_passwords: Whether to include encrypted passwords
+            
+        Returns:
+            True if exported successfully, False otherwise
+        """
+        try:
+            export_data = {
+                'export_date': datetime.now().isoformat(),
+                'version': '1.0',
+                'configurations': []
+            }
+            
+            for config in self.configurations:
+                config_dict = asdict(config)
+                if not include_passwords:
+                    config_dict['password'] = ''  # Remove password for security
+                    config_dict['username'] = ''  # Also remove username to maintain consistency
+                export_data['configurations'].append(config_dict)
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            return True
+        except Exception as e:
+            print(f"Error exporting configurations: {e}")
+            return False
+    
+    def import_configurations(self, file_path: str, merge: bool = True) -> Tuple[bool, str]:
+        """
+        Import configurations from a file
+        
+        Args:
+            file_path: Path to import file
+            merge: Whether to merge with existing configurations or replace
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                import_data = json.load(f)
+            
+            if 'configurations' not in import_data:
+                return False, "Invalid import file format"
+            
+            imported_count = 0
+            skipped_count = 0
+            
+            if not merge:
+                self.configurations = []
+            
+            for config_data in import_data['configurations']:
+                try:
+                    # Validate required fields
+                    if not all(field in config_data for field in ['id', 'apn']):
+                        skipped_count += 1
+                        continue
+                    
+                    # Check if configuration already exists (when merging)
+                    if merge and self._find_configuration_by_id(config_data['id']):
+                        skipped_count += 1
+                        continue
+                    
+                    # Create configuration object
+                    config = APNConfiguration(**config_data)
+                    
+                    # Validate APN configuration (allow empty passwords for imported configs)
+                    validation_result = self.validator.validate_apn_configuration(
+                        config.apn, config.username, config.password
+                    )
+                    if not validation_result.is_valid:
+                        # Try validation without password in case it was exported without passwords
+                        if config.password == "":
+                            validation_result = self.validator.validate_apn_configuration(
+                                config.apn, config.username, ""
+                            )
+                        if not validation_result.is_valid:
+                            print(f"Skipping invalid configuration: {config.apn} - {validation_result.error_message}")
+                            skipped_count += 1
+                            continue
+                    
+                    self.configurations.append(config)
+                    imported_count += 1
+                    
+                except Exception as e:
+                    print(f"Error importing configuration: {e}")
+                    skipped_count += 1
+            
+            if imported_count > 0:
+                self._save_configurations()
+            
+            message = f"Imported {imported_count} configurations"
+            if skipped_count > 0:
+                message += f", skipped {skipped_count} invalid/duplicate configurations"
+            
+            return True, message
+            
+        except Exception as e:
+            return False, f"Error importing configurations: {e}"
+    
+    def _get_or_create_encryption_key(self) -> bytes:
+        """
+        Get or create encryption key for password storage
+        
+        Returns:
+            Encryption key bytes
+        """
+        key_path = self._get_key_file_path()
+        
+        if os.path.exists(key_path):
+            try:
+                with open(key_path, 'rb') as f:
+                    return f.read()
+            except Exception as e:
+                print(f"Error reading encryption key: {e}")
+        
+        # Generate new key
+        try:
+            # Use a simple key derivation for demo purposes
+            # In production, you might want to use user-specific data
+            password = b"lt32pro_apn_config_key_v1"
+            salt = b"lt32pro_salt_2024"
+            
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(password))
+            
+            # Save key to file
+            key_dir = os.path.dirname(key_path)
+            if key_dir and not os.path.exists(key_dir):
+                os.makedirs(key_dir, exist_ok=True)
+            
+            with open(key_path, 'wb') as f:
+                f.write(key)
+            
+            return key
+            
+        except Exception as e:
+            print(f"Error creating encryption key: {e}")
+            # Fallback to a simple key (not secure, but functional)
+            fallback_key = base64.urlsafe_b64encode(b"fallback_key_lt32pro_apn_mgr_2024")
+            
+            # Try to save fallback key
+            try:
+                key_dir = os.path.dirname(key_path)
+                if key_dir and not os.path.exists(key_dir):
+                    os.makedirs(key_dir, exist_ok=True)
+                with open(key_path, 'wb') as f:
+                    f.write(fallback_key)
+            except:
+                pass  # Ignore save errors for fallback
+            
+            return fallback_key
+    
+    def _encrypt_password(self, password: str) -> str:
+        """
+        Encrypt password for storage
+        
+        Args:
+            password: Plain text password
+            
+        Returns:
+            Encrypted password string
+        """
+        if not password:
+            return ""
+        
+        try:
+            fernet = Fernet(self.encryption_key)
+            encrypted = fernet.encrypt(password.encode('utf-8'))
+            return base64.urlsafe_b64encode(encrypted).decode('utf-8')
+        except Exception as e:
+            print(f"Error encrypting password: {e}")
+            return password  # Return plain text as fallback (not secure)
+    
+    def _decrypt_password(self, encrypted_password: str) -> str:
+        """
+        Decrypt password from storage
+        
+        Args:
+            encrypted_password: Encrypted password string
+            
+        Returns:
+            Plain text password
+        """
+        if not encrypted_password:
+            return ""
+        
+        try:
+            fernet = Fernet(self.encryption_key)
+            encrypted_bytes = base64.urlsafe_b64decode(encrypted_password.encode('utf-8'))
+            decrypted = fernet.decrypt(encrypted_bytes)
+            return decrypted.decode('utf-8')
+        except Exception as e:
+            print(f"Error decrypting password: {e}")
+            return encrypted_password  # Return as-is if decryption fails
+    
+    def _load_configurations(self) -> None:
+        """Load configurations from file"""
+        try:
+            config_path = self._get_config_file_path()
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                self.configurations = []
+                for config_data in data.get('configurations', []):
+                    try:
+                        # Decrypt password if present
+                        if config_data.get('password'):
+                            config_data['password'] = self._decrypt_password(config_data['password'])
+                        
+                        config = APNConfiguration(**config_data)
+                        self.configurations.append(config)
+                    except Exception as e:
+                        print(f"Error loading configuration: {e}")
+                        continue
+                
+                print(f"Loaded {len(self.configurations)} APN configurations")
+            else:
+                self.configurations = []
+                
+        except Exception as e:
+            print(f"Error loading APN configurations: {e}")
+            self.configurations = []
+    
+    def _save_configurations(self) -> bool:
+        """Save configurations to file"""
+        try:
+            config_path = self._get_config_file_path()
+            config_dir = os.path.dirname(config_path)
+            
+            # Ensure directory exists
+            if config_dir and not os.path.exists(config_dir):
+                os.makedirs(config_dir, exist_ok=True)
+            
+            # Prepare data for saving
+            save_data = {
+                'version': '1.0',
+                'last_updated': datetime.now().isoformat(),
+                'configurations': []
+            }
+            
+            for config in self.configurations:
+                config_dict = asdict(config)
+                # Encrypt password before saving
+                if config_dict.get('password'):
+                    config_dict['password'] = self._encrypt_password(config_dict['password'])
+                save_data['configurations'].append(config_dict)
+            
+            # Save to file
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"Saved {len(self.configurations)} APN configurations to {config_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Error saving APN configurations: {e}")
+            return False
+    
+    def _get_config_file_path(self) -> str:
+        """Get the path to the configuration file"""
+        try:
+            # Use same pattern as AppConfigService
+            user_home = os.path.expanduser("~")
+            app_config_dir = os.path.join(user_home, ".lt32pro_config")
+            
+            # Test if we can write to this directory
+            if not os.path.exists(app_config_dir):
+                try:
+                    os.makedirs(app_config_dir, exist_ok=True)
+                    # Test write access
+                    test_file = os.path.join(app_config_dir, "test_write.tmp")
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                    return os.path.join(app_config_dir, self.CONFIG_FILE)
+                except (PermissionError, OSError):
+                    pass
+            else:
+                # Directory exists, test write access
+                try:
+                    test_file = os.path.join(app_config_dir, "test_write.tmp")
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                    return os.path.join(app_config_dir, self.CONFIG_FILE)
+                except (PermissionError, OSError):
+                    pass
+            
+            # Fall back to application directory
+            base_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+            return os.path.join(base_dir, self.CONFIG_FILE)
+            
+        except Exception as e:
+            print(f"Error determining config path: {e}")
+            return self.CONFIG_FILE
+    
+    def _get_key_file_path(self) -> str:
+        """Get the path to the encryption key file"""
+        config_path = self._get_config_file_path()
+        config_dir = os.path.dirname(config_path)
+        return os.path.join(config_dir, self.ENCRYPTION_KEY_FILE)
+    
+    def _generate_config_id(self, apn: str, username: str) -> str:
+        """
+        Generate unique ID for configuration
+        
+        Args:
+            apn: APN name
+            username: Username
+            
+        Returns:
+            Unique configuration ID
+        """
+        # Create hash from APN and username
+        content = f"{apn}|{username}|{datetime.now().isoformat()}"
+        hash_object = hashlib.md5(content.encode())
+        return hash_object.hexdigest()[:12]  # Use first 12 characters
+    
+    def _find_existing_configuration(self, apn: str, username: str) -> Optional[APNConfiguration]:
+        """
+        Find existing configuration with same APN and username
+        
+        Args:
+            apn: APN name
+            username: Username
+            
+        Returns:
+            Existing APNConfiguration or None
+        """
+        for config in self.configurations:
+            if config.apn.lower() == apn.lower() and config.username.lower() == username.lower():
+                return config
+        return None
+    
+    def _find_configuration_by_id(self, config_id: str) -> Optional[APNConfiguration]:
+        """
+        Find configuration by ID
+        
+        Args:
+            config_id: Configuration ID
+            
+        Returns:
+            APNConfiguration or None
+        """
+        for config in self.configurations:
+            if config.id == config_id:
+                return config
+        return None
+    
+    def _detect_carrier(self, apn: str) -> str:
+        """
+        Detect carrier name from APN
+        
+        Args:
+            apn: APN name
+            
+        Returns:
+            Detected carrier name or 'Unknown'
+        """
+        apn_lower = apn.lower()
+        
+        # Brazilian carriers
+        if 'vivo' in apn_lower:
+            return 'Vivo'
+        elif 'tim' in apn_lower:
+            return 'TIM'
+        elif 'claro' in apn_lower:
+            return 'Claro'
+        elif 'oi' in apn_lower:
+            return 'Oi'
+        elif 'allcom' in apn_lower:
+            return 'Allcom'
+        
+        # International carriers
+        elif 'att' in apn_lower or 'cingular' in apn_lower:
+            return 'AT&T'
+        elif 'verizon' in apn_lower or 'vzw' in apn_lower:
+            return 'Verizon'
+        elif 'tmobile' in apn_lower or 't-mobile' in apn_lower:
+            return 'T-Mobile'
+        elif 'vodafone' in apn_lower:
+            return 'Vodafone'
+        elif 'orange' in apn_lower:
+            return 'Orange'
+        elif 'three' in apn_lower:
+            return 'Three'
+        
+        return 'Unknown'
+    
+    def _detect_country(self, apn: str) -> str:
+        """
+        Detect country from APN
+        
+        Args:
+            apn: APN name
+            
+        Returns:
+            Detected country or 'Unknown'
+        """
+        apn_lower = apn.lower()
+        
+        # Country detection based on TLD or carrier
+        if '.br' in apn_lower or any(carrier in apn_lower for carrier in ['vivo', 'tim', 'claro', 'oi', 'allcom']):
+            return 'Brazil'
+        elif '.com' in apn_lower and any(carrier in apn_lower for carrier in ['att', 'verizon', 'tmobile']):
+            return 'United States'
+        elif '.co.uk' in apn_lower or 'three.co.uk' in apn_lower:
+            return 'United Kingdom'
+        elif '.fr' in apn_lower:
+            return 'France'
+        elif 'vodafone' in apn_lower:
+            return 'Multiple'  # Vodafone operates in many countries
+        
+        return 'Unknown'
+</document_content>
+</document>
+<document index="30">
+<source>.\services\apn_security_service.py</source>
+<document_content>
+"""
+APN Security Service
+
+This service provides comprehensive security enhancements for APN validation including:
+- Input sanitization to prevent injection attacks through APN fields
+- Audit logging for all APN configuration access and modifications
+- Validation integrity checks to prevent tampering with validation rules
+- Rate limiting for validation attempts to prevent abuse
+- Secure validation bypass controls with proper authorization
+"""
+
+import re
+import time
+import hashlib
+import hmac
+import logging
+import json
+import threading
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass, asdict
+from collections import defaultdict, deque
+from functools import wraps
+from enum import Enum
+
+
+class SecurityLevel(Enum):
+    """Security levels for different operations"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class AuditAction(Enum):
+    """Types of actions that can be audited"""
+    VALIDATION_ATTEMPT = "validation_attempt"
+    CONFIGURATION_ACCESS = "configuration_access"
+    CONFIGURATION_CREATE = "configuration_create"
+    CONFIGURATION_UPDATE = "configuration_update"
+    CONFIGURATION_DELETE = "configuration_delete"
+    VALIDATION_BYPASS = "validation_bypass"
+    SECURITY_VIOLATION = "security_violation"
+    RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
+
+
+@dataclass
+class SecurityContext:
+    """Security context for operations"""
+    user_id: str
+    session_id: str
+    ip_address: str
+    user_agent: str
+    timestamp: datetime
+    security_level: SecurityLevel
+    permissions: List[str]
+
+
+@dataclass
+class AuditLogEntry:
+    """Audit log entry for security events"""
+    timestamp: datetime
+    action: AuditAction
+    user_id: str
+    session_id: str
+    ip_address: str
+    resource_type: str
+    resource_id: str
+    details: Dict[str, Any]
+    security_level: SecurityLevel
+    success: bool
+    error_message: str = ""
+
+
+@dataclass
+class RateLimitConfig:
+    """Configuration for rate limiting"""
+    max_attempts: int
+    time_window_seconds: int
+    lockout_duration_seconds: int
+    progressive_delay: bool = True
+
+
+@dataclass
+class ValidationIntegrityCheck:
+    """Integrity check for validation rules"""
+    rule_name: str
+    rule_hash: str
+    last_verified: datetime
+    verification_count: int
+    tamper_detected: bool = False
+
+
+class APNSecurityService:
+    """Comprehensive security service for APN validation and configuration"""
+    
+    def __init__(self, config_file: str = "apn_security_config.json"):
+        self.logger = logging.getLogger(__name__)
+        self.config_file = config_file
+        
+        # Security configuration
+        self.security_config = self._load_security_config()
+        
+        # Rate limiting storage
+        self._rate_limits: Dict[str, Dict[str, Any]] = defaultdict(dict)
+        self._rate_limit_lock = threading.RLock()
+        
+        # Audit logging
+        self._audit_log: deque = deque(maxlen=10000)  # Keep last 10k entries in memory
+        self._audit_lock = threading.Lock()
+        
+        # Validation integrity
+        self._validation_rules_hash: Dict[str, str] = {}
+        self._integrity_checks: Dict[str, ValidationIntegrityCheck] = {}
+        self._integrity_lock = threading.Lock()
+        
+        # Security bypass controls
+        self._bypass_tokens: Dict[str, Dict[str, Any]] = {}
+        self._bypass_lock = threading.Lock()
+        
+        # Input sanitization patterns
+        self._init_sanitization_patterns()
+        
+        # Initialize security components
+        self._init_rate_limiting()
+        self._init_audit_logging()
+        self._init_integrity_checks()
+    
+    def sanitize_apn_input(self, input_value: str, field_type: str = "apn") -> Tuple[str, List[str]]:
+        """
+        Comprehensive input sanitization to prevent injection attacks
+        
+        Args:
+            input_value: Raw input value to sanitize
+            field_type: Type of field (apn, username, password, etc.)
+            
+        Returns:
+            Tuple of (sanitized_value, list_of_issues_found)
+        """
+        if not input_value:
+            return "", []
+        
+        issues_found = []
+        sanitized = input_value
+        
+        # Remove null bytes and control characters
+        if '\x00' in sanitized:
+            sanitized = sanitized.replace('\x00', '')
+            issues_found.append("Removed null bytes")
+        
+        # Remove other control characters except allowed ones
+        control_chars = ''.join(chr(i) for i in range(32) if i not in [9, 10, 13])  # Keep tab, LF, CR
+        for char in control_chars:
+            if char in sanitized:
+                sanitized = sanitized.replace(char, '')
+                issues_found.append(f"Removed control character: {repr(char)}")
+        
+        # Field-specific sanitization
+        if field_type == "apn":
+            sanitized, apn_issues = self._sanitize_apn_field(sanitized)
+            issues_found.extend(apn_issues)
+        elif field_type in ["username", "password"]:
+            sanitized, cred_issues = self._sanitize_credential_field(sanitized)
+            issues_found.extend(cred_issues)
+        
+        # Check for potential injection patterns
+        injection_issues = self._detect_injection_patterns(sanitized)
+        issues_found.extend(injection_issues)
+        
+        # Length validation
+        max_lengths = {
+            "apn": 253,
+            "username": 64,
+            "password": 64
+        }
+        
+        max_length = max_lengths.get(field_type, 255)
+        if len(sanitized) > max_length:
+            sanitized = sanitized[:max_length]
+            issues_found.append(f"Truncated to {max_length} characters")
+        
+        return sanitized, issues_found
+    
+    def audit_log(self, action: AuditAction, security_context: SecurityContext, 
+                  resource_type: str, resource_id: str, details: Dict[str, Any], 
+                  success: bool, error_message: str = "") -> None:
+        """
+        Add entry to audit log for security monitoring
+        
+        Args:
+            action: Type of action being audited
+            security_context: Security context of the operation
+            resource_type: Type of resource being accessed
+            resource_id: ID of the resource
+            details: Additional details about the operation
+            success: Whether the operation was successful
+            error_message: Error message if operation failed
+        """
+        # Sanitize sensitive data in details
+        sanitized_details = self._sanitize_audit_details(details)
+        
+        entry = AuditLogEntry(
+            timestamp=datetime.now(),
+            action=action,
+            user_id=security_context.user_id,
+            session_id=security_context.session_id,
+            ip_address=security_context.ip_address,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            details=sanitized_details,
+            security_level=security_context.security_level,
+            success=success,
+            error_message=error_message
+        )
+        
+        with self._audit_lock:
+            self._audit_log.append(entry)
+        
+        # Log to file for persistence
+        self._write_audit_log_entry(entry)
+        
+        # Check for security violations
+        self._analyze_security_patterns(entry)
+    
+    def check_rate_limit(self, identifier: str, operation: str, 
+                        security_context: SecurityContext) -> Tuple[bool, Optional[str]]:
+        """
+        Check if operation is within rate limits
+        
+        Args:
+            identifier: Unique identifier for rate limiting (IP, user, etc.)
+            operation: Type of operation being rate limited
+            security_context: Security context of the operation
+            
+        Returns:
+            Tuple of (is_allowed, error_message)
+        """
+        config = self.security_config.get("rate_limits", {}).get(operation)
+        if not config:
+            return True, None  # No rate limit configured
+        
+        rate_config = RateLimitConfig(**config)
+        current_time = time.time()
+        
+        with self._rate_limit_lock:
+            # Get or create rate limit data for this identifier
+            if identifier not in self._rate_limits:
+                self._rate_limits[identifier] = {}
+            
+            if operation not in self._rate_limits[identifier]:
+                self._rate_limits[identifier][operation] = {
+                    "attempts": [],
+                    "locked_until": 0,
+                    "consecutive_violations": 0
+                }
+            
+            rate_data = self._rate_limits[identifier][operation]
+            
+            # Check if currently locked out
+            if current_time < rate_data["locked_until"]:
+                remaining_lockout = int(rate_data["locked_until"] - current_time)
+                self.audit_log(
+                    AuditAction.RATE_LIMIT_EXCEEDED,
+                    security_context,
+                    "rate_limit",
+                    f"{identifier}:{operation}",
+                    {"remaining_lockout_seconds": remaining_lockout},
+                    False,
+                    f"Rate limit lockout active for {remaining_lockout} seconds"
+                )
+                return False, f"Rate limit exceeded. Try again in {remaining_lockout} seconds."
+            
+            # Clean old attempts outside the time window
+            cutoff_time = current_time - rate_config.time_window_seconds
+            rate_data["attempts"] = [t for t in rate_data["attempts"] if t > cutoff_time]
+            
+            # Check if within rate limit
+            if len(rate_data["attempts"]) >= rate_config.max_attempts:
+                # Rate limit exceeded
+                rate_data["consecutive_violations"] += 1
+                
+                # Calculate lockout duration (progressive if enabled)
+                lockout_duration = rate_config.lockout_duration_seconds
+                if rate_config.progressive_delay:
+                    lockout_duration *= (2 ** min(rate_data["consecutive_violations"] - 1, 5))  # Max 32x
+                
+                rate_data["locked_until"] = current_time + lockout_duration
+                
+                self.audit_log(
+                    AuditAction.RATE_LIMIT_EXCEEDED,
+                    security_context,
+                    "rate_limit",
+                    f"{identifier}:{operation}",
+                    {
+                        "attempts_in_window": len(rate_data["attempts"]),
+                        "max_attempts": rate_config.max_attempts,
+                        "lockout_duration": lockout_duration,
+                        "consecutive_violations": rate_data["consecutive_violations"]
+                    },
+                    False,
+                    f"Rate limit exceeded: {len(rate_data['attempts'])} attempts in {rate_config.time_window_seconds} seconds"
+                )
+                
+                return False, f"Rate limit exceeded. Locked out for {lockout_duration} seconds."
+            
+            # Within rate limit, record this attempt
+            rate_data["attempts"].append(current_time)
+            rate_data["consecutive_violations"] = 0  # Reset on successful check
+            
+            return True, None
+    
+    def verify_validation_integrity(self, validation_rules: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """
+        Verify integrity of validation rules to prevent tampering
+        
+        Args:
+            validation_rules: Current validation rules to verify
+            
+        Returns:
+            Tuple of (integrity_ok, list_of_issues)
+        """
+        issues = []
+        
+        with self._integrity_lock:
+            for rule_name, rule_data in validation_rules.items():
+                # Calculate current hash of the rule
+                rule_json = json.dumps(rule_data, sort_keys=True)
+                current_hash = hashlib.sha256(rule_json.encode()).hexdigest()
+                
+                # Check if we have a stored hash for this rule
+                if rule_name in self._validation_rules_hash:
+                    stored_hash = self._validation_rules_hash[rule_name]
+                    if current_hash != stored_hash:
+                        issues.append(f"Validation rule '{rule_name}' has been modified")
+                        
+                        # Update integrity check record
+                        if rule_name in self._integrity_checks:
+                            self._integrity_checks[rule_name].tamper_detected = True
+                        else:
+                            self._integrity_checks[rule_name] = ValidationIntegrityCheck(
+                                rule_name=rule_name,
+                                rule_hash=current_hash,
+                                last_verified=datetime.now(),
+                                verification_count=1,
+                                tamper_detected=True
+                            )
+                
+                # Update stored hash and verification record
+                self._validation_rules_hash[rule_name] = current_hash
+                
+                if rule_name in self._integrity_checks:
+                    check = self._integrity_checks[rule_name]
+                    check.rule_hash = current_hash
+                    check.last_verified = datetime.now()
+                    check.verification_count += 1
+                else:
+                    self._integrity_checks[rule_name] = ValidationIntegrityCheck(
+                        rule_name=rule_name,
+                        rule_hash=current_hash,
+                        last_verified=datetime.now(),
+                        verification_count=1
+                    )
+        
+        return len(issues) == 0, issues
+    
+    def create_bypass_token(self, security_context: SecurityContext, 
+                           operation: str, duration_minutes: int = 60) -> Optional[str]:
+        """
+        Create secure validation bypass token with proper authorization
+        
+        Args:
+            security_context: Security context requesting the bypass
+            operation: Operation that needs bypass
+            duration_minutes: How long the bypass token is valid
+            
+        Returns:
+            Bypass token string or None if not authorized
+        """
+        # Check if user has bypass permissions
+        if "validation_bypass" not in security_context.permissions:
+            self.audit_log(
+                AuditAction.SECURITY_VIOLATION,
+                security_context,
+                "bypass_token",
+                operation,
+                {"reason": "insufficient_permissions"},
+                False,
+                "User does not have validation bypass permissions"
+            )
+            return None
+        
+        # Check security level requirements
+        required_level = self.security_config.get("bypass_requirements", {}).get("min_security_level", "high")
+        if security_context.security_level.value != required_level and security_context.security_level != SecurityLevel.CRITICAL:
+            self.audit_log(
+                AuditAction.SECURITY_VIOLATION,
+                security_context,
+                "bypass_token",
+                operation,
+                {"reason": "insufficient_security_level", "required": required_level, "provided": security_context.security_level.value},
+                False,
+                f"Security level {security_context.security_level.value} insufficient for bypass (requires {required_level})"
+            )
+            return None
+        
+        # Generate secure token
+        token_data = {
+            "user_id": security_context.user_id,
+            "session_id": security_context.session_id,
+            "operation": operation,
+            "created": datetime.now().isoformat(),
+            "expires": (datetime.now() + timedelta(minutes=duration_minutes)).isoformat()
+        }
+        
+        token_json = json.dumps(token_data, sort_keys=True)
+        token_hash = hmac.new(
+            self.security_config.get("bypass_secret", "default_secret").encode(),
+            token_json.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        token = f"{token_hash}:{token_json}"
+        
+        with self._bypass_lock:
+            self._bypass_tokens[token_hash] = {
+                "token_data": token_data,
+                "created_by": security_context.user_id,
+                "used_count": 0,
+                "max_uses": self.security_config.get("bypass_requirements", {}).get("max_uses", 10)
+            }
+        
+        self.audit_log(
+            AuditAction.VALIDATION_BYPASS,
+            security_context,
+            "bypass_token",
+            operation,
+            {"token_hash": token_hash[:8], "duration_minutes": duration_minutes},
+            True,
+            "Bypass token created"
+        )
+        
+        return token
+    
+    def validate_bypass_token(self, token: str, operation: str, 
+                             security_context: SecurityContext) -> Tuple[bool, str]:
+        """
+        Validate bypass token for secure validation bypass
+        
+        Args:
+            token: Bypass token to validate
+            operation: Operation requesting bypass
+            security_context: Current security context
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not token:
+            return False, "No bypass token provided"
+        
+        try:
+            # Parse token
+            if ':' not in token:
+                return False, "Invalid token format"
+            
+            token_hash, token_json = token.split(':', 1)
+            token_data = json.loads(token_json)
+            
+            # Verify token signature
+            expected_hash = hmac.new(
+                self.security_config.get("bypass_secret", "default_secret").encode(),
+                token_json.encode(),
+                hashlib.sha256
+            ).hexdigest()
+            
+            if not hmac.compare_digest(token_hash, expected_hash):
+                self.audit_log(
+                    AuditAction.SECURITY_VIOLATION,
+                    security_context,
+                    "bypass_token",
+                    operation,
+                    {"reason": "invalid_signature", "token_hash": token_hash[:8]},
+                    False,
+                    "Invalid bypass token signature"
+                )
+                return False, "Invalid token signature"
+            
+            # Check if token exists in our records
+            with self._bypass_lock:
+                if token_hash not in self._bypass_tokens:
+                    return False, "Token not found or expired"
+                
+                stored_token = self._bypass_tokens[token_hash]
+                
+                # Check expiration
+                expires = datetime.fromisoformat(token_data["expires"])
+                if datetime.now() > expires:
+                    del self._bypass_tokens[token_hash]
+                    return False, "Token has expired"
+                
+                # Check operation match
+                if token_data["operation"] != operation:
+                    return False, f"Token is for operation '{token_data['operation']}', not '{operation}'"
+                
+                # Check usage limits
+                if stored_token["used_count"] >= stored_token["max_uses"]:
+                    return False, "Token usage limit exceeded"
+                
+                # Check user match (optional, for additional security)
+                if self.security_config.get("bypass_requirements", {}).get("strict_user_match", True):
+                    if token_data["user_id"] != security_context.user_id:
+                        return False, "Token user mismatch"
+                
+                # Token is valid, increment usage
+                stored_token["used_count"] += 1
+                
+                self.audit_log(
+                    AuditAction.VALIDATION_BYPASS,
+                    security_context,
+                    "bypass_token",
+                    operation,
+                    {
+                        "token_hash": token_hash[:8],
+                        "used_count": stored_token["used_count"],
+                        "max_uses": stored_token["max_uses"]
+                    },
+                    True,
+                    "Bypass token validated and used"
+                )
+                
+                return True, "Token validated successfully"
+        
+        except Exception as e:
+            self.audit_log(
+                AuditAction.SECURITY_VIOLATION,
+                security_context,
+                "bypass_token",
+                operation,
+                {"reason": "token_validation_error", "error": str(e)},
+                False,
+                f"Error validating bypass token: {e}"
+            )
+            return False, f"Token validation error: {e}"
+    
+    def get_security_metrics(self) -> Dict[str, Any]:
+        """
+        Get security metrics for monitoring
+        
+        Returns:
+            Dictionary with security metrics
+        """
+        with self._audit_lock:
+            recent_entries = [entry for entry in self._audit_log 
+                            if entry.timestamp > datetime.now() - timedelta(hours=24)]
+        
+        metrics = {
+            "audit_log": {
+                "total_entries": len(self._audit_log),
+                "recent_24h": len(recent_entries),
+                "security_violations_24h": len([e for e in recent_entries 
+                                              if e.action == AuditAction.SECURITY_VIOLATION]),
+                "failed_operations_24h": len([e for e in recent_entries if not e.success])
+            },
+            "rate_limiting": {
+                "active_limits": len(self._rate_limits),
+                "locked_identifiers": len([data for data in self._rate_limits.values() 
+                                         for op_data in data.values() 
+                                         if op_data.get("locked_until", 0) > time.time()])
+            },
+            "validation_integrity": {
+                "rules_monitored": len(self._integrity_checks),
+                "tamper_detected": len([check for check in self._integrity_checks.values() 
+                                      if check.tamper_detected])
+            },
+            "bypass_tokens": {
+                "active_tokens": len(self._bypass_tokens),
+                "total_uses": sum(token["used_count"] for token in self._bypass_tokens.values())
+            }
+        }
+        
+        return metrics 
+   
+    def _load_security_config(self) -> Dict[str, Any]:
+        """Load security configuration from file"""
+        default_config = {
+            "rate_limits": {
+                "validation": {
+                    "max_attempts": 100,
+                    "time_window_seconds": 300,  # 5 minutes
+                    "lockout_duration_seconds": 900,  # 15 minutes
+                    "progressive_delay": True
+                },
+                "configuration_access": {
+                    "max_attempts": 50,
+                    "time_window_seconds": 300,
+                    "lockout_duration_seconds": 600,
+                    "progressive_delay": True
+                },
+                "bypass_request": {
+                    "max_attempts": 5,
+                    "time_window_seconds": 3600,  # 1 hour
+                    "lockout_duration_seconds": 3600,
+                    "progressive_delay": True
+                }
+            },
+            "bypass_requirements": {
+                "min_security_level": "high",
+                "max_uses": 10,
+                "strict_user_match": True
+            },
+            "bypass_secret": "lt32pro_bypass_secret_2024_change_in_production",
+            "audit_log_file": "apn_security_audit.log",
+            "persist_audit_log": False,
+            "sanitization": {
+                "max_field_length": 255,
+                "allow_unicode": True,
+                "strict_mode": False
+            }
+        }
+        
+        try:
+            import os
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    loaded_config = json.load(f)
+                    # Merge with defaults
+                    for key, value in loaded_config.items():
+                        if isinstance(value, dict) and key in default_config:
+                            default_config[key].update(value)
+                        else:
+                            default_config[key] = value
+        except Exception as e:
+            self.logger.warning(f"Could not load security config from {self.config_file}: {e}")
+        
+        return default_config
+    
+    def _init_sanitization_patterns(self):
+        """Initialize patterns for input sanitization"""
+        # SQL injection patterns
+        self.sql_injection_patterns = [
+            re.compile(r"('|(\\')|(;)|(\\;))", re.IGNORECASE),
+            re.compile(r"((\%27)|(\'))((\%6F)|o|(\%4F))((\%72)|r|(\%52))", re.IGNORECASE),
+            re.compile(r"union.*select", re.IGNORECASE),
+            re.compile(r"insert.*into", re.IGNORECASE),
+            re.compile(r"delete.*from", re.IGNORECASE),
+            re.compile(r"drop.*table", re.IGNORECASE),
+            re.compile(r"update.*set", re.IGNORECASE)
+        ]
+        
+        # Command injection patterns
+        self.command_injection_patterns = [
+            re.compile(r"[;&|`$(){}[\]<>]"),
+            re.compile(r"(\\x[0-9a-fA-F]{2})+"),  # Hex encoded
+            re.compile(r"(%[0-9a-fA-F]{2})+"),    # URL encoded
+        ]
+        
+        # Script injection patterns
+        self.script_injection_patterns = [
+            re.compile(r"<script", re.IGNORECASE),
+            re.compile(r"javascript:", re.IGNORECASE),
+            re.compile(r"vbscript:", re.IGNORECASE),
+            re.compile(r"onload=", re.IGNORECASE),
+            re.compile(r"onerror=", re.IGNORECASE)
+        ]
+        
+        # LDAP injection patterns
+        self.ldap_injection_patterns = [
+            re.compile(r"[()=*!&|]"),
+            re.compile(r"\\[0-9a-fA-F]{2}")
+        ]
+    
+    def _sanitize_apn_field(self, value: str) -> Tuple[str, List[str]]:
+        """Sanitize APN field specifically"""
+        issues = []
+        sanitized = value.strip()
+        
+        # Remove dangerous characters for APN
+        dangerous_chars = ['<', '>', '"', "'", '\\', '\n', '\r', '\t']
+        for char in dangerous_chars:
+            if char in sanitized:
+                sanitized = sanitized.replace(char, '')
+                issues.append(f"Removed dangerous character: {char}")
+        
+        # Normalize consecutive dots (the main security issue)
+        if '..' in sanitized:
+            sanitized = re.sub(r'\.{2,}', '.', sanitized)
+            issues.append("Normalized consecutive dots")
+        
+        # Check for malformed patterns like .t.t.t
+        if re.search(r'\.([a-zA-Z])\.\1\.', sanitized):
+            # Remove repeated single character patterns
+            sanitized = re.sub(r'\.([a-zA-Z])\.\1\..*$', '', sanitized)
+            issues.append("Removed malformed domain pattern")
+        
+        # Remove leading/trailing dots
+        original_length = len(sanitized)
+        sanitized = sanitized.strip('.')
+        if len(sanitized) != original_length:
+            issues.append("Removed leading/trailing dots")
+        
+        return sanitized, issues
+    
+    def _sanitize_credential_field(self, value: str) -> Tuple[str, List[str]]:
+        """Sanitize username/password fields"""
+        issues = []
+        sanitized = value.strip()
+        
+        # Remove null bytes and control characters
+        control_chars = ''.join(chr(i) for i in range(32) if i not in [9])  # Keep tab
+        for char in control_chars:
+            if char in sanitized:
+                sanitized = sanitized.replace(char, '')
+                issues.append(f"Removed control character from credential")
+        
+        # Remove potentially dangerous characters
+        dangerous_chars = ['<', '>', '"', '\\', '\n', '\r']
+        for char in dangerous_chars:
+            if char in sanitized:
+                sanitized = sanitized.replace(char, '')
+                issues.append(f"Removed dangerous character from credential: {char}")
+        
+        return sanitized, issues
+    
+    def _detect_injection_patterns(self, value: str) -> List[str]:
+        """Detect potential injection attack patterns"""
+        issues = []
+        
+        # Check SQL injection patterns
+        for pattern in self.sql_injection_patterns:
+            if pattern.search(value):
+                issues.append("Potential SQL injection pattern detected")
+                break
+        
+        # Check command injection patterns
+        for pattern in self.command_injection_patterns:
+            if pattern.search(value):
+                issues.append("Potential command injection pattern detected")
+                break
+        
+        # Check script injection patterns
+        for pattern in self.script_injection_patterns:
+            if pattern.search(value):
+                issues.append("Potential script injection pattern detected")
+                break
+        
+        # Check LDAP injection patterns (less common but possible)
+        ldap_matches = sum(1 for pattern in self.ldap_injection_patterns if pattern.search(value))
+        if ldap_matches > 1:  # Multiple LDAP special chars might indicate injection
+            issues.append("Potential LDAP injection pattern detected")
+        
+        return issues
+    
+    def _sanitize_audit_details(self, details: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize sensitive data in audit log details"""
+        sanitized = {}
+        
+        sensitive_keys = ['password', 'token', 'secret', 'key', 'credential']
+        
+        for key, value in details.items():
+            key_lower = key.lower()
+            
+            # Mask sensitive values
+            if any(sensitive in key_lower for sensitive in sensitive_keys):
+                if isinstance(value, str) and value:
+                    sanitized[key] = f"***{value[-2:]}" if len(value) > 2 else "***"
+                else:
+                    sanitized[key] = "***"
+            else:
+                # Recursively sanitize nested dictionaries
+                if isinstance(value, dict):
+                    sanitized[key] = self._sanitize_audit_details(value)
+                elif isinstance(value, str):
+                    # Limit string length in audit logs
+                    sanitized[key] = value[:500] + "..." if len(value) > 500 else value
+                else:
+                    sanitized[key] = value
+        
+        return sanitized
+    
+    def _write_audit_log_entry(self, entry: AuditLogEntry):
+        """Write audit log entry to persistent storage"""
+        # Only persist audit logs to disk when explicitly enabled in configuration
+        if not self.security_config.get('persist_audit_log', False):
+            return
+
+        try:
+            log_file = self.security_config.get("audit_log_file", "apn_security_audit.log")
+
+            log_data = {
+                "timestamp": entry.timestamp.isoformat(),
+                "action": entry.action.value,
+                "user_id": entry.user_id,
+                "session_id": entry.session_id,
+                "ip_address": entry.ip_address,
+                "resource_type": entry.resource_type,
+                "resource_id": entry.resource_id,
+                "details": entry.details,
+                "security_level": entry.security_level.value,
+                "success": entry.success,
+                "error_message": entry.error_message
+            }
+
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+
+        except Exception as e:
+            self.logger.error(f"Failed to write audit log entry: {e}")
+    
+    def _analyze_security_patterns(self, entry: AuditLogEntry):
+        """Analyze audit log entries for security patterns"""
+        # This could be expanded to detect patterns like:
+        # - Multiple failed attempts from same IP
+        # - Unusual access patterns
+        # - Potential brute force attacks
+        # - Suspicious validation bypass attempts
+        
+        if not entry.success and entry.action in [AuditAction.VALIDATION_ATTEMPT, AuditAction.CONFIGURATION_ACCESS]:
+            # Log security concern for failed operations
+            self.logger.warning(f"Security concern: Failed {entry.action.value} from {entry.ip_address} for user {entry.user_id}")
+    
+    def _init_rate_limiting(self):
+        """Initialize rate limiting system"""
+        self.logger.info("Rate limiting system initialized")
+    
+    def _init_audit_logging(self):
+        """Initialize audit logging system"""
+        self.logger.info("Audit logging system initialized (persistence disabled by default)")
+        # By default we do not create or write audit log files on disk.
+        # If persistent audit logs are required, set 'persist_audit_log': True
+        # in the security config and provide an 'audit_log_file' path.
+
+        # If persistence is disabled, try to remove legacy audit log file to
+        # avoid leaving artifacts behind from previous runs.
+        try:
+            import os
+            if not self.security_config.get('persist_audit_log', False):
+                audit_file = self.security_config.get('audit_log_file', 'apn_security_audit.log')
+                if os.path.exists(audit_file):
+                    try:
+                        os.remove(audit_file)
+                        self.logger.info(f"Removed legacy audit log file: {audit_file}")
+                    except Exception as _:
+                        # Non-fatal: just log at debug level
+                        self.logger.debug(f"Could not remove legacy audit log file: {audit_file}")
+        except Exception:
+            # Do not raise on cleanup errors
+            pass
+    
+    def _init_integrity_checks(self):
+        """Initialize validation integrity checking"""
+        self.logger.info("Validation integrity checking initialized")
+
+
+# Decorator for securing validation operations
+def secure_validation(operation_name: str):
+    """
+    Decorator to add security checks to validation operations
+    
+    Args:
+        operation_name: Name of the operation for rate limiting and auditing
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            # This would be used to wrap validation methods with security checks
+            # For now, just call the original function
+            return func(self, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# Context manager for security operations
+class SecurityContextManager:
+    """Context manager for security-aware operations"""
+    
+    def __init__(self, security_service: APNSecurityService, 
+                 security_context: SecurityContext, operation: str):
+        self.security_service = security_service
+        self.security_context = security_context
+        self.operation = operation
+        self.start_time = None
+    
+    def __enter__(self):
+        self.start_time = datetime.now()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        success = exc_type is None
+        error_message = str(exc_val) if exc_val else ""
+        
+        self.security_service.audit_log(
+            AuditAction.VALIDATION_ATTEMPT,
+            self.security_context,
+            "validation",
+            self.operation,
+            {"duration_ms": (datetime.now() - self.start_time).total_seconds() * 1000},
+            success,
+            error_message
+        )
+</document_content>
+</document>
+<document index="31">
+<source>.\services\app_config_service.py</source>
+<document_content>
+import json
+import os
+import sys
+from datetime import datetime
+
+class AppConfigService:
+    """
+    Centralized service for managing application configuration settings.
+    Handles saving and loading of theme, language, and other app settings.
+    """
+    
+    CONFIG_FILE = "app_config.json"
+    DEFAULT_THEME = "System"
+    DEFAULT_LANGUAGE = "pt_BR"
+    
+    def __init__(self):
+        """Initialize the AppConfigService."""
+        self.config = self._load_config()
+    
+    def get_theme(self):
+        """Get the saved theme preference."""
+        return self.config.get("theme", self.DEFAULT_THEME)
+    
+    def set_theme(self, theme):
+        """Set and save the theme preference."""
+        self.config["theme"] = theme
+        self.config["last_updated"] = datetime.now().isoformat()
+        self._save_config()
+    
+    def get_language(self):
+        """Get the saved language preference."""
+        return self.config.get("language", self.DEFAULT_LANGUAGE)
+    
+    def set_language(self, language):
+        """Set and save the language preference."""
+        self.config["language"] = language
+        self.config["last_updated"] = datetime.now().isoformat()
+        self._save_config()
+    
+    def _load_config(self):
+        """Load configuration from file."""
+        try:
+            config_path = self._get_config_path()
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            print(f"Error loading app configuration: {e}")
+            return {}
+    
+    def _save_config(self):
+        """Save configuration to file."""
+        try:
+            config_path = self._get_config_path()
+            config_dir = os.path.dirname(config_path)
+            
+            # Ensure directory exists
+            if config_dir and not os.path.exists(config_dir):
+                os.makedirs(config_dir, exist_ok=True)
+            
+            # Save the config
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=4, ensure_ascii=False)
+                
+            print(f"App configuration saved to {config_path}")
+        except Exception as e:
+            print(f"Error saving app configuration: {e}")
+    
+    def _get_config_path(self):
+        """Get the path to the configuration file."""
+        try:
+            # First try to use the user's home directory
+            user_home = os.path.expanduser("~")
+            app_config_dir = os.path.join(user_home, ".lt32pro_config")
+            
+            # Test if we can write to this directory
+            if not os.path.exists(app_config_dir):
+                try:
+                    os.makedirs(app_config_dir, exist_ok=True)
+                    # Test write access by creating and removing a test file
+                    test_file = os.path.join(app_config_dir, "test_write.tmp")
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                    return os.path.join(app_config_dir, self.CONFIG_FILE)
+                except (PermissionError, OSError):
+                    # If we can't write to the home directory, fall back to the application directory
+                    print("Cannot write to home directory, falling back to application directory")
+            else:
+                # Directory exists, test if we can write to it
+                try:
+                    test_file = os.path.join(app_config_dir, "test_write.tmp")
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                    return os.path.join(app_config_dir, self.CONFIG_FILE)
+                except (PermissionError, OSError):
+                    print("Cannot write to home directory, falling back to application directory")
+            
+            # Fall back to the application directory
+            base_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+            return os.path.join(base_dir, self.CONFIG_FILE)
+            
+        except Exception as e:
+            print(f"Error determining config path: {e}")
+            # Last resort: use current directory
+            return self.CONFIG_FILE
+</document_content>
+</document>
+<document index="32">
+<source>.\services\command_validation_gateway.py</source>
+<document_content>
+"""
+Command Validation Gateway - Pre-command validation service for LT32Pro device commands.
+
+This service acts as a validation checkpoint that intercepts and validates all commands
+before they are sent to the device. It specifically focuses on APN validation to prevent
+malformed configurations from being transmitted.
+"""
+
+import re
+import logging
+from typing import Dict, Any, Optional, Tuple, List
+from dataclasses import dataclass
+from datetime import datetime
+
+from services.validation_service import ValidationService, ValidationResult
+
+
+@dataclass
+class CommandValidationResult:
+    """Result of command validation operation."""
+    is_valid: bool
+    command: str
+    error_message: str = ""
+    error_code: str = ""
+    blocked_reason: str = ""
+    extracted_parameters: Dict[str, str] = None
+    validation_details: Dict[str, ValidationResult] = None
+    suggestions: List[str] = None
+    
+    def __post_init__(self):
+        if self.extracted_parameters is None:
+            self.extracted_parameters = {}
+        if self.validation_details is None:
+            self.validation_details = {}
+        if self.suggestions is None:
+            self.suggestions = []
+
+
+@dataclass
+class ValidationContext:
+    """Context information for command validation."""
+    command_type: str
+    source: str  # 'ui', 'bulk', 'profile', 'manual'
+    timestamp: datetime
+    user_session_id: Optional[str] = None
+    retry_count: int = 0
+
+
+class CommandValidationGateway:
+    """
+    Gateway service that validates commands before transmission to the device.
+    
+    This service intercepts all commands and performs validation checks,
+    particularly focusing on APN configuration commands that have been
+    problematic in the past.
+    """
+    
+    def __init__(self, validation_service: ValidationService, i18n_service=None):
+        """
+        Initialize the command validation gateway.
+        
+        Args:
+            validation_service: ValidationService instance for parameter validation
+            i18n_service: Optional I18nService for localized error messages
+        """
+        self.validation_service = validation_service
+        self.i18n = i18n_service
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize command patterns for parameter extraction
+        self._init_command_patterns()
+        
+        # Statistics tracking
+        self.validation_stats = {
+            'total_commands': 0,
+            'blocked_commands': 0,
+            'apn_validations': 0,
+            'apn_blocks': 0,
+            'last_reset': datetime.now()
+        }
+    
+    def _init_command_patterns(self):
+        """Initialize regex patterns for extracting parameters from commands."""
+        self.command_patterns = {
+            # APN command patterns - matches ATSMS:APN,server,user,password#
+            'apn': {
+                'pattern': r'^ATSMS:APN,([^,]*),([^,]*),([^#]*)#?$',
+                'groups': ['apn_server', 'apn_user', 'apn_password'],
+                'required_params': ['apn_server']
+            },
+            
+            # Server command patterns - matches ATSMS:SERVER,type,address,port,protocol#
+            'server': {
+                'pattern': r'^ATSMS:SERVER,(\d+),([^,]+),(\d+),(\d+)#?$',
+                'groups': ['server_type', 'server_address', 'server_port', 'server_protocol'],
+                'required_params': ['server_address', 'server_port']
+            },
+            
+            # Timer command patterns - matches ATSMS:TIMER,ign_on,ign_off#
+            'timer': {
+                'pattern': r'^ATSMS:TIMER,(\d+),(\d+)#?$',
+                'groups': ['timer_ign_on', 'timer_ign_off'],
+                'required_params': ['timer_ign_on', 'timer_ign_off']
+            },
+            
+            # Heartbeat command patterns - matches ATSMS:HBT,ign_on,ign_off#
+            'heartbeat': {
+                'pattern': r'^ATSMS:HBT,(\d+),(\d+)#?$',
+                'groups': ['heartbeat_ign_on', 'heartbeat_ign_off'],
+                'required_params': ['heartbeat_ign_on', 'heartbeat_ign_off']
+            },
+            
+            # SZCS parameter commands - matches ATSMS:SZCS#PARAM=value#
+            'szcs': {
+                'pattern': r'^ATSMS:SZCS#([A-Z0-9_]+)=([^#]+)#?$',
+                'groups': ['parameter_name', 'parameter_value'],
+                'required_params': ['parameter_name', 'parameter_value']
+            }
+        }
+    
+    def validate_command_before_send(self, command: str, context: Optional[ValidationContext] = None) -> CommandValidationResult:
+        """
+        Validate a command before sending it to the device.
+        
+        This is the main entry point for command validation. It extracts parameters
+        from the command and validates them according to the defined rules.
+        
+        Args:
+            command: The command string to validate
+            context: Optional validation context with additional information
+            
+        Returns:
+            CommandValidationResult with validation status and details
+        """
+        if context is None:
+            context = ValidationContext(
+                command_type='unknown',
+                source='manual',
+                timestamp=datetime.now()
+            )
+        
+        # Update statistics
+        self.validation_stats['total_commands'] += 1
+        
+        # Log the validation attempt
+        self.logger.info(f"Validating command: {command[:50]}... (source: {context.source})")
+        
+        try:
+            # Extract parameters from the command
+            extracted_params = self.extract_parameters_from_command(command)
+            
+            if not extracted_params:
+                # Command doesn't match known patterns - allow it through with warning
+                self.logger.warning(f"Unknown command format: {command}")
+                return CommandValidationResult(
+                    is_valid=True,
+                    command=command,
+                    extracted_parameters={},
+                    error_message="Unknown command format - validation skipped"
+                )
+            
+            # Determine command type from extracted parameters
+            command_type = self._determine_command_type(extracted_params, command)
+            context.command_type = command_type
+            
+            # Validate extracted parameters
+            validation_result = self._validate_extracted_parameters(extracted_params, context)
+            
+            # Log validation result
+            if validation_result.is_valid:
+                self.logger.info(f"Command validation passed: {command_type}")
+            else:
+                self.logger.warning(f"Command validation failed: {command_type} - {validation_result.error_message}")
+                self.validation_stats['blocked_commands'] += 1
+                
+                # Track APN-specific blocks
+                if command_type == 'apn':
+                    self.validation_stats['apn_blocks'] += 1
+            
+            return validation_result
+            
+        except Exception as e:
+            self.logger.error(f"Error during command validation: {str(e)}")
+            return CommandValidationResult(
+                is_valid=False,
+                command=command,
+                error_message=f"Validation error: {str(e)}",
+                error_code="VALIDATION_ERROR",
+                blocked_reason="Internal validation error occurred"
+            )
+    
+    def extract_parameters_from_command(self, command: str) -> Dict[str, str]:
+        """
+        Extract parameter values from a device command string.
+        
+        Args:
+            command: The command string to parse
+            
+        Returns:
+            Dictionary of parameter names and values extracted from the command
+        """
+        extracted = {}
+        
+        # Try each command pattern to find a match
+        for cmd_type, pattern_info in self.command_patterns.items():
+            pattern = pattern_info['pattern']
+            groups = pattern_info['groups']
+            
+            match = re.match(pattern, command.strip())
+            if match:
+                # Extract parameter values based on regex groups
+                for i, group_name in enumerate(groups):
+                    if i < len(match.groups()):
+                        value = match.group(i + 1)
+                        # Clean up the value (remove extra whitespace, handle empty strings)
+                        cleaned_value = value.strip() if value else ""
+                        extracted[group_name] = cleaned_value
+                
+                # Add command type information
+                extracted['_command_type'] = cmd_type
+                break
+        
+        return extracted
+    
+    def validate_apn_command_parameters(self, parameters: Dict[str, str]) -> CommandValidationResult:
+        """
+        Validate APN command parameters specifically.
+        
+        This method provides focused validation for APN commands, which have been
+        the source of configuration issues in the past.
+        
+        Args:
+            parameters: Dictionary of APN parameters to validate
+            
+        Returns:
+            CommandValidationResult with APN-specific validation details
+        """
+        self.validation_stats['apn_validations'] += 1
+        
+        validation_details = {}
+        all_valid = True
+        error_messages = []
+        suggestions = []
+        
+        # Validate APN server (required)
+        if 'apn_server' in parameters:
+            apn_value = parameters['apn_server']
+            apn_result = self.validation_service.validate_parameter('apn_server', apn_value)
+            validation_details['apn_server'] = apn_result
+            
+            if not apn_result.is_valid:
+                all_valid = False
+                error_messages.append(f"APN Server: {apn_result.error_message}")
+            
+            # Add specific suggestions for common APN issues (regardless of validation result)
+            if '..' in apn_value:
+                suggestions.append("Remove consecutive dots from APN server name")
+            if apn_value.startswith('.') or apn_value.endswith('.'):
+                suggestions.append("Remove leading or trailing dots from APN server name")
+            if not re.match(r'^[a-zA-Z0-9.-]+$', apn_value):
+                suggestions.append("APN server should only contain letters, numbers, dots, and hyphens")
+            
+            # Check for malformed domain patterns like "allcom.br.t.t.t"
+            if re.search(r'\.[a-zA-Z]\.[a-zA-Z]\.', apn_value):
+                suggestions.append("APN server appears to have malformed domain structure")
+            
+            # Check for single character domain parts (like .t.t.t)
+            parts = apn_value.split('.')
+            single_char_parts = [part for part in parts if len(part) == 1]
+            if len(single_char_parts) > 1:
+                suggestions.append("APN server has too many single-character domain parts - check for typos")
+        
+        # Validate APN user (optional)
+        if 'apn_user' in parameters and parameters['apn_user']:
+            user_result = self.validation_service.validate_parameter('apn_user', parameters['apn_user'])
+            validation_details['apn_user'] = user_result
+            
+            if not user_result.is_valid:
+                all_valid = False
+                error_messages.append(f"APN User: {user_result.error_message}")
+        
+        # Validate APN password (optional)
+        if 'apn_password' in parameters and parameters['apn_password']:
+            password_result = self.validation_service.validate_parameter('apn_password', parameters['apn_password'])
+            validation_details['apn_password'] = password_result
+            
+            if not password_result.is_valid:
+                all_valid = False
+                error_messages.append(f"APN Password: {password_result.error_message}")
+        
+        # Create the result
+        result = CommandValidationResult(
+            is_valid=all_valid,
+            command=f"APN,{parameters.get('apn_server', '')},{parameters.get('apn_user', '')},{parameters.get('apn_password', '')}#",
+            extracted_parameters=parameters,
+            validation_details=validation_details,
+            suggestions=suggestions
+        )
+        
+        if not all_valid:
+            result.error_message = "; ".join(error_messages)
+            result.error_code = "APN_VALIDATION_FAILED"
+            result.blocked_reason = "APN parameters failed validation checks"
+        
+        return result
+    
+    def _determine_command_type(self, extracted_params: Dict[str, str], command: str) -> str:
+        """
+        Determine the type of command based on extracted parameters.
+        
+        Args:
+            extracted_params: Parameters extracted from the command
+            command: Original command string
+            
+        Returns:
+            String identifying the command type
+        """
+        if '_command_type' in extracted_params:
+            return extracted_params['_command_type']
+        
+        # Fallback: determine from command string
+        if 'APN,' in command:
+            return 'apn'
+        elif 'SERVER,' in command:
+            return 'server'
+        elif 'TIMER,' in command:
+            return 'timer'
+        elif 'HBT,' in command:
+            return 'heartbeat'
+        elif 'SZCS#' in command:
+            return 'szcs'
+        else:
+            return 'unknown'
+    
+    def _validate_extracted_parameters(self, parameters: Dict[str, str], context: ValidationContext) -> CommandValidationResult:
+        """
+        Validate the extracted parameters based on their types.
+        
+        Args:
+            parameters: Dictionary of extracted parameters
+            context: Validation context
+            
+        Returns:
+            CommandValidationResult with validation details
+        """
+        command_type = parameters.get('_command_type', 'unknown')
+        
+        # Handle APN commands specifically
+        if command_type == 'apn':
+            return self.validate_apn_command_parameters(parameters)
+        
+        # Handle other command types
+        elif command_type == 'server':
+            return self._validate_server_parameters(parameters)
+        
+        elif command_type in ['timer', 'heartbeat']:
+            return self._validate_timing_parameters(parameters, command_type)
+        
+        elif command_type == 'szcs':
+            return self._validate_szcs_parameters(parameters)
+        
+        else:
+            # Unknown command type - allow through with warning
+            return CommandValidationResult(
+                is_valid=True,
+                command=self._reconstruct_command(parameters),
+                extracted_parameters=parameters,
+                error_message="Unknown command type - validation skipped"
+            )
+    
+    def _validate_server_parameters(self, parameters: Dict[str, str]) -> CommandValidationResult:
+        """Validate server command parameters."""
+        validation_details = {}
+        all_valid = True
+        error_messages = []
+        
+        # Validate server address
+        if 'server_address' in parameters:
+            addr_result = self.validation_service.validate_parameter('server_address', parameters['server_address'])
+            validation_details['server_address'] = addr_result
+            
+            if not addr_result.is_valid:
+                all_valid = False
+                error_messages.append(f"Server Address: {addr_result.error_message}")
+        
+        # Validate server port
+        if 'server_port' in parameters:
+            try:
+                port_value = int(parameters['server_port'])
+                port_result = self.validation_service.validate_parameter('server_port', port_value)
+                validation_details['server_port'] = port_result
+                
+                if not port_result.is_valid:
+                    all_valid = False
+                    error_messages.append(f"Server Port: {port_result.error_message}")
+            except ValueError:
+                all_valid = False
+                error_messages.append("Server Port: Must be a valid number")
+        
+        result = CommandValidationResult(
+            is_valid=all_valid,
+            command=self._reconstruct_command(parameters),
+            extracted_parameters=parameters,
+            validation_details=validation_details
+        )
+        
+        if not all_valid:
+            result.error_message = "; ".join(error_messages)
+            result.error_code = "SERVER_VALIDATION_FAILED"
+            result.blocked_reason = "Server parameters failed validation checks"
+        
+        return result
+    
+    def _validate_timing_parameters(self, parameters: Dict[str, str], command_type: str) -> CommandValidationResult:
+        """Validate timing command parameters (timer, heartbeat)."""
+        validation_details = {}
+        all_valid = True
+        error_messages = []
+        
+        # Get the parameter names based on command type
+        if command_type == 'timer':
+            param_names = ['timer_ign_on', 'timer_ign_off']
+        else:  # heartbeat
+            param_names = ['heartbeat_ign_on', 'heartbeat_ign_off']
+        
+        for param_name in param_names:
+            if param_name in parameters:
+                try:
+                    value = int(parameters[param_name])
+                    result = self.validation_service.validate_parameter(param_name, value)
+                    validation_details[param_name] = result
+                    
+                    if not result.is_valid:
+                        all_valid = False
+                        error_messages.append(f"{param_name}: {result.error_message}")
+                except ValueError:
+                    all_valid = False
+                    error_messages.append(f"{param_name}: Must be a valid number")
+        
+        result = CommandValidationResult(
+            is_valid=all_valid,
+            command=self._reconstruct_command(parameters),
+            extracted_parameters=parameters,
+            validation_details=validation_details
+        )
+        
+        if not all_valid:
+            result.error_message = "; ".join(error_messages)
+            result.error_code = f"{command_type.upper()}_VALIDATION_FAILED"
+            result.blocked_reason = f"{command_type.title()} parameters failed validation checks"
+        
+        return result
+    
+    def _validate_szcs_parameters(self, parameters: Dict[str, str]) -> CommandValidationResult:
+        """Validate SZCS command parameters."""
+        validation_details = {}
+        all_valid = True
+        error_messages = []
+        
+        param_name = parameters.get('parameter_name', '')
+        param_value = parameters.get('parameter_value', '')
+        
+        # Map SZCS parameter names to validation parameter names
+        szcs_param_mapping = {
+            'VIBL': 'vibration',
+            'VIBCHK': 'vibration_window',
+            'SENSITIVITY': 'sensitivity',
+            'GT06SEL': 'gt06_protocol',
+            'NETSELECT': 'network_select',
+            'SLPDISCONNECT': 'sleep_mode',
+            'SLEEPT': 'sleep_time',
+            'ACCLINE': 'ignition_type',
+            'ANGLEVALUE': 'angle_reporting',
+            'BLINDSPD': 'blind_speed',
+            'CURVE': 'curve_sensor',
+            'LOCKTYPE': 'lock_type'
+        }
+        
+        validation_param = szcs_param_mapping.get(param_name)
+        if validation_param:
+            # Convert value to appropriate type if needed
+            if validation_param in ['vibration', 'vibration_window', 'sensitivity', 'sleep_time', 'blind_speed']:
+                try:
+                    param_value = int(param_value)
+                except ValueError:
+                    all_valid = False
+                    error_messages.append(f"{param_name}: Must be a valid number")
+                    param_value = None
+            
+            if param_value is not None:
+                result = self.validation_service.validate_parameter(validation_param, param_value)
+                validation_details[validation_param] = result
+                
+                if not result.is_valid:
+                    all_valid = False
+                    error_messages.append(f"{param_name}: {result.error_message}")
+        
+        result = CommandValidationResult(
+            is_valid=all_valid,
+            command=self._reconstruct_command(parameters),
+            extracted_parameters=parameters,
+            validation_details=validation_details
+        )
+        
+        if not all_valid:
+            result.error_message = "; ".join(error_messages)
+            result.error_code = "SZCS_VALIDATION_FAILED"
+            result.blocked_reason = "SZCS parameters failed validation checks"
+        
+        return result
+    
+    def _reconstruct_command(self, parameters: Dict[str, str]) -> str:
+        """
+        Reconstruct the original command from extracted parameters.
+        
+        Args:
+            parameters: Dictionary of extracted parameters
+            
+        Returns:
+            Reconstructed command string
+        """
+        command_type = parameters.get('_command_type', 'unknown')
+        
+        if command_type == 'apn':
+            server = parameters.get('apn_server', '')
+            user = parameters.get('apn_user', '')
+            password = parameters.get('apn_password', '')
+            return f"ATSMS:APN,{server},{user},{password}#"
+        
+        elif command_type == 'server':
+            server_type = parameters.get('server_type', '0')
+            address = parameters.get('server_address', '')
+            port = parameters.get('server_port', '')
+            protocol = parameters.get('server_protocol', '0')
+            return f"ATSMS:SERVER,{server_type},{address},{port},{protocol}#"
+        
+        elif command_type == 'timer':
+            ign_on = parameters.get('timer_ign_on', '')
+            ign_off = parameters.get('timer_ign_off', '')
+            return f"ATSMS:TIMER,{ign_on},{ign_off}#"
+        
+        elif command_type == 'heartbeat':
+            ign_on = parameters.get('heartbeat_ign_on', '')
+            ign_off = parameters.get('heartbeat_ign_off', '')
+            return f"ATSMS:HBT,{ign_on},{ign_off}#"
+        
+        elif command_type == 'szcs':
+            param_name = parameters.get('parameter_name', '')
+            param_value = parameters.get('parameter_value', '')
+            return f"ATSMS:SZCS#{param_name}={param_value}#"
+        
+        else:
+            return "UNKNOWN_COMMAND"
+    
+    def log_blocked_command(self, result: CommandValidationResult, context: ValidationContext):
+        """
+        Log detailed information about a blocked command.
+        
+        Args:
+            result: The validation result for the blocked command
+            context: Validation context with additional information
+        """
+        log_entry = {
+            'timestamp': context.timestamp.isoformat(),
+            'command': result.command,
+            'source': context.source,
+            'command_type': context.command_type,
+            'blocked_reason': result.blocked_reason,
+            'error_code': result.error_code,
+            'error_message': result.error_message,
+            'extracted_parameters': result.extracted_parameters,
+            'validation_details': {
+                param: {
+                    'is_valid': details.is_valid,
+                    'error_message': details.error_message,
+                    'error_code': details.error_code
+                }
+                for param, details in result.validation_details.items()
+            },
+            'suggestions': result.suggestions,
+            'retry_count': context.retry_count,
+            'user_session_id': context.user_session_id
+        }
+        
+        self.logger.error(f"BLOCKED COMMAND: {log_entry}")
+        
+        # Also log a human-readable summary
+        self.logger.error(
+            f"Command blocked - Type: {context.command_type}, "
+            f"Source: {context.source}, "
+            f"Reason: {result.blocked_reason}, "
+            f"Command: {result.command[:100]}..."
+        )
+    
+    def get_validation_statistics(self) -> Dict[str, Any]:
+        """
+        Get validation statistics for monitoring and debugging.
+        
+        Returns:
+            Dictionary with validation statistics
+        """
+        stats = self.validation_stats.copy()
+        stats['block_rate'] = (stats['blocked_commands'] / max(stats['total_commands'], 1)) * 100
+        stats['apn_block_rate'] = (stats['apn_blocks'] / max(stats['apn_validations'], 1)) * 100
+        stats['uptime_hours'] = (datetime.now() - stats['last_reset']).total_seconds() / 3600
+        
+        return stats
+    
+    def reset_statistics(self):
+        """Reset validation statistics."""
+        self.validation_stats = {
+            'total_commands': 0,
+            'blocked_commands': 0,
+            'apn_validations': 0,
+            'apn_blocks': 0,
+            'last_reset': datetime.now()
+        }
+        
+        self.logger.info("Validation statistics reset")
+    
+    def is_command_safe_to_send(self, command: str, context: Optional[ValidationContext] = None) -> bool:
+        """
+        Quick check if a command is safe to send without full validation details.
+        
+        Args:
+            command: Command string to check
+            context: Optional validation context
+            
+        Returns:
+            True if command is safe to send, False otherwise
+        """
+        result = self.validate_command_before_send(command, context)
+        return result.is_valid
+    
+    def get_command_suggestions(self, command: str) -> List[str]:
+        """
+        Get suggestions for fixing a command that failed validation.
+        
+        Args:
+            command: Command string that failed validation
+            
+        Returns:
+            List of suggestions for fixing the command
+        """
+        result = self.validate_command_before_send(command)
+        suggestions = []
+        
+        # Collect suggestions from the validation result
+        if result.suggestions:
+            suggestions.extend(result.suggestions)
+        
+        # Add suggestions from individual parameter validation details
+        if result.validation_details:
+            for param_name, validation_result in result.validation_details.items():
+                if hasattr(validation_result, 'suggested_value') and validation_result.suggested_value:
+                    suggestions.append(f"Try using '{validation_result.suggested_value}' for {param_name}")
+        
+        return suggestions
+</document_content>
+</document>
+<document index="33">
+<source>.\services\conditional_field_manager.py</source>
+<document_content>
+"""
+Conditional Field Manager for LT32 PRO Configurator
+
+This module handles conditional field visibility based on parameter values.
+It manages showing/hiding fields based on visibility conditions defined in the
+parameter specification.
+"""
+
+from typing import Dict, List, Optional, Any, Callable
+import re
+from services.parameter_specification import (
+    CONDITIONAL_VISIBILITY_RULES,
+    get_parameter_specification
+)
+
+
+class ConditionalFieldManager:
+    """
+    Manages conditional field visibility based on parameter values.
+    
+    This class handles:
+    - Registering conditional fields with their visibility conditions
+    - Monitoring trigger field changes
+    - Evaluating visibility conditions
+    - Updating field visibility in the UI
+    """
+    
+    def __init__(self):
+        """Initialize the conditional field manager."""
+        self.conditional_fields = {}  # field_name -> condition info
+        self.trigger_listeners = {}   # trigger_field -> list of dependent fields
+        self.field_widgets = {}       # field_name -> widget reference
+        self.current_values = {}      # field_name -> current value
+        
+        # Load conditional rules from specification
+        self._load_conditional_rules()
+    
+    def _load_conditional_rules(self):
+        """Load conditional visibility rules from the parameter specification."""
+        for field_name, rule in CONDITIONAL_VISIBILITY_RULES.items():
+            self.register_conditional_field(
+                field_name=field_name,
+                condition=rule['condition'],
+                trigger_field=rule['trigger_field']
+            )
+    
+    def register_conditional_field(self, field_name: str, condition: str, trigger_field: str):
+        """
+        Register a conditional field with its visibility condition.
+        
+        Args:
+            field_name: Full name of the field (section.parameter.field)
+            condition: Condition string to evaluate for visibility
+            trigger_field: Field that triggers condition evaluation
+        """
+        self.conditional_fields[field_name] = {
+            'condition': condition,
+            'trigger_field': trigger_field,
+            'visible': True  # Default to visible
+        }
+        
+        # Register trigger listener
+        if trigger_field not in self.trigger_listeners:
+            self.trigger_listeners[trigger_field] = []
+        self.trigger_listeners[trigger_field].append(field_name)
+        
+        print(f"DEBUG: Registered conditional field {field_name} with condition '{condition}' triggered by {trigger_field}")
+    
+    def register_field_widget(self, field_name: str, widget):
+        """
+        Register a widget for a conditional field.
+        
+        Args:
+            field_name: Full name of the field
+            widget: Widget reference that can be shown/hidden
+        """
+        self.field_widgets[field_name] = widget
+        print(f"DEBUG: Registered widget for conditional field {field_name}")
+    
+    def evaluate_condition(self, condition: str, current_values: Dict[str, Any]) -> bool:
+        """
+        Evaluate a visibility condition based on current parameter values.
+        
+        Args:
+            condition: Condition string to evaluate
+            current_values: Dictionary of current field values
+            
+        Returns:
+            bool: True if condition is met (field should be visible)
+        """
+        try:
+            # Handle different condition formats - check boolean conditions first
+            if condition.endswith("== true"):
+                # Handle boolean true conditions like "enabled == true"
+                field_name = condition.replace("== true", "").strip()
+                
+                # Get current value for the field - try both short and full field names
+                current_value = current_values.get(field_name, False)
+                
+                # If not found with short name, try to find with full path
+                if current_value is False or current_value == "":
+                    for key, value in current_values.items():
+                        if key.endswith("." + field_name) or key == field_name:
+                            current_value = value
+                            break
+                
+                # Convert to boolean if needed
+                if isinstance(current_value, str):
+                    result = current_value.lower() in ['true', '1', 'yes', 'on', 'enabled']
+                elif isinstance(current_value, bool):
+                    result = current_value
+                else:
+                    result = bool(current_value)
+                
+                print(f"DEBUG: Evaluating boolean condition '{condition}': {field_name}='{current_value}' -> {result}")
+                return result
+            
+            elif condition.endswith("== false"):
+                # Handle boolean false conditions
+                field_name = condition.replace("== false", "").strip()
+                
+                # Get current value for the field - try both short and full field names
+                current_value = current_values.get(field_name, True)
+                
+                # If not found with short name, try to find with full path
+                if current_value is True or current_value == "":
+                    for key, value in current_values.items():
+                        if key.endswith("." + field_name) or key == field_name:
+                            current_value = value
+                            break
+                
+                # Convert to boolean if needed
+                if isinstance(current_value, str):
+                    result = current_value.lower() not in ['true', '1', 'yes', 'on', 'enabled']
+                elif isinstance(current_value, bool):
+                    result = not current_value
+                else:
+                    result = not bool(current_value)
+                
+                print(f"DEBUG: Evaluating boolean condition '{condition}': {field_name}='{current_value}' -> {result}")
+                return result
+            
+            elif "==" in condition:
+                # Handle equality conditions like "ignition_mode == 'Virtual por bateria (Virtual by battery)'"
+                parts = condition.split("==")
+                if len(parts) == 2:
+                    field_name = parts[0].strip()
+                    expected_value = parts[1].strip().strip("'\"")
+                    
+                    # Get current value for the field - try both short and full field names
+                    current_value = current_values.get(field_name, "")
+                    
+                    # If not found with short name, try to find with full path
+                    if not current_value:
+                        for key, value in current_values.items():
+                            if key.endswith("." + field_name) or key == field_name:
+                                current_value = value
+                                break
+                    
+                    # Compare values
+                    result = str(current_value) == expected_value
+                    print(f"DEBUG: Evaluating condition '{condition}': {field_name}='{current_value}' == '{expected_value}' -> {result}")
+                    return result
+            
+            # Default: try to evaluate as Python expression (safe subset)
+            # Replace field names with their values
+            eval_condition = condition
+            for field_name, value in current_values.items():
+                if field_name in eval_condition:
+                    if isinstance(value, str):
+                        eval_condition = eval_condition.replace(field_name, f"'{value}'")
+                    else:
+                        eval_condition = eval_condition.replace(field_name, str(value))
+            
+            # Only allow safe evaluation
+            if any(unsafe in eval_condition for unsafe in ['import', 'exec', 'eval', '__']):
+                print(f"WARNING: Unsafe condition detected: {condition}")
+                return True
+            
+            result = eval(eval_condition)
+            print(f"DEBUG: Evaluated condition '{condition}' as '{eval_condition}' -> {result}")
+            return bool(result)
+            
+        except Exception as e:
+            print(f"ERROR: Failed to evaluate condition '{condition}': {str(e)}")
+            return True  # Default to visible on error
+    
+    def update_field_visibility(self, field_name: str, visible: bool):
+        """
+        Update the visibility of a field widget.
+        
+        Args:
+            field_name: Full name of the field
+            visible: True to show, False to hide
+        """
+        if field_name in self.field_widgets:
+            widget = self.field_widgets[field_name]
+            try:
+                if visible:
+                    widget.grid()  # Show widget
+                    print(f"DEBUG: Showing field {field_name}")
+                else:
+                    widget.grid_remove()  # Hide widget
+                    print(f"DEBUG: Hiding field {field_name}")
+                
+                # Update visibility state
+                if field_name in self.conditional_fields:
+                    self.conditional_fields[field_name]['visible'] = visible
+                    
+            except Exception as e:
+                print(f"ERROR: Failed to update visibility for field {field_name}: {str(e)}")
+        else:
+            print(f"WARNING: No widget registered for conditional field {field_name}")
+    
+    def handle_trigger_change(self, trigger_field: str, new_value: Any):
+        """
+        Handle a change in a trigger field value.
+        
+        Args:
+            trigger_field: Name of the field that changed
+            new_value: New value of the trigger field
+        """
+        print(f"DEBUG: Trigger field {trigger_field} changed to '{new_value}'")
+        
+        # Update current value
+        self.current_values[trigger_field] = new_value
+        
+        # Check if this field triggers any conditional fields
+        if trigger_field in self.trigger_listeners:
+            dependent_fields = self.trigger_listeners[trigger_field]
+            print(f"DEBUG: Found {len(dependent_fields)} dependent fields for trigger {trigger_field}")
+            
+            for field_name in dependent_fields:
+                if field_name in self.conditional_fields:
+                    condition_info = self.conditional_fields[field_name]
+                    condition = condition_info['condition']
+                    
+                    # Evaluate condition with current values
+                    should_be_visible = self.evaluate_condition(condition, self.current_values)
+                    
+                    # Update visibility if it changed
+                    current_visibility = condition_info.get('visible', True)
+                    if should_be_visible != current_visibility:
+                        self.update_field_visibility(field_name, should_be_visible)
+    
+    def update_current_value(self, field_name: str, value: Any):
+        """
+        Update the current value of a field.
+        
+        Args:
+            field_name: Name of the field
+            value: Current value of the field
+        """
+        self.current_values[field_name] = value
+        
+        # Check if this field is a trigger for any conditional fields
+        self.handle_trigger_change(field_name, value)
+    
+    def get_visible_fields(self, section_name: str) -> List[str]:
+        """
+        Get list of currently visible fields in a section.
+        
+        Args:
+            section_name: Name of the section
+            
+        Returns:
+            List of visible field names
+        """
+        visible_fields = []
+        
+        for field_name, condition_info in self.conditional_fields.items():
+            if field_name.startswith(section_name + ".") and condition_info.get('visible', True):
+                visible_fields.append(field_name)
+        
+        return visible_fields
+    
+    def is_field_visible(self, field_name: str) -> bool:
+        """
+        Check if a field is currently visible.
+        
+        Args:
+            field_name: Full name of the field
+            
+        Returns:
+            bool: True if field is visible
+        """
+        if field_name in self.conditional_fields:
+            return self.conditional_fields[field_name].get('visible', True)
+        return True  # Non-conditional fields are always visible
+    
+    def initialize_field_visibility(self, current_values: Dict[str, Any]):
+        """
+        Initialize field visibility based on current parameter values.
+        
+        Args:
+            current_values: Dictionary of current field values
+        """
+        print(f"DEBUG: Initializing field visibility with values: {current_values}")
+        
+        # Update current values
+        self.current_values.update(current_values)
+        
+        # Evaluate all conditional fields
+        for field_name, condition_info in self.conditional_fields.items():
+            condition = condition_info['condition']
+            should_be_visible = self.evaluate_condition(condition, self.current_values)
+            self.update_field_visibility(field_name, should_be_visible)
+    
+    def get_conditional_fields_info(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get information about all conditional fields.
+        
+        Returns:
+            Dictionary with conditional field information
+        """
+        return self.conditional_fields.copy()
+    
+    def get_trigger_listeners_info(self) -> Dict[str, List[str]]:
+        """
+        Get information about trigger listeners.
+        
+        Returns:
+            Dictionary mapping trigger fields to dependent fields
+        """
+        return self.trigger_listeners.copy()
+    
+    def reset(self):
+        """Reset the conditional field manager state."""
+        self.current_values.clear()
+        for field_name in self.conditional_fields:
+            self.conditional_fields[field_name]['visible'] = True
+        print("DEBUG: Reset conditional field manager state")
+
+
+# Global instance for use throughout the application
+conditional_field_manager = ConditionalFieldManager()
+
+
+def get_conditional_field_manager() -> ConditionalFieldManager:
+    """
+    Get the global conditional field manager instance.
+    
+    Returns:
+        ConditionalFieldManager: The global instance
+    """
+    return conditional_field_manager
+</document_content>
+</document>
+<document index="34">
+<source>.\services\config_service.py</source>
+<document_content>
+import json
+import os
+import datetime
+from tkinter import filedialog
+from tkinter import messagebox
+
+class ConfigService:
+    """Handles saving and loading of configuration profiles."""
+    
+    # Default values for parameters
+    DEFAULT_VALUES = {
+        'apn_server': '',
+        'apn_user': '',
+        'apn_password': '',
+        'transmission_mode': 'TCP',
+        'timer_ign_on': '30',
+        'timer_ign_off': '300',
+        'heartbeat_interval': '1min',
+        'vibration': '3',
+        'sensitivity': '5',
+        'curve_sensor': 'Auto',
+        'ignition_type': 'Digital',
+        'lock_type': 'PIN',
+        'protocol': 'GT06',
+        'network_select': 'AUTO',
+        'sleep_mode': 'Disabled',
+        'sleep_time': '10'
+    }
+
+    # Current configuration file format version
+    CONFIG_VERSION = "1.0"
+
+    def __init__(self, app_instance):
+        self.app = app_instance
+
+    def save_profile(self):
+        """Gathers configuration from UI and saves it to a .lt32config file."""
+        # Get a reference to the parameters frame for easier access
+        params_frame = self.app.params_frame
+        
+        import configparser
+        from datetime import datetime
+        # Get all parameter values from factory-created widgets
+        all_parameters = params_frame.get_all_parameter_values()
+
+        config = configparser.ConfigParser()
+        config.optionxform = str  # Preserve case
+
+        # Add profile info section
+        config.add_section('Profile_Info')
+        config.set('Profile_Info', 'version', self.CONFIG_VERSION)
+        config.set('Profile_Info', 'created_date', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        config.set('Profile_Info', 'profile_name', f"LT32Pro_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+
+        # Organize parameters into sections and flatten all values
+        # APN section
+        apn_values = params_frame._get_apn_values_from_section()
+        config.add_section('APN_Configuration')
+        config.set('APN_Configuration', 'apn', apn_values.get('apn', ''))
+        config.set('APN_Configuration', 'user', apn_values.get('user', ''))
+        config.set('APN_Configuration', 'password', apn_values.get('password', ''))
+
+        # Transmission mode section
+        config.add_section('Server_Configuration')
+        config.set('Server_Configuration', 'transmission_mode', all_parameters.get('transmission_mode', 'TCP'))
+
+        # Device parameters section (device format: dict strings for complex values)
+        import json
+        config.add_section('Device_Parameters')
+        for param_name, value in all_parameters.items():
+            if param_name not in ['apn', 'user', 'password', 'transmission_mode']:
+                if isinstance(value, dict):
+                    # Store as dict string (use json for safe serialization)
+                    config.set('Device_Parameters', param_name, json.dumps(value, ensure_ascii=False))
+                else:
+                    config.set('Device_Parameters', param_name, str(value))
+
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".lt32config",
+            filetypes=[("LT32Pro Config Files", "*.lt32config"), ("All Files", "*.*")],
+            title="Save Configuration Profile" # PRD 4.3.1
+        )
+        if not filepath:
+            return
+
+        with open(filepath, 'w') as f:
+            config.write(f)
+        self.app.log_frame.log_message(f"Profile '{os.path.basename(filepath)}' saved.\n")
+
+    def load_profile(self):
+        """Loads a .lt32config file and populates the UI."""
+        filepath = filedialog.askopenfilename(
+            filetypes=[("LT32Pro Config Files", "*.lt32config"), ("All Files", "*.*")],
+            title="Load Configuration Profile" # PRD 4.3.1
+        )
+        if not filepath:
+            return # User cancelled the dialog
+            
+        # Show success notification when profile is loaded
+        if hasattr(self.app, 'operation_confirmation_service'):
+            self.app.operation_confirmation_service.show_success_notification(f"Loading profile '{os.path.basename(filepath)}'...")
+
+        try:
+            # Validate the configuration file before loading
+            is_valid, error_message, config_data = self.validate_config_file(filepath)
+            if not is_valid:
+                messagebox.showerror("Profile Validation Error", error_message)
+                self.app.log_frame.log_message(f"Profile validation error: {error_message}\n")
+                return
+            if error_message:
+                if not messagebox.askyesno("Version Warning", error_message + " Do you want to continue?"):
+                    return
+            params_frame = self.app.params_frame
+            # --- Handle APN Configuration ---
+            apn_config = config_data.get('APN_Configuration', {})
+            params_frame.apn_server_entry.delete(0, "end")
+            params_frame.apn_server_entry.insert(0, apn_config.get("apn", ""))
+            params_frame.apn_user_entry.delete(0, "end")
+            params_frame.apn_user_entry.insert(0, apn_config.get("user", ""))
+            params_frame.apn_password_entry.delete(0, "end")
+            params_frame.apn_password_entry.insert(0, apn_config.get("password", ""))
+            # --- Handle Transmission Mode ---
+            server_config = config_data.get('Server_Configuration', {})
+            params_frame.trans_mode_var.set(server_config.get("transmission_mode", "TCP"))
+            # --- Handle all other parameters from factory-created widgets ---
+            all_params = {}
+            for section, params in config_data.items():
+                if section in ['APN_Configuration', 'Server_Configuration', 'Profile_Info']:
+                    continue
+                for param_name, param_value in params.items():
+                    # Attempt to deserialize JSON strings for complex parameters
+                    if isinstance(param_value, str):
+                        try:
+                            # Only parse if it looks like a JSON object or array
+                            if param_value.strip().startswith('{') or param_value.strip().startswith('['):
+                                all_params[param_name] = json.loads(param_value)
+                            else:
+                                all_params[param_name] = param_value
+                        except Exception:
+                            all_params[param_name] = param_value
+                    else:
+                        all_params[param_name] = param_value
+            try:
+                params_frame.set_all_parameter_values(all_params)
+                loaded_params = list(all_params.keys())
+                if loaded_params:
+                    self.app.log_frame.log_message(f"INFO: Loaded {len(loaded_params)} parameters from profile\n")
+            except Exception as e:
+                self.app.log_frame.log_message(f"ERROR: Error setting parameter values: {str(e)}\n")
+                messagebox.showerror("Parameter Error", f"Error setting some parameter values: {str(e)}")
+            self.app.log_frame.log_message(f"Profile '{os.path.basename(filepath)}' loaded successfully.\n")
+        except Exception as e:
+            error_message = f"Error loading profile: {e}\n"
+            self.app.log_frame.log_message(error_message)
+            messagebox.showerror("Load Profile Error", f"Failed to load or parse the profile file.\n\n{e}")
+    
+    def _compare_versions(self, version1, version2):
+        """
+        Compare two version strings.
+        
+        Returns:
+        -1 if version1 < version2
+         0 if version1 == version2
+         1 if version1 > version2
+        """
+        v1_parts = [int(x) for x in version1.split('.')]
+        v2_parts = [int(x) for x in version2.split('.')]
+        
+        # Pad with zeros if needed
+        while len(v1_parts) < len(v2_parts):
+            v1_parts.append(0)
+        while len(v2_parts) < len(v1_parts):
+            v2_parts.append(0)
+        
+        # Compare each part
+        for i in range(len(v1_parts)):
+            if v1_parts[i] < v2_parts[i]:
+                return -1
+            elif v1_parts[i] > v2_parts[i]:
+                return 1
+        
+        # If we get here, versions are equal
+        return 0
+        
+    def restore_defaults(self):
+        """
+        Restore all UI fields to application default values.
+        Requires confirmation before proceeding.
+        """
+        # Check if we have the operation confirmation service
+        if hasattr(self.app, 'operation_confirmation_service'):
+            # Ask for confirmation before restoring defaults
+            if not self.app.operation_confirmation_service.confirm_operation(
+                self.app.operation_confirmation_service.OPERATION_RESTORE_DEFAULTS
+            ):
+                self.app.log_frame.log_message("INFO: Restore defaults operation canceled by user\n")
+                return
+        else:
+            # Fallback to standard confirmation dialog
+            if not messagebox.askyesno(
+                "Confirm Restore Defaults",
+                "This will restore all application settings to default values.\n\n"
+                "Current UI values will be reset. This will not affect the device settings.\n\n"
+                "Do you want to continue?"
+            ):
+                self.app.log_frame.log_message("INFO: Restore defaults operation canceled by user\n")
+                return
+        
+        # Get a reference to the parameters frame for easier access
+        params_frame = self.app.params_frame
+        
+        try:
+            # Create a progress dialog if we have the operation confirmation service
+            progress_dialog_id = None
+            if hasattr(self.app, 'operation_confirmation_service'):
+                progress_dialog_id = self.app.operation_confirmation_service.create_progress_dialog(
+                    "Restoring Defaults",
+                    "Restore Default Values",
+                    self.app.operation_confirmation_service.PROGRESS_TYPE_INDETERMINATE,
+                    cancelable=False
+                )
+            
+            # Reset APN parameters
+            params_frame.apn_server_entry.delete(0, "end")
+            params_frame.apn_server_entry.insert(0, self.DEFAULT_VALUES.get('apn_server', ''))
+            
+            params_frame.apn_user_entry.delete(0, "end")
+            params_frame.apn_user_entry.insert(0, self.DEFAULT_VALUES.get('apn_user', ''))
+            
+            params_frame.apn_password_entry.delete(0, "end")
+            params_frame.apn_password_entry.insert(0, self.DEFAULT_VALUES.get('apn_password', ''))
+            
+            # Reset transmission mode
+            params_frame.trans_mode_var.set(self.DEFAULT_VALUES.get('transmission_mode', 'TCP'))
+            
+            # Reset all other parameters from factory-created widgets
+            if hasattr(params_frame, 'set_all_parameter_values'):
+                params_frame.set_all_parameter_values(self.DEFAULT_VALUES)
+            
+            # Complete the progress dialog if it exists
+            if progress_dialog_id:
+                self.app.operation_confirmation_service.complete_progress(
+                    progress_dialog_id,
+                    True,
+                    "Default values restored successfully"
+                )
+            
+            # Show success notification
+            if hasattr(self.app, 'operation_confirmation_service'):
+                self.app.operation_confirmation_service.show_success_notification("Default values restored successfully")
+            else:
+                self.app.log_frame.log_message("INFO: Default values restored successfully\n")
+                
+        except Exception as e:
+            self.app.log_frame.log_message(f"ERROR: Failed to restore defaults: {str(e)}\n")
+            
+            # Close progress dialog with error if it exists
+            if progress_dialog_id:
+                self.app.operation_confirmation_service.complete_progress(
+                    progress_dialog_id,
+                    False,
+                    f"Error: {str(e)}"
+                )
+            
+            # Show error dialog
+            messagebox.showerror("Restore Defaults Error", f"Failed to restore default values.\n\n{e}")
+    
+    def validate_config_file(self, filepath):
+        """
+        Validate a configuration file before loading it.
+        
+        Args:
+            filepath: Path to the configuration file
+            
+        Returns:
+            Tuple of (is_valid, error_message, config_data)
+        """
+        try:
+            import configparser
+            config = configparser.ConfigParser()
+            config.optionxform = str
+            config.read(filepath, encoding='utf-8')
+            config_data = {}
+            for section in config.sections():
+                config_data[section] = dict(config.items(section))
+            # Check for required Profile_Info section and version key
+            if 'Profile_Info' not in config_data or 'version' not in config_data['Profile_Info']:
+                return (False, "Profile is missing required section or key: Profile_Info/version", None)
+            file_version = config_data['Profile_Info']['version']
+            if self._compare_versions(file_version, self.CONFIG_VERSION) > 0:
+                warning_message = (
+                    f"Warning: The profile was created with a newer version ({file_version}) "
+                    f"than the current application version ({self.CONFIG_VERSION}). "
+                    "Some settings may not be loaded correctly."
+                )
+                return (True, warning_message, config_data)
+            # Validate profile data structure using ValidationService if available
+            params_frame = self.app.params_frame
+            if hasattr(params_frame, 'validation_service'):
+                validation_result = params_frame.validation_service.validate_profile_data(config_data)
+                if not validation_result.is_valid:
+                    return (False, validation_result.error_message, None)
+            return (True, "", config_data)
+        except Exception as e:
+            return (False, f"Error validating configuration file: {str(e)}", None)
+</document_content>
+</document>
+<document index="35">
+<source>.\services\configuration_reader_service.py</source>
+<document_content>
+import re
+import time
+import threading
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Callable, Tuple
+from datetime import datetime
+from services.i18n_service import I18nService
+from services.lt32pro_command_formatter import LT32ProCommandFormatter
+
+
+@dataclass
+class ParameterReadResult:
+    """Result of reading a single parameter from the device."""
+    parameter_name: str
+    success: bool
+    value: Optional[str]
+    error_message: Optional[str]
+    raw_response: str
+
+
+@dataclass
+class ConfigurationReadResult:
+    """Result of reading multiple parameters from the device."""
+    success: bool
+    parameters_read: List[ParameterReadResult]
+    total_parameters: int
+    failed_parameters: List[str]
+    read_duration: float
+    timestamp: datetime
+
+
+@dataclass
+class ParsedResponse:
+    """Result of parsing a device response."""
+    command: str
+    success: bool
+    parsed_values: Dict[str, Any]
+    raw_response: str
+    error_message: Optional[str]
+
+
+class ConfigurationReaderService:
+    """Service for reading device configurations via RS232 connection."""
+
+    def __init__(self, app_instance, i18n_service: I18nService):
+        """
+        Initialize the configuration reader service.
+        
+        Args:
+            app_instance: Main application instance
+            i18n_service: Internationalization service for error messages
+        """
+        self.app = app_instance
+        self.i18n = i18n_service
+        self.is_reading = False
+        self.read_thread = None
+        self.progress_callback = None
+        self.completion_callback = None
+        self.cancel_requested = False
+        
+        # Response capture mechanism
+        self.waiting_for_response = False
+        self.captured_response = None
+        self.response_timeout = False
+        
+        # Command formatter for proper LT32Pro USB communication
+        self.command_formatter = LT32ProCommandFormatter()
+        
+        # Error handling
+        self.parameter_error_handler = None
+        self._init_error_handler()
+        
+        # Initialize parameter query commands
+        self._init_parameter_query_commands()
+        
+        # Initialize response parsing patterns
+        self._init_response_patterns()
+        
+        # Progress tracking variables
+        self.current_parameter_index = 0
+        self.total_parameters_count = 0
+        self.successful_reads_count = 0
+        self.failed_reads_count = 0
+        self.current_parameter_name = ""
+        self.progress_dialog_id = None
+        self.last_read_attempt = None
+        self.total_read_attempts = 0
+        self.successful_reads = 0
+        self.failed_reads = 0
+    
+    def _init_error_handler(self):
+        """Initialize parameter error handler."""
+        if hasattr(self.app, 'error_handler') and hasattr(self.app.error_handler, 'parameter_error_handler'):
+            self.parameter_error_handler = self.app.error_handler.parameter_error_handler
+        else:
+            try:
+                from services.parameter_error_handler import ParameterErrorHandler
+                self.parameter_error_handler = ParameterErrorHandler(self.app)
+            except ImportError:
+                self.parameter_error_handler = None
+
+    def _init_parameter_query_commands(self) -> None:
+        """Initialize AT commands for querying device parameters based on specification."""
+        # Expanded: Full parameter set for device configuration check
+        self.parameter_query_commands = {
+            # Basic device information
+            'device_info': [
+                ('STATUS', 'get_status')
+            ],
+            # Network parameters
+            'apn_settings': ('APN', 'get_apn'),
+            'server_settings': ('SERVER', 'get_server'),
+            'network_settings': ('NETSELECT', 'get_netselect'),
+            # Service parameters
+            'protocol': ('GT06SEL', 'get_protocol'),
+            'tcp_ack': ('POSBYACK', 'get_tcp_ack'),
+            # Time Parameters
+            'report_intervals': ('TIMER', 'get_timer'),
+            'heartbeat_intervals': ('HBT', 'get_hbt'),
+            # Ignition Parameters
+            'ignition_type': ('ACCLINE', 'get_ignition_type'),
+            # Speed Parameters
+            'speed_alert': ('SPEED', 'get_speed_alert'),
+            'blind_area_speed': ('BLINDSPD', 'get_blind_area_speed'),
+            'speed_buzzer': ('SPD_LED_SHOW', 'get_speed_buzzer'),
+            # Power Saving Parameters
+            'sleep_mode': ('SLPDISCONNECT', 'get_sleep_mode'),
+            'sleep_time': ('SLEEPT', 'get_sleep_time'),
+            # Angle Parameters
+            'angle_report': ('ANGLEVALUE', 'get_angle_report'),
+            # Battery Alert Parameters
+            'backup_battery_alert': ('BATALM', 'get_backup_battery_alert'),
+            'main_power_alert': ('POWERALM', 'get_main_power_alert'),
+            'backup_battery_protection_voltage': ('BATSLPVALUE', 'get_backup_battery_protection_voltage'),
+            # Vibration Sensor Parameters
+            'vibration_sensitivity': ('VIBL', 'get_vibration_sensitivity'),
+            'vibration_window': ('VIBCHK', 'get_vibchk'),
+            # Jammer Detection Parameters
+            'jammer_detection': ('JAMMER', 'get_jammer_detection'),
+            'jammer_relay_action': ('JAMRELAY', 'get_jammer_relay_action'),
+            # Miscellaneous Parameters
+            'odometer': ('MILEAGE', 'get_odometer'),
+            'hourmeter': ('ACCONT', 'get_hourmeter'),
+            'defense_settings': ('DEFENSE', 'get_defense'),
+            'source_off_type': ('SOURCE_OFF_TYPE', 'get_source_off_type'),
+            'relay_control': ('RELAY', 'get_relay_control'),
+            'sends_control': ('SENDS', 'get_sends_control'),
+            'moving_alert': ('MOVING', 'get_moving_alert'),
+            'motion_sensor_alert': ('SENALM', 'get_motion_sensor_alert'),
+            'distance_movement_action': ('MOVEALMFUN', 'get_distance_movement_action'),
+            'acc_on_alert': ('ACCALM', 'get_acc_on_alert'),
+            'acc_off_alert': ('ACCOFFALM', 'get_acc_off_alert'),
+            # Comprehensive parameter query
+            'all_parameters': ('PARAM', 'get_all_params')
+        }
+
+    def _init_response_patterns(self) -> None:
+        """Initialize regex patterns for parsing device responses based on specification."""
+        self.response_patterns = {
+            # Device information patterns (LT32Pro serial format)
+            'get_imei': r'READOK:\s*IMEI=(\d+)',
+            'get_iccid': r'READOK:\s*ICCID=(\d+)',
+            'get_version': r'(.+)',  # Version format: LT32Pro_10F8A_B53_V6.56 2025-06-26
+            'get_status': r'(.+)',   # Status format: Battery:4.11V;GPRS:Online;GSM Signal Level:29;ACC:ON;GPS:Successful positioning
+            
+            # Network Parameters
+            'get_apn': r'APN:([^,]*),([^,]*),([^#]*)',
+            'get_server': r'SERVER:(\d+),([^,]*),(\d+),(\d+)',
+            
+            # Time Parameters
+            'get_timer': r'TIMER:\s*(\d+)\s*,\s*(\d+)|TIMER\s+ACC\s+ON:\s*(\d+)s?\s*,\s*ACC\s+OFF:\s*(\d+)s?|TIMER:\s*(\d+)s?\s*,\s*ACC\s+OFF:\s*(\d+)s?',
+            'get_hbt': r'HBT:(\d+),(\d+)|HBT ACC ON:(\d+)s,ACC OFF:(\d+)s|HBT:(\d+)s,ACC OFF:(\d+)s',
+            
+            # Service Parameters (LT32Pro format)
+            'get_protocol': r'READOK:\s*GT06SEL=(\d+)',
+            'get_tcp_ack': r'READOK:\s*POSBYACK=(\d+)',
+            
+            # Ignition Parameters (LT32Pro format)
+            'get_ignition_type': r'READOK:\s*ACCLINE=(\d+)[\s\*]ACC_CFG=(\d+)[,-](\d+)[,-](\d+)',
+            
+            # Speed Parameters (LT32Pro format)
+            'get_blind_area_speed': r'READOK:\s*BLINDSPD=(\d+)',
+            'get_speed_alert': r'SPEED:(OFF|ON,(\d+),(\d+),(\d+))',
+            'get_speed_buzzer': r'READOK:\s*SPD_LED_SHOW=(\d+)',
+            
+            # Power Saving Parameters (LT32Pro format)
+            'get_sleep_mode': r'READOK:\s*SLPDISCONNECT=(\d+)',
+            'get_sleep_time': r'READOK:\s*SLEEPT=(\d+)',
+            
+            # Angle Parameters (LT32Pro format)
+            'get_angle_report': r'READOK:\s*ANGLEVALUE=(\d+)-(\d+)',
+            
+            # Battery Alert Parameters
+            'get_backup_battery_alert': r'BATALM:(?:(ON),(\d+)|(OFF))',
+            'get_main_power_alert': r'POWERALM:(ON|OFF|\d+),(\d+),(\d+),(\d+)',
+            'get_backup_battery_protection_voltage': r'READOK:\s*BATSLPVALUE=(\d+)',
+            
+            # Vibration Sensor Parameters (LT32Pro format)
+            'get_vibration_sensitivity': r'READOK:\s*VIBL=(\d+)',
+            
+            # Jammer Detection Parameters
+            'get_jammer_detection': r'JAMMER:(ON|OFF|\d+)(?:,(\d+))?',
+            'get_jammer_relay_action': r'JAMRELAY:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)',
+            'get_source_off_type': r'READOK:\s*SOURCE_OFF_TYPE=(\d+)',
+            'get_relay_control': r'RELAY:(\d+)',
+            'get_sends_control': r'SENDS:(\d+)',
+            'get_moving_alert': r'MOVING:(?:(ON),(\d+),(\d+)|(OFF))',
+            'get_motion_sensor_alert': r'SENALM:(?:(ON),(\d+)|(OFF))',
+            'get_distance_movement_action': r'READOK:\s*MOVEALMFUN=(\d+)',
+            'get_acc_on_alert': r'ACCALM[:, ]*(?:(ON),(\d+)|(OFF))',
+            'get_acc_off_alert': r'ACCOFFALM[:, ]*(?:(ON),(\d+)|(OFF))',
+            
+            # Miscellaneous Parameters
+            'get_odometer': r'(?:MILEAGE=([^,#\s]+)|Cur Mileage Value:([^K]+)KM)',
+            'get_hourmeter': r'(?:ACCONT:([^,#\s]+)|Get ACC ON Time:([^M]+) Minute|Set ACC ON Time:([^M]+) Minute OK)',
+            
+            # Legacy patterns for backward compatibility (LT32Pro format)
+            'get_vibl': r'READOK:\s*VIBL=(\d+)',
+            'get_vibchk': r'READOK:\s*VIBCHK=(\d+):(\d+)',
+            'get_defense': r'DEFENSE:(\d+)',
+            'get_gt06sel': r'READOK:\s*GT06SEL=(\d+)',
+            'get_netselect': r'READOK:\s*NETSELECT=(\d+)',
+            'get_slpdisconnect': r'READOK:\s*SLPDISCONNECT=(\d+)',
+            'get_sleept': r'READOK:\s*SLEEPT=(\d+)',
+            
+            # All parameters pattern (complex parsing needed)
+            'get_all_params': r'(.+)'  # Will need special handling
+        }
+
+    def read_all_configurations(self, progress_callback: Optional[Callable] = None,
+                              completion_callback: Optional[Callable] = None,
+                              show_progress_dialog: bool = True) -> None:
+        """
+        Read all device configurations asynchronously with enhanced progress indication.
+        
+        Args:
+            progress_callback: Optional callback for progress updates (current, total, status)
+            completion_callback: Optional callback when reading is complete (result)
+            show_progress_dialog: Whether to show a progress dialog
+        """
+        if self.is_reading:
+            error_msg = self.i18n.get('config_read_already_in_progress', 
+                                    'Configuration reading is already in progress')
+            if completion_callback:
+                result = ConfigurationReadResult(
+                    success=False,
+                    parameters_read=[],
+                    total_parameters=0,
+                    failed_parameters=[],
+                    read_duration=0.0,
+                    timestamp=datetime.now()
+                )
+                completion_callback(result, error_msg)
+            return
+
+        # Enhanced connection validation before starting operations
+        if self.parameter_error_handler:
+            validation_result = self.parameter_error_handler.validate_connection_before_operation("configuration reading")
+            if not validation_result.is_valid:
+                error_msg = validation_result.error_message or 'Connection validation failed'
+                self._log_message(f"ERROR: Connection validation failed: {error_msg}")
+                
+                # Log detailed validation information
+                self._log_message(f"DEBUG: Connection quality: {validation_result.connection_quality}%")
+                if validation_result.last_activity:
+                    time_since = datetime.now() - validation_result.last_activity
+                    self._log_message(f"DEBUG: Last activity: {int(time_since.total_seconds())}s ago")
+                
+                # Log suggested actions with priority
+                if validation_result.suggested_actions:
+                    self._log_message("INFO: Suggested solutions (in order of priority):")
+                    for i, action in enumerate(validation_result.suggested_actions, 1):
+                        priority = "HIGH" if i <= 2 else "MEDIUM" if i <= 4 else "LOW"
+                        self._log_message(f"INFO: {i}. [{priority}] {action}")
+                
+                # Create detailed error result
+                if completion_callback:
+                    result = ConfigurationReadResult(
+                        success=False,
+                        parameters_read=[],
+                        total_parameters=0,
+                        failed_parameters=['connection_validation'],
+                        read_duration=0.0,
+                        timestamp=datetime.now()
+                    )
+                    completion_callback(result, error_msg)
+                return
+        else:
+            # Fallback connection check
+            if not hasattr(self.app, 'serial_service') or not self.app.serial_service.is_connected:
+                error_msg = self.i18n.get('config_read_no_connection', 
+                                        'Device connection is required for configuration reading')
+                if completion_callback:
+                    result = ConfigurationReadResult(
+                        success=False,
+                        parameters_read=[],
+                        total_parameters=0,
+                        failed_parameters=[],
+                        read_duration=0.0,
+                        timestamp=datetime.now()
+                    )
+                    completion_callback(result, error_msg)
+                return
+
+        self.progress_callback = progress_callback
+        self.completion_callback = completion_callback
+        self.cancel_requested = False
+        self.is_reading = True
+        self.progress_dialog_id = None
+        
+        # Initialize progress tracking variables
+        self.current_parameter_index = 0
+        self.total_parameters_count = 0
+        self.successful_reads_count = 0
+        self.failed_reads_count = 0
+        self.current_parameter_name = ""
+
+        # Create enhanced progress dialog if requested and service is available
+        if show_progress_dialog and hasattr(self.app, 'operation_confirmation_service'):
+            try:
+                # Get total parameter count for accurate progress
+                all_commands = self._get_all_parameter_commands()
+                self.total_parameters_count = len(all_commands)
+                
+                self.progress_dialog_id = self.app.operation_confirmation_service.create_progress_dialog(
+                    title=self.i18n.get('config_read_dialog_title', 'Reading Device Configuration'),
+                    operation_name=self.i18n.get('config_read_operation_name', 'Parameter Reading Operation'),
+                    progress_type=self.app.operation_confirmation_service.PROGRESS_TYPE_DETERMINATE,
+                    total_steps=self.total_parameters_count,
+                    cancelable=True
+                )
+                
+                # Set cancel callback
+                self.app.operation_confirmation_service.set_cancel_callback(
+                    self.progress_dialog_id,
+                    self.cancel_reading
+                )
+                
+                # Initialize progress dialog with starting status
+                self.app.operation_confirmation_service.update_progress(
+                    self.progress_dialog_id,
+                    step=0,
+                    status_text=f"Preparing to read {self.total_parameters_count} parameters..."
+                )
+                
+            except Exception as e:
+                self._log_message(f"WARNING: Failed to create progress dialog: {str(e)}")
+                self.progress_dialog_id = None
+
+        # Disable parameter modification during read operations
+        self._disable_parameter_modification(True)
+
+        # Start reading in a separate thread
+        self.read_thread = threading.Thread(target=self._read_configurations_thread, daemon=True)
+        self.read_thread.start()
+
+    def _read_configurations_thread(self) -> None:
+        """Thread function for reading configurations."""
+        start_time = time.time()
+        parameters_read = []
+        failed_parameters = []
+        success = False
+        completion_message = None
+        error_msg = None
+        
+        try:
+            # Initialize error tracking
+            self.last_read_attempt = datetime.now()
+            self.total_read_attempts = getattr(self, 'total_read_attempts', 0) + 1
+            
+            # Get all parameter commands to execute
+            all_commands = self._get_all_parameter_commands()
+            total_commands = len(all_commands)
+            
+            self._log_message(f"INFO: Starting configuration read with {total_commands} commands (attempt #{self.total_read_attempts})")
+            
+            for i, (param_name, command, command_type) in enumerate(all_commands):
+                # Check for cancellation before processing each parameter
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user before processing parameter")
+                    break
+                
+                # Update current parameter tracking
+                self.current_parameter_index = i + 1
+                self.current_parameter_name = param_name
+                
+                # Create detailed status text with progress information
+                status_text = self.i18n.get('config_read_progress', 
+                                          'Reading {param_name}... ({current}/{total})').format(
+                    param_name=param_name,
+                    current=self.current_parameter_index,
+                    total=total_commands
+                )
+                
+                # Update progress dialog with enhanced information
+                if self.progress_dialog_id and hasattr(self.app, 'operation_confirmation_service'):
+                    try:
+                        # Create detailed status with success/failure counts
+                        detailed_status = (f"Reading: {param_name}\n"
+                                         f"Progress: {self.current_parameter_index}/{total_commands} parameters\n"
+                                         f"Success: {self.successful_reads_count} | Failed: {self.failed_reads_count}")
+                        
+                        self.app.after(0, self.app.operation_confirmation_service.update_progress,
+                                      self.progress_dialog_id, self.current_parameter_index, detailed_status)
+                    except Exception as e:
+                        self._log_message(f"WARNING: Failed to update progress dialog: {str(e)}")
+                
+                # Call custom progress callback with enhanced information
+                if self.progress_callback:
+                    progress_info = {
+                        'current_step': self.current_parameter_index,
+                        'total_steps': total_commands,
+                        'current_parameter': param_name,
+                        'successful_count': self.successful_reads_count,
+                        'failed_count': self.failed_reads_count,
+                        'status_text': status_text,
+                        'can_cancel': True
+                    }
+                    self.app.after(0, self.progress_callback, progress_info)
+                
+                # Log the command being sent for debugging
+                self._log_message(f"DEBUG: Sending command for {param_name}: {command} (type: {command_type})")
+                
+                # Check for cancellation before sending command
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user before sending command")
+                    break
+                
+                # Read the parameter with enhanced error handling
+                result = self.read_specific_parameter_with_error_handling(param_name, command, command_type, max_retries=2)
+                parameters_read.append(result)
+                
+                # Check for cancellation after reading parameter
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user after reading parameter")
+                    break
+                
+                if not result.success:
+                    failed_parameters.append(param_name)
+                    self.failed_reads_count += 1
+                    error_msg = self._get_specific_error_message(param_name, result.error_message)
+                    self._log_message(f"WARNING: Failed to read {param_name}: {error_msg}")
+                    
+                    # Log additional error context if available
+                    if hasattr(result, 'error_context') and result.error_context:
+                        self._log_message(f"DEBUG: Error context: {result.error_context}")
+                else:
+                    self.successful_reads_count += 1
+                    self._log_message(f"INFO: Successfully read {param_name}: {result.value}")
+                    
+                    # Update last successful operation timestamp
+                    if self.parameter_error_handler:
+                        self.parameter_error_handler.last_successful_operation = datetime.now()
+                
+                # Check for cancellation after processing result
+                if self.cancel_requested:
+                    self._log_message("INFO: Configuration reading canceled by user during processing")
+                    break
+                    
+                # Add delay between commands to avoid overwhelming the device
+                # But don't delay if canceled
+                if i < total_commands - 1 and not self.cancel_requested:  # Don't delay after the last command or if canceled
+                    time.sleep(0.8)
+            
+            # Calculate results
+            read_duration = time.time() - start_time
+            successful_reads = self.successful_reads_count
+            failed_reads = self.failed_reads_count
+            
+            # Check if operation was canceled
+            if self.cancel_requested:
+                success = successful_reads > 0  # Success if at least one parameter was read before cancellation
+                completion_message = (f"ÔÜá Configuration reading canceled by user\n"
+                                    f"Completed: {successful_reads} parameters\n"
+                                    f"Duration: {read_duration:.1f} seconds")
+            else:
+                success = successful_reads > 0  # Success if at least one parameter was read
+                
+                # Set completion message with detailed results and statistics
+                if failed_reads == 0:
+                    completion_message = (f"Ô£ô Configuration reading completed successfully!\n"
+                                        f"All {successful_reads} parameters read successfully\n"
+                                        f"Duration: {read_duration:.1f} seconds")
+                elif successful_reads > 0:
+                    completion_message = (f"ÔÜá Configuration reading partially completed\n"
+                                        f"Success: {successful_reads} | Failed: {failed_reads}\n"
+                                        f"Total: {successful_reads + failed_reads} parameters\n"
+                                        f"Duration: {read_duration:.1f} seconds")
+                else:
+                    completion_message = (f"Ô£ù Configuration reading failed\n"
+                                        f"No parameters could be read ({failed_reads} failures)\n"
+                                        f"Duration: {read_duration:.1f} seconds")
+            
+            result = ConfigurationReadResult(
+                success=success,
+                parameters_read=parameters_read,
+                total_parameters=total_commands,
+                failed_parameters=failed_parameters,
+                read_duration=read_duration,
+                timestamp=datetime.now()
+            )
+            
+            # Update error statistics
+            self.successful_reads = getattr(self, 'successful_reads', 0) + successful_reads
+            self.failed_reads = getattr(self, 'failed_reads', 0) + len(failed_parameters)
+            
+            # Update UI with read parameters only if not canceled
+            if success and not self.cancel_requested:
+                self._update_ui_with_parameters(parameters_read)
+                # Also update the profile manager with the read parameters
+                self._update_profile_manager_with_parameters(parameters_read)
+            
+            # Call completion callback
+            if self.completion_callback:
+                error_msg = None
+                if failed_parameters and not self.cancel_requested:
+                    error_msg = f"Failed to read {len(failed_parameters)} parameters"
+                elif self.cancel_requested:
+                    error_msg = "Operation canceled by user"
+                
+                # Only call completion callback if not canceled or if we want to notify about cancellation
+                if not self.cancel_requested or True:  # Always call completion callback
+                    self.completion_callback(result, error_msg)
+            
+            if self.cancel_requested:
+                self._log_message(f"INFO: Configuration reading was canceled by user after {read_duration:.2f} seconds")
+            else:
+                self._log_message(f"INFO: Configuration reading completed in {read_duration:.2f} seconds")
+                self._log_message(f"INFO: Session statistics - Total successful: {self.successful_reads}, Total failed: {self.failed_reads}")
+            
+        except Exception as e:
+            # Handle unexpected errors
+            success = False
+            error_msg = self.i18n.get('config_read_unexpected_error',
+                                    'Unexpected error during configuration reading: {error}').format(error=str(e))
+            completion_message = f"Operation failed: {str(e)}"
+            self._log_message(f"ERROR: {error_msg}")
+            
+            result = ConfigurationReadResult(
+                success=False,
+                parameters_read=parameters_read,
+                total_parameters=0,
+                failed_parameters=[],
+                read_duration=time.time() - start_time,
+                timestamp=datetime.now()
+            )
+            
+            if self.completion_callback:
+                self.completion_callback(result, error_msg)
+        
+        finally:
+            self.is_reading = False
+            self.cancel_requested = False  # Reset cancel flag
+            
+            # Re-enable parameter modification
+            self._disable_parameter_modification(False)
+            
+            # Close progress dialog if it exists
+            if self.progress_dialog_id and hasattr(self.app, 'operation_confirmation_service'):
+                try:
+                    self.app.after(0, self.app.operation_confirmation_service.complete_progress,
+                                  self.progress_dialog_id, success, completion_message or error_msg)
+                except Exception as e:
+                    self._log_message(f"WARNING: Failed to close progress dialog: {str(e)}")
+            
+            self.progress_dialog_id = None
+
+    def _update_ui_with_parameters(self, parameters_read):
+        """
+        Update UI with parameters read from the device based on specification.
+        
+        Args:
+            parameters_read: List of parameter read results
+        """
+        try:
+            self._log_message("DEBUG: Updating UI with parameters read from device")
+            self._log_message(f"DEBUG: Number of parameters to process: {len(parameters_read)}")
+            
+            # Debug: List all parameters
+            for result in parameters_read:
+                self._log_message(f"DEBUG: Parameter {result.parameter_name}: success={result.success}, value={result.value}")
+            
+            # Check if we have access to the parameters frame
+            if not hasattr(self.app, 'parameters_frame') or self.app.parameters_frame is None:
+                self._log_message("DEBUG: Parameters frame not available yet, scheduling UI update for later")
+                # Schedule the UI update for later when the parameters frame is available
+                self.app.after(100, lambda: self._update_ui_with_parameters(parameters_read))
+                return
+            else:
+                self._log_message("DEBUG: Parameters frame found, proceeding with UI updates")
+            
+            # Group parameters by parsed data for efficient processing
+            parsed_parameters = {}
+            for result in parameters_read:
+                if result.success and result.raw_response:
+                    # Parse the response to get all field values
+                    parsed_response = self.parse_device_response(
+                        result.parameter_name, 
+                        result.raw_response, 
+                        self._get_command_type_for_parameter(result.parameter_name)
+                    )
+                    if parsed_response.success:
+                        parsed_parameters[result.parameter_name] = parsed_response.parsed_values
+            
+            # Update UI fields based on parsed parameters
+            self._update_ui_fields_from_parsed_data(parsed_parameters)
+            
+            # Handle conditional field updates
+            self._handle_conditional_field_updates(parsed_parameters)
+            
+            # Log successful UI updates
+            updated_count = len([r for r in parameters_read if r.success])
+            self._log_message(f"INFO: Successfully updated UI with {updated_count} parameters")
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI with parameters: {str(e)}")
+
+    def _get_parameter_section_mapping(self) -> dict:
+        """
+        Get mapping of parameter names to their UI section and parameter keys.
+        
+        Returns:
+            Dictionary mapping parameter names to section info
+        """
+        return {
+            # Network Parameters
+            'apn_settings': {'section': 'network_parameters', 'parameter': 'apn_settings'},
+            'server_settings': {'section': 'network_parameters', 'parameter': 'server_settings'},
+            'network_settings': {'section': 'network_parameters', 'parameter': 'network_settings'},
+            
+            # Time Parameters
+            'report_intervals': {'section': 'time_parameters', 'parameter': 'report_intervals'},
+            'heartbeat_intervals': {'section': 'time_parameters', 'parameter': 'heartbeat_intervals'},
+            
+            # Service Parameters
+            'protocol': {'section': 'service_parameters', 'parameter': 'protocol'},
+            'tcp_ack': {'section': 'service_parameters', 'parameter': 'tcp_ack'},
+            
+            # Ignition Parameters
+            'ignition_type': {'section': 'ignition', 'parameter': 'ignition_type'},
+            
+            'blind_area_speed': {'section': 'speed', 'parameter': 'blind_area_speed'},
+            # Speed Parameters
+            'speed_alert': {'section': 'speed', 'parameter': 'speed_alert'},
+            'speed_buzzer': {'section': 'speed', 'parameter': 'speed_buzzer'},
+            
+            # Power Saving Parameters
+            'sleep_mode': {'section': 'power_saving', 'parameter': 'sleep_mode'},
+            'sleep_time': {'section': 'power_saving', 'parameter': 'sleep_time'},
+            
+            # Angle Parameters
+            'angle_report': {'section': 'angle', 'parameter': 'angle_report'},
+            
+            # Battery Alert Parameters
+            'backup_battery_alert': {'section': 'battery_alerts', 'parameter': 'backup_battery_alert'},
+            'main_power_alert': {'section': 'battery_alerts', 'parameter': 'main_power_alert'},
+            'backup_battery_protection_voltage': {'section': 'battery_alerts', 'parameter': 'backup_battery_protection_voltage'},
+
+            # Vibration Sensor Parameters
+            'vibration_sensitivity': {'section': 'vibration_sensor', 'parameter': 'vibration_sensitivity'},
+            'vibration_window': {'section': 'vibration_sensor', 'parameter': 'vibration_window'},
+            
+            # Jammer Detection Parameters
+            'jammer_detection': {'section': 'jammer_detection', 'parameter': 'jammer_detection'},
+            'jammer_relay_action': {'section': 'jammer_detection', 'parameter': 'jammer_relay_action'},
+            
+            # Miscellaneous Parameters
+            'odometer': {'section': 'miscellaneous', 'parameter': 'odometer'},
+            'hourmeter': {'section': 'miscellaneous', 'parameter': 'hourmeter'},
+            'defense_settings': {'section': 'security', 'parameter': 'defense_settings'},
+            'source_off_type': {'section': 'output_control', 'parameter': 'source_off_type'},
+            'relay_control': {'section': 'output_control', 'parameter': 'relay_control'},
+            'sends_control': {'section': 'gps_control', 'parameter': 'sends_control'},
+
+            # Movement Alerts
+            'moving_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
+            'moving': {'section': 'movement_alerts', 'parameter': 'moving_alert'},
+            'movement_alert': {'section': 'movement_alerts', 'parameter': 'moving_alert'}
+        }
+
+    def _update_profile_manager_with_parameters(self, parameters_read):
+        """
+        Update the profile manager's current profile with parameters read from the device.
+        
+        Args:
+            parameters_read: List of parameter read results
+        """
+        try:
+            # Check if profile manager is available
+            if not hasattr(self.app, 'profile_manager') or not self.app.profile_manager:
+                self._log_message("DEBUG: Profile manager not available, skipping profile update")
+                return
+            
+            # Create a profile from the read parameters
+            from models.universal_profile import UniversalProfile, ProfileMetadata, ParameterValue
+            from datetime import datetime
+            
+            # Create metadata
+            metadata = ProfileMetadata(
+                parameter_spec_version="1.0",
+                created_by="LT32 PRO Configurator - Check Configuration",
+                device_model="LT32 PRO"
+            )
+            
+            # Convert read parameters to ParameterValue objects
+            parameter_values = {}
+            successful_reads = 0
+            
+            for result in parameters_read:
+                if result.success and result.raw_response:
+                    # Parse the response to get all field values
+                    parsed_response = self.parse_device_response(
+                        result.parameter_name, 
+                        result.raw_response, 
+                        self._get_command_type_for_parameter(result.parameter_name)
+                    )
+                    
+                    if parsed_response.success:
+                        # Get the section mapping for this parameter
+                        parameter_mapping = self._get_parameter_section_mapping()
+                        section_info = parameter_mapping.get(result.parameter_name)
+                        
+                        if section_info:
+                            section_name = section_info['section']
+                            param_name = section_info['parameter']
+                            full_param_name = f"{section_name}.{param_name}"
+                        else:
+                            # Fallback to original parameter name
+                            full_param_name = result.parameter_name
+                        
+                        # Create parameter value based on the parsed data
+                        if isinstance(parsed_response.parsed_values, dict) and len(parsed_response.parsed_values) > 1:
+                            # Complex parameter with multiple fields - create individual field parameters
+                            for field_name, field_value in parsed_response.parsed_values.items():
+                                field_param_name = f"{full_param_name}.{field_name}"
+                                
+                                # Clean time parameter values to show only numeric values
+                                if result.parameter_name in ['report_intervals', 'heartbeat_intervals']:
+                                    field_value = self._extract_numeric_value_from_time_string(field_value)
+                                
+                                parameter_values[field_param_name] = ParameterValue(
+                                    value=field_value,
+                                    source="device"
+                                )
+                        else:
+                            # Simple parameter with single value
+                            # For parameters like odometer and hourmeter, extract the actual value
+                            if result.parameter_name in ['odometer', 'hourmeter'] and isinstance(parsed_response.parsed_values, dict):
+                                # Extract the actual value from the dictionary
+                                value = parsed_response.parsed_values.get(result.parameter_name, "")
+                            else:
+                                value = result.value or list(parsed_response.parsed_values.values())[0] if parsed_response.parsed_values else ""
+                            
+                            parameter_values[full_param_name] = ParameterValue(
+                                value=value,
+                                source="device"
+                            )
+                        successful_reads += 1
+            
+            if successful_reads > 0:
+                # Create the profile
+                now = datetime.now()
+                profile = UniversalProfile(
+                    name=f"Device Configuration {now.strftime('%Y-%m-%d %H:%M:%S')}",
+                    version="1.0",
+                    created_at=now,
+                    modified_at=now,
+                    metadata=metadata,
+                    parameters=parameter_values
+                )
+                
+                # Set as current profile in the profile manager
+                self.app.profile_manager.set_current_profile(profile)
+                self._log_message(f"INFO: Updated profile manager with {successful_reads} parameters from device")
+            else:
+                self._log_message("WARNING: No successful parameter reads to update profile manager")
+                
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update profile manager with parameters: {str(e)}")
+
+    def _extract_numeric_value_from_time_string(self, time_string: str) -> str:
+        """
+        Extract numeric value from time parameter strings.
+        
+        Examples:
+        - "60s" -> "60"
+        - "ACC OFF:120s" -> "120"
+        - "180" -> "180"
+        
+        Args:
+            time_string: Time string that may contain units and prefixes
+            
+        Returns:
+            str: Numeric value only
+        """
+        if not time_string:
+            return ""
+        
+        # Extract all digits from the string
+        import re
+        digits = re.findall(r'\d+', str(time_string))
+        
+        # Return the last number found (handles cases like "ACC OFF:120s")
+        return digits[-1] if digits else ""
+
+    def _update_ui_fields_from_parsed_data(self, parsed_parameters: Dict[str, Dict[str, Any]]):
+        """
+        Update UI fields from parsed parameter data.
+        
+        Args:
+            parsed_parameters: Dictionary of parameter names to parsed values
+        """
+        try:
+            self._log_message(f"DEBUG: Starting UI field updates for {len(parsed_parameters)} parameters")
+            
+            # Debug: Log all parsed parameters and their structure
+            for param_name, param_data in parsed_parameters.items():
+                self._log_message(f"DEBUG: Parsed parameter '{param_name}': {param_data}")
+            
+            # Check if parameters frame has the specification-based update method
+            if hasattr(self.app.parameters_frame, 'parameter_specification_factory'):
+                self._log_message("DEBUG: Using specification-based update method")
+                def update_fields():
+                    try:
+                        self._update_specification_based_fields(parsed_parameters)
+                        self._log_message("DEBUG: Updated parameter fields using specification-based method")
+                    except Exception as e:
+                        self._log_message(f"ERROR: Failed to update specification-based fields: {str(e)}")
+                        # Fallback to individual field updates
+                        self._log_message("DEBUG: Falling back to individual field updates")
+                        self._update_individual_fields(parsed_parameters)
+                
+                self.app.after(0, update_fields)
+            else:
+                # Fallback to individual field updates
+                self._log_message("DEBUG: Using individual field updates (no specification factory)")
+                self._update_individual_fields(parsed_parameters)
+                
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update UI fields: {str(e)}")
+
+    def _update_specification_based_fields(self, parsed_parameters: Dict[str, Dict[str, Any]]):
+        """
+        Update UI fields using the specification-based parameter factory.
+        
+        Args:
+            parsed_parameters: Dictionary of parameter names to parsed values
+        """
+        try:
+            parameters_frame = self.app.parameters_frame
+            section_widgets = parameters_frame.section_widgets
+            factory = parameters_frame.parameter_specification_factory
+            
+            # Track updated parameters for logging and visual feedback
+            updated_parameters = []
+            update_timestamp = datetime.now()
+            
+            # Map parameter names to section/parameter structure
+            parameter_mapping = self.app.parameters_frame._get_ui_parameter_mapping()
+            
+            for param_name, parsed_values in parsed_parameters.items():
+                try:
+                    # Get section and parameter name from mapping
+                    section_info = parameter_mapping.get(param_name)
+                    if not section_info:
+                        self._log_message(f"WARNING: No section mapping found for parameter {param_name}")
+                        continue
+                    
+                    section_name = section_info['section']
+                    param_key = section_info['parameter']
+                    
+                    # Get current value to check if it changed
+                    current_value = factory.get_parameter_value(section_name, param_key, section_widgets)
+                    
+                    # Determine the correct value to set based on parameter type
+                    section_widget = section_widgets[section_name]
+                    param_widget = section_widget.parameters[param_key]
+                    
+                    if param_widget.widget_type == 'simple':
+                        # For simple parameters, extract the value from the parsed_values dict
+                        # The parsed_values dict has the format: {'param_name': 'value'}
+                        if param_key in parsed_values:
+                            raw_value = parsed_values[param_key]
+                        else:
+                            # Fallback: if the key doesn't match, try to get the first value
+                            raw_value = next(iter(parsed_values.values())) if parsed_values else None
+                        
+                        # Convert value based on UI element type
+                        value_to_set = self._convert_value_for_ui_element(raw_value, param_widget)
+                    else:
+                        # For complex parameters, pass the entire parsed_values dict
+                        value_to_set = parsed_values
+                    
+                    # Update the parameter value
+                    if value_to_set is not None:
+                        factory.set_parameter_value(section_name, param_key, value_to_set, section_widgets)
+                    
+                    # Check if value actually changed
+                    new_value = factory.get_parameter_value(section_name, param_key, section_widgets)
+                    value_changed = current_value != new_value
+                    
+                    # Add visual indicator for updated field
+                    self._add_visual_update_indicator(section_name, param_key, value_changed)
+                    
+                    # Log the parameter update
+                    self._log_parameter_update(param_name, current_value, new_value, value_changed, update_timestamp)
+                    
+                    updated_parameters.append({
+                        'parameter': param_name,
+                        'section': section_name,
+                        'param_key': param_key,
+                        'old_value': current_value,
+                        'new_value': new_value,
+                        'changed': value_changed
+                    })
+                    
+                except Exception as e:
+                    self._log_message(f"ERROR: Failed to update parameter {param_name}: {str(e)}")
+            
+            # Log summary of updates
+            changed_count = sum(1 for p in updated_parameters if p['changed'])
+            unchanged_count = len(updated_parameters) - changed_count
+            
+            self._log_message(f"INFO: UI field update summary - {changed_count} changed, {unchanged_count} unchanged, {len(updated_parameters)} total")
+            
+            # Store update information for potential export
+            self._store_update_session_info(updated_parameters, update_timestamp)
+            
+        except Exception as e:
+            self._log_message(f"ERROR: Failed to update specification-based fields: {str(e)}")
+            raise
+
+
+
+    def _is_time_parameter(self, param_widget) -> bool:
+        """
+        Check if a parameter widget represents a time parameter that needs cleaning.
+        
+        Args:
+            param_widget: Parameter widget to check
+            
+        Returns:
+            bool: True if this is a time parameter that needs numeric cleaning
+        """
+        try:
+            # Get the parameter key/name from the widget
+            param_key = getattr(param_widget, 'key', '')
+            param_name = getattr(param_widget, 'name', '')
+            
+            self._log_message(f"DEBUG: Checking if parameter is time parameter - key: '{param_key}', name: '{param_name}'")
+            
+            # List of time parameter identifiers that need cleaning
+            time_parameter_keys = [
+                # Report interval parameters
+                'moving_time', 'stopped_time', 
+                'report_moving_time', 'report_stopped_time',
+                
+                # Heartbeat interval parameters
+                'moving_heartbeat', 'stopped_heartbeat',
+                'heartbeat_moving_time', 'heartbeat_stopped_time',
+                
+                # Sleep and power saving time parameters
+                'sleep_time',
+                
+                # Speed detection time parameters
+                'speed_detection_time', 'detection_time',
+                
+                # Power detection time parameters
+                'power_detection_time',
+                
+                # Charge time parameters
+                'min_charge_time',
+                
+                # Jammer confirmation time
+                'jammer_confirmation_time'
+            ]
+            
+            # Check if the parameter key or name matches any time parameter
+            is_time_param = param_key in time_parameter_keys or param_name in time_parameter_keys
+            self._log_message(f"DEBUG: Parameter '{param_key}'/'{param_name}' is time parameter: {is_time_param}")
+            return is_time_param
+            
+        except Exception as e:
+            self._log_message(f"WARNING: Error checking if parameter is time parameter: {str(e)}")
+            return False
+
+    def _convert_value_for_ui_element(self, raw_value: Any, param_widget) -> Any:
+        """
+        Convert raw parsed value to the format expected by the UI element.
+        
+        Args:
+            raw_value: Raw value from parameter parsing
+            param_widget: Parameter widget containing UI element information
+            
+        Returns:
+            Converted value appropriate for the UI element type
+        """
+        if raw_value is None:
+            return None
+        
+        # Apply time parameter cleaning for time-related parameters
+        if self._is_time_parameter(param_widget):
+            if isinstance(raw_value, str):
+                cleaned_value = self._extract_numeric_value_from_time_string(raw_value)
+                self._log_message(f"DEBUG: Time parameter cleaning applied - '{raw_value}' -> '{cleaned_value}'")
+                raw_value = cleaned_value
+            else:
+                self._log_message(f"DEBUG: Time parameter detected but value is not string: {type(raw_value)} = {raw_value}")
+        else:
+            self._log_message(f"DEBUG: Not a time parameter, no cleaning applied for value: {raw_value}")
+        
+        # Get the UI element configuration
+        ui_element = param_widget.ui_elements.get('main')
+        if not ui_element:
+            return raw_value
+        
+        element_type = ui_element.config.element_type
+        
+        # Convert based on UI element type
+        if element_type == 'toggle_switch':
+            # Convert string values to boolean for toggle switches
+            if isinstance(raw_value, str):
+                # Handle common string representations
+                if raw_value.lower() in ['enabled', 'on', 'true', '1', 'yes']:
+                    return True
+                elif raw_value.lower() in ['disabled', 'off', 'false', '0', 'no']:
+                    return False
+                else:
+                    # Fallback: try to convert to boolean
+                    return bool(raw_value)
+            else:
+                # For non-string values, convert to boolean
+                return bool(raw_value)
+        
+        elif element_type == 'number_input':
+            # Convert to number for number inputs
+            if isinstance(raw_value, str):
+                try:
+                    # Try integer first, then float
+                    if '.' in raw_value:
+                        return float(raw_value)
+                    else:
+                        return int(raw_value)
+                except ValueError:
+                    return raw_value
+            else:
+                return raw_value
+        
+        elif element_type == 'slider':
+            # Convert to number for sliders
+            if isinstance(raw_value, str):
+                try:
+                    return int(raw_value)
+                except ValueError:
+                    return raw_value
+            else:
+                return raw_value
+        
+        else:
+            # For other element types (dropdown, text_input, password_input), return as-is
+            return raw_value
+
+    def _add_visual_update_indicator(self, section_name: str, param_key: str, value_changed: bool):
+        """
+        Add visual indicator to show which fields were updated from device.
+        
+        Args:
+            section_name: Name of the parameter section
+            param_key: Key of the parameter within the section
+            value_changed: True if the value changed, False if it was the same
+        """
+        try:
+            parameters_frame = self.app.parameters_frame
+            
+            # Use the existing highlight method if available
+            if hasattr(parameters_frame, 'highlight_updated_parameter'):
+                full_param_name = f"{section_name}.{param_key}"
+                parameters_frame.highlight_updated_parameter(full_param_name, value_changed)
+            else:
+                # Fallback to direct widget highlighting
+                self._highlight_parameter_widget(section_name, param_key, value_changed)
+                
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to add visual indicator for {section_name}.{param_key}: {str(e)}")
+
+    def _highlight_parameter_widget(self, section_name: str, param_key: str, value_changed: bool):
+        """
+        Directly highlight a parameter widget.
+        
+        Args:
+            section_name: Name of the parameter section
+            param_key: Key of the parameter within the section
+            value_changed: True if the value changed, False if it was the same
+        """
+        try:
+            parameters_frame = self.app.parameters_frame
+            
+            if hasattr(parameters_frame, 'section_widgets'):
+                section_widgets = parameters_frame.section_widgets
+                
+                if section_name in section_widgets:
+                    section_widget = section_widgets[section_name]
+                    
+                    if param_key in section_widget.parameters:
+                        param_widget = section_widget.parameters[param_key]
+                        container_frame = param_widget.container_frame
+                        
+                        # Apply visual highlighting - safely check if configure method exists
+                        if hasattr(container_frame, 'configure'):
+                            if value_changed:
+                                # Green border for changed values
+                                container_frame.configure(border_color="#00ff00", border_width=2)
+                                # Schedule removal after 3 seconds
+                                self.app.after(3000, lambda: self._remove_widget_highlight(container_frame))
+                            else:
+                                # Blue border for unchanged values
+                                container_frame.configure(border_color="#0066cc", border_width=1)
+                                # Schedule removal after 2 seconds
+                                self.app.after(2000, lambda: self._remove_widget_highlight(container_frame))
+                        else:
+                            # Log that highlighting is not supported for this widget type
+                            widget_type = type(container_frame).__name__
+                            self._log_message(f"DEBUG: Widget highlighting not supported for {widget_type} ({section_name}.{param_key})")
+                            
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to highlight parameter widget {section_name}.{param_key}: {str(e)}")
+
+    def _remove_widget_highlight(self, widget):
+        """Remove highlight from a widget."""
+        try:
+            if hasattr(widget, 'configure'):
+                widget.configure(border_color="gray", border_width=0)
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to remove widget highlight: {str(e)}")
+
+    def _log_parameter_update(self, param_name: str, old_value: Any, new_value: Any, value_changed: bool, timestamp: datetime):
+        """
+        Log a parameter update with timestamps and values.
+        
+        Args:
+            param_name: Name of the parameter
+            old_value: Previous value
+            new_value: New value from device
+            value_changed: Whether the value actually changed
+            timestamp: Timestamp of the update
+        """
+        try:
+            status = "CHANGED" if value_changed else "UNCHANGED"
+            timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            
+            # Format values for logging
+            old_str = self._format_value_for_logging(old_value)
+            new_str = self._format_value_for_logging(new_value)
+            
+            log_message = f"PARAM_UPDATE [{timestamp_str}] {param_name}: {status} | Old: {old_str} | New: {new_str}"
+            self._log_message(log_message)
+            
+            # Also log to a separate parameter update log if available
+            if hasattr(self, 'parameter_update_log'):
+                self.parameter_update_log.append({
+                    'timestamp': timestamp,
+                    'parameter': param_name,
+                    'old_value': old_value,
+                    'new_value': new_value,
+                    'changed': value_changed
+                })
+            else:
+                # Initialize parameter update log
+                self.parameter_update_log = [{
+                    'timestamp': timestamp,
+                    'parameter': param_name,
+                    'old_value': old_value,
+                    'new_value': new_value,
+                    'changed': value_changed
+                }]
+                
+        except Exception as e:
+            self._log_message(f"WARNING: Failed to log parameter update for {param_name}: {str(e)}")
+
+    def _format_value_for_logging(self, value: Any) -> str:
+        """
+        Format a value for logging display.
+        
+        Args:
+            value: Value to format
+            
+        Returns:
+            Formatted string representation
+        """
+        if value is None:
+            return "None"
+        elif isinstance(value, dict):
+            # Format dictionary values compactly
+            items = [f"{k}={v}" for k, v in value.items()]
+            return "{" + ", ".join(items) + "}"
+        elif isinstance(value, str):
+            return f'"{value}"'
+        else:
+            return str(value)
+
+    def _store_update_session_info(self, updated_parameters: List[Dict[str, Any]], timestamp: datetime):
+        """
+        Store information about the update session for potential export.
+        
+        Args:
+            updated_parameters: List of parameter update information
+            timestamp: Session timestamp
+        """
+        try:
+            session_info = {
+                'timestamp': timestamp,
+                'total_parameters': len(updated_parameters),
