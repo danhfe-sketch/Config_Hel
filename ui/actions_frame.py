@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from tkinter.messagebox import askyesno, showwarning
+from ui.string_translator_dialog import show_string_translator  # <-- NOVO IMPORT AQUI
 
 class ActionsFrame(ctk.CTkFrame):
     def __init__(self, master, i18n, serial_service):
@@ -34,7 +35,17 @@ class ActionsFrame(ctk.CTkFrame):
             fg_color="red",
             hover_color="darkred"
         )
-        self.factory_reset_button.grid(row=4, column=0, padx=10, pady=(5, 10), sticky="ew")
+        self.factory_reset_button.grid(row=4, column=0, padx=10, pady=5, sticky="ew")
+
+        # <-- NOVO BOTÃO: TRADUTOR DE STRINGS -->
+        self.translator_button = ctk.CTkButton(
+            self,
+            text=self.i18n.get("string_translator", "Tradutor de Strings"),
+            command=self.open_translator,
+            fg_color="#1f538d",
+            hover_color="#14375e"
+        )
+        self.translator_button.grid(row=5, column=0, padx=10, pady=(5, 10), sticky="ew")
 
     def send_all_parameters(self):
         if self.serial_service.app.profile_operation_in_progress:
@@ -108,6 +119,11 @@ class ActionsFrame(ctk.CTkFrame):
             except Exception as e:
                 self.serial_service.app.log_frame.log_message(f"ERROR: Failed to send factory reset command: {str(e)}\n")
     
+    # <-- NOVA FUNÇÃO QUE ABRE O TRADUTOR -->
+    def open_translator(self):
+        """Abre a janela externa do Tradutor de Strings."""
+        show_string_translator(self.winfo_toplevel())
+
     def update_language_display(self):
         """Updates all UI elements with the current language."""
         # Update title
@@ -118,3 +134,4 @@ class ActionsFrame(ctk.CTkFrame):
         self.check_config_button.configure(text=self.i18n.get("check_config"))
         self.reboot_button.configure(text=self.i18n.get("reboot_device"))
         self.factory_reset_button.configure(text=self.i18n.get("factory_reset"))
+        self.translator_button.configure(text=self.i18n.get("string_translator", "Tradutor de Strings"))
