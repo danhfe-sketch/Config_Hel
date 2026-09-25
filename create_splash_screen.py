@@ -49,7 +49,7 @@ def create_splash_screen(version_text, master_image_path, output_path):
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    version = "1.3.6"
+    version = "1.3.7"
     master_image = "Master_splash.png"
     
     # --- NOVO: Define o caminho direcionando para assets/images ---

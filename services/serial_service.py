@@ -165,9 +165,6 @@ class SerialService:
             # Wait for threads to terminate
             if self.read_thread and self.read_thread.is_alive():
                 self.read_thread.join(timeout=1)
-            # Connection monitoring disabled
-            # if self.connection_monitor_thread and self.connection_monitor_thread.is_alive():
-            #     self.connection_monitor_thread.join(timeout=1)
                 
             # Close the port
             self.serial_port.close()
@@ -399,10 +396,6 @@ class SerialService:
                 if parsed_data:
                     self.app.after(0, self.app.update_ui_with_parsed_data, parsed_data)
 
-                # Update UI with parsed data
-                if parsed_data:
-                    self.app.after(0, self.app.update_ui_with_parsed_data, parsed_data)
-
             except Exception as e:
                 self.app.log_frame.log_message(f"ERROR: Failed to parse response: {str(e)}\n")
         
@@ -433,6 +426,10 @@ class SerialService:
 
         if version:
             self.app.connection_frame.version_value_var.set(version)
+            
+            # --- GATILHO PARA A AVALIAÇÃO DA OTA ---
+            if hasattr(self.app.connection_frame, 'verificar_atualizacao_firmware'):
+                self.app.after(0, self.app.connection_frame.verificar_atualizacao_firmware, version)
     
     def retrieve_device_info(self):
         """
@@ -508,6 +505,44 @@ class SerialService:
         
         # Check if the command starts with 'APN,' or contains 'SZCS#NETSELECT'
         return core_command.startswith('APN,') or 'SZCS#NETSELECT' in core_command
+
+    def _show_reboot_popup(self):
+        """Cria e exibe um pop-up destacado de reinicialização do dispositivo."""
+        if not hasattr(self, 'reboot_popup') or self.reboot_popup is None:
+            import customtkinter as ctk
+            self.reboot_popup = ctk.CTkToplevel(self.app)
+            self.reboot_popup.title("Aviso Importante")
+            self.reboot_popup.geometry("450x150")
+            self.reboot_popup.transient(self.app)
+            self.reboot_popup.grab_set()
+            
+            # Força o pop-up ficar na frente de tudo
+            self.reboot_popup.attributes('-topmost', True)
+            
+            # Centraliza o pop-up
+            self.reboot_popup.update_idletasks()
+            x = self.app.winfo_x() + (self.app.winfo_width() - 450) // 2
+            y = self.app.winfo_y() + (self.app.winfo_height() - 150) // 2
+            self.reboot_popup.geometry(f"+{x}+{y}")
+            
+            # Interface do pop-up
+            frame = ctk.CTkFrame(self.reboot_popup, fg_color="#2b2b2b", corner_radius=10)
+            frame.pack(expand=True, fill="both", padx=10, pady=10)
+            
+            lbl = ctk.CTkLabel(
+                frame, 
+                text="⚠️ O dispositivo está reiniciando...\n\nPor favor, não desconecte o cabo.", 
+                font=ctk.CTkFont(size=18, weight="bold"), 
+                text_color="#F39C12"
+            )
+            lbl.pack(expand=True)
+
+    def _hide_reboot_popup(self):
+        """Destrói o pop-up de reinicialização após a volta do dispositivo."""
+        if hasattr(self, 'reboot_popup') and self.reboot_popup:
+            self.reboot_popup.grab_release()
+            self.reboot_popup.destroy()
+            self.reboot_popup = None
     
     def _wait_for_device_reset(self, timeout: float = 30.0) -> bool:
         """
@@ -532,12 +567,7 @@ class SerialService:
         start_time = time.time()
         disconnect_detected = False
         
-        # First, wait a moment for the device to process and respond to the APN command
-        # The device sends a response first, then disconnects to reset
-        # self.app.log_frame.log_message("INFO: Waiting for device response and potential reset...\n")
-        # time.sleep(2.0)  # Give device time to respond
-        
-        # Wait for disconnect (up to 8 seconds after the initial wait)
+        # Wait for disconnect (up to 20 seconds after the initial wait)
         disconnect_wait_start = time.time()
         while (time.time() - disconnect_wait_start) < 20.0:
             # Check both is_connected flag and actual serial port state
@@ -551,20 +581,8 @@ class SerialService:
             
             if not self.is_connected or port_closed:
                 disconnect_detected = True
-                # self.app.log_frame.log_message("INFO: Device disconnect detected\n")
                 break
             time.sleep(0.1)
-        
-        # if not disconnect_detected:
-        #     # Device didn't disconnect - this might be normal if APN didn't change
-        #     self.app.log_frame.log_message("INFO: Device did not reset (APN may already be configured)\n")
-        #     self.waiting_for_device_reset = False
-        #     # Return True to continue processing - this is not an error
-        #     return True
-        
-        # Wait a bit for device to fully reset
-        # self.app.log_frame.log_message("INFO: Waiting for device to complete reset...\n")
-        # time.sleep(10.0)
         
         # Try to reconnect (up to remaining timeout)
         reconnect_start = time.time()
@@ -588,8 +606,6 @@ class SerialService:
             
             time.sleep(0.5)
         
-        # Timeout occurred
-        # self.app.log_frame.log_message("ERROR: Device reset timeout - device did not reconnect\n")
         self.waiting_for_device_reset = False
         return False
     
@@ -609,13 +625,6 @@ class SerialService:
                       progress_dialog_id: str = None) -> None:
         """
         Queue multiple commands for sequential processing.
-        
-        Args:
-            commands: List of command strings to send
-            command_types: Optional list of command types for response processing
-            callback: Optional callback function to call when all commands are processed
-            delay: Delay between commands in seconds
-            progress_dialog_id: Optional ID of a progress dialog to update
         """
         # Clear any existing queue
         while not self.command_queue.empty():
@@ -629,6 +638,7 @@ class SerialService:
         self.progress_dialog_id = progress_dialog_id
         self.total_commands = len(commands)
         self.processed_commands = 0
+        self.failed_reads_count = 0
         
         # Add all commands to the queue
         for i, cmd in enumerate(commands):
@@ -650,7 +660,7 @@ class SerialService:
         
         # Log the start of bulk operation to console
         print("INFO: Starting bulk command operation")
-        
+
     def _process_command_queue(self) -> None:
         """Process commands from the queue sequentially with delays."""
         try:
@@ -658,104 +668,91 @@ class SerialService:
             
             while self.queue_processing and self.is_connected and not self.pause_queue_processing:
                 if self.command_queue.empty():
-                    # Queue is empty, we're done
                     break
                     
-                # Get the next command from the queue
                 command, command_type, retry_count = self.command_queue.get()
-                
-                # Check if this command will trigger a device reset
                 is_reset_command = self._is_device_reset_command(command)
                 
-                # if is_reset_command:
-                #     self.app.after(0, self.app.log_frame.log_message, 
-                #                   "INFO: Detected device reset command - device will reset\n")
-                
+                # --- AVISA O RESET SE FOR PRECISO ANTES DE ENVIAR ---
+                if is_reset_command:
+                    self.app.after(0, self._show_reboot_popup)
+                    # Dá tempo pro popup renderizar
+                    time.sleep(1)
+
                 # Send the command
                 sent_ok = self.send_command(command, command_type)
 
-                # If send succeeded, wait for the device response or timeout
                 if sent_ok:
-                    # First, wait for the device response (applies to all commands)
                     start_wait = time.time()
                     waited = 0.0
-                    # Only wait while waiting_for_response is True and we haven't exceeded the timeout
                     while self.waiting_for_response and (time.time() - start_wait) < self.queue_response_timeout:
                         time.sleep(0.05)
                         waited = time.time() - start_wait
                     
-                    # After receiving response, check if this was a reset command
+                    # Checamos se precisa de reset após o comando ir
                     if is_reset_command and not self.waiting_for_response:
                         # Device responded - now wait for potential reset
                         reset_success = self._wait_for_device_reset(timeout=30.0)
-                        # Reset succeeded or wasn't needed, continue with next command
-                        # Note: waiting_for_response is already False from the response wait above
+                        
+                        # --- OCULTA O POP-UP APÓS A VOLTA ---
+                        self.app.after(0, self._hide_reboot_popup)
+                        
+                        # Dá um fôlego pro modem registrar na rede antes de cuspir o próximo comando
+                        time.sleep(5)
                     
-                    # If still waiting after timeout, log timeout notice
                     if self.waiting_for_response:
-                        # Timeout occurred
                         if retry_count < self.max_command_retries:
-                            self.app.after(0, self.app.log_frame.log_message, f"WARNING: Command '{command}' timed out. Retrying ({retry_count + 1}/{self.max_command_retries}).\n")
-                            self.command_queue.put((command, command_type, retry_count + 1)) # Re-queue for retry
+                            self.app.after(0, self.app.log_frame.log_message, f"WARNING: Command '{command}' timed out. Retrying.\n")
+                            self.command_queue.put((command, command_type, retry_count + 1))
                         else:
-                            self.app.after(0, self.app.log_frame.log_message, f"ERROR: Command '{command}' timed out. Max retries reached. Skipping.\n")
-                            # Log this as a failed command for the overall operation
-                            self.failed_reads_count += 1 # Assuming this is a write operation, so it's a failed write
+                            self.app.after(0, self.app.log_frame.log_message, f"ERROR: Command '{command}' timed out.\n")
+                            self.failed_reads_count += 1
                         self.waiting_for_response = False
                 else:
-                    # If send failed, check if connection was lost or it's a validation error
                     if not self.is_connected:
-                        # Connection lost during send. Pause queue and wait for reconnection.
-                        self.app.after(0, self.app.log_frame.log_message, f"ERROR: Connection lost while sending command '{command}'. Pausing queue.\n")
-                        self.queue_processing = False # Stop processing
-                        # The reconnection logic in error_handling_service should handle resuming
+                        self.app.after(0, self.app.log_frame.log_message, f"ERROR: Connection lost while sending command '{command}'.\n")
+                        self.queue_processing = False
                     else:
-                        # Send failed for other reasons (e.g., validation error). Skip command.
-                        self.app.after(0, self.app.log_frame.log_message, f"WARNING: Failed to send queued command '{command}'. Skipping.\n")
-                        self.failed_reads_count += 1 # Log as failed
+                        self.app.after(0, self.app.log_frame.log_message, f"WARNING: Failed to send queued command '{command}'.\n")
+                        self.failed_reads_count += 1
                 
-                # Increment processed commands counter (only if not retrying)
+                # Se esse comando for de reset, a tela do pop-up normal de barra de progresso do tkinter some por causa do foco do pop-up vermelho. Vamos garantir que ela volte.
+                if is_reset_command and hasattr(self.app, 'operation_confirmation_service') and hasattr(self, 'progress_dialog_id') and self.progress_dialog_id:
+                    self.app.after(0, self.app.operation_confirmation_service.update_progress,
+                                  self.progress_dialog_id, self.processed_commands, "Retomando envios...")
+                
                 if not self.waiting_for_response or retry_count >= self.max_command_retries:
                     self.processed_commands += 1
                 
-                # Update progress dialog if available
                 if hasattr(self.app, 'operation_confirmation_service') and hasattr(self, 'progress_dialog_id') and self.progress_dialog_id:
-                    # Calculate percentage for status text
                     percentage = int((self.processed_commands / self.total_commands) * 100)
-                    status_text = f"Processing command {self.processed_commands} of {self.total_commands} ({percentage}%)"
+                    status_text = f"Processando comando {self.processed_commands} de {self.total_commands} ({percentage}%)"
                     
-                    # Update the progress dialog
                     self.app.after(0, self.app.operation_confirmation_service.update_progress,
                                   self.progress_dialog_id, self.processed_commands, status_text)
                 
-                # Show progress in log
                 if hasattr(self.app, 'operation_confirmation_service'):
                     self.app.after(0, self.app.operation_confirmation_service.show_operation_progress_in_log,
                                   "Bulk Command Operation", self.processed_commands, self.total_commands)
                 
-                # Wait for the specified delay
                 time.sleep(self.queue_delay)
-                
-                # Mark the task as done
                 self.command_queue.task_done()
                 
-            # Log completion of bulk operation to console
             print("INFO: Bulk command operation completed")
             
-            # Call the callback if provided
             if self.queue_callback:
                 self.app.after(0, self.queue_callback, self.queue_results)
                 
         except Exception as e:
             self.app.after(0, self.app.log_frame.log_message, f"ERROR: Bulk command operation failed: {str(e)}\n")
-            
-            # Close progress dialog if it exists with error
             if hasattr(self.app, 'operation_confirmation_service') and hasattr(self, 'progress_dialog_id') and self.progress_dialog_id:
                 self.app.after(0, self.app.operation_confirmation_service.complete_progress,
                               self.progress_dialog_id, False, f"Error: {str(e)}")
         finally:
             self.queue_processing = False
-            
+            # Garante de forma segura que o popup suma mesmo se der erro inesperado
+            self.app.after(0, self._hide_reboot_popup)
+
     def resume_queue_processing(self) -> None:
         """Resume processing the command queue."""
         self.pause_queue_processing = False
@@ -763,6 +760,7 @@ class SerialService:
         # If the queue processing thread is stopped, restart it
         if not self.queue_thread or not self.queue_thread.is_alive():
             self.start_queue_processing()
+            
     def stop_queue_processing(self) -> None:
         """Stop processing the command queue."""
         self.queue_processing = False

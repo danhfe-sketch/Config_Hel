@@ -1343,9 +1343,10 @@ class DeviceCommandMapper:
         
         # Process single parameters that weren't part of compound commands
         individual_params = [
+            'network_settings',  # <-- NETSELECT (MOVIDO PARA O TOPO)
             'protocol', 'tcp_ack', 'speed_buzzer', 'sleep_mode', 'sleep_time',
             'backup_battery_alert', 'jammer_detection', 'odometer', 'hourmeter',
-            'network_settings', 'defense_settings', 'source_off_type', 'relay_control', 'sends_control',
+            'defense_settings', 'source_off_type', 'relay_control', 'sends_control',
             'distance_movement_action', 'acc_on_alert', 'acc_off_alert', 'blind_area_speed'
         ]
         
@@ -1443,6 +1444,24 @@ class DeviceCommandMapper:
         if validation_warnings:
             warning_summary = f"Non-critical parameter validation warnings: {'; '.join(validation_warnings)}"
             self.logger.warning(warning_summary)
+
+        # --- CORREÇÃO DEFINITIVA DA ORDEM (APN E NETSELECT SEMPRE PRIMEIRO) ---
+        apn_cmds = []
+        netselect_cmds = []
+        other_cmds = []
+        
+        for cmd in commands:
+            cmd_upper = cmd.upper()
+            if 'APN,' in cmd_upper:
+                apn_cmds.append(cmd)
+            elif 'SZCS#NETSELECT' in cmd_upper:
+                netselect_cmds.append(cmd)
+            else:
+                other_cmds.append(cmd)
+                
+        # Remonta a lista garantindo a ordem: APN -> NETSELECT -> Restante
+        commands = apn_cmds + netselect_cmds + other_cmds
+        # ----------------------------------------------------------------------
 
         self.logger.info(f"Generated {len(commands)} bulk commands from {len(parameters)} parameters")
         return commands

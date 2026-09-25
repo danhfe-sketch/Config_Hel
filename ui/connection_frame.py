@@ -1,6 +1,23 @@
 import customtkinter as ctk
 import tkinter as tk
 import time
+import re
+from tkinter import messagebox
+
+# ============================================================================
+# BANCO DE DADOS DE FIRMWARES OTA (UPGRADE E DOWNGRADE)
+# ============================================================================
+OTA_FIRMWARES = {
+    "LT32Pro B53 - V6.60 (Mais Recente)": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V660.bin,AF#",
+    "LT32Pro B53 - V6.59": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V659.bin,93#",
+    "LT32Pro B53 - V6.58": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V658.bin,9E#",
+    "LT32Pro B53 - V6.57": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V657.bin,FE#",
+    "LT32Pro B53 - V6.56": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V656.bin,D0#",
+    "LT32Pro B53 - V6.55": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V655.bin,A8#",
+    "LT32Pro B53 - V6.54": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V654.bin,66#",
+    "LT32Pro B53 - V6.53": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B53_V653.bin,E0#",
+    "LT32Pro B52 - V6.47 (Máximo OTA)": "ATSMS:YCSJ,http://139.9.60.174/update/LT32Pro_10F8A_B52_V647.bin,35#"
+}
 
 class ConnectionFrame(ctk.CTkFrame):
     def __init__(self, master, i18n, serial_service):
@@ -204,6 +221,24 @@ class ConnectionFrame(ctk.CTkFrame):
         #     command=self.toggle_auto_reconnect
         # )
         # self.auto_reconnect_checkbox.grid(row=9, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="w")
+        
+        # --- NOVO: GESTOR OTA DE FIRMWARE (Oculto por padrão) ---
+        self.frm_ota = ctk.CTkFrame(self, fg_color="transparent")
+        self.frm_ota.grid(row=10, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="ew")
+        self.frm_ota.grid_remove() # Oculta por padrão
+
+        ctk.CTkLabel(self.frm_ota, text="Gestor de Versão (OTA):", font=ctk.CTkFont(size=12, weight="bold"), text_color="#F39C12", anchor="w").pack(fill="x", padx=0)
+        self.cmb_ota = ctk.CTkComboBox(self.frm_ota, values=[])
+        self.cmb_ota.pack(fill="x", pady=(5, 5))
+        
+        self.btn_ota = ctk.CTkButton(
+            self.frm_ota, text="🚀 Aplicar Versão Selecionada", 
+            fg_color="#F39C12", text_color="black", hover_color="#D68910",
+            font=ctk.CTkFont(weight="bold"),
+            command=self.disparar_atualizacao_ota
+        )
+        self.btn_ota.pack(fill="x")
+        # --------------------------------------------------------
 
     def _get_entry_bg_color(self):
         """Get the appropriate background color for entry widgets based on the current theme."""
@@ -307,6 +342,10 @@ class ConnectionFrame(ctk.CTkFrame):
             
             # Refresh available ports
             self.refresh_ports()
+            
+            # --- NOVO: Oculta o Gestor OTA se desconectar ---
+            if hasattr(self, 'frm_ota'):
+                self.frm_ota.grid_remove()
             
     def retrieve_device_info(self):
         """Triggers device information retrieval from the connected device."""
@@ -500,6 +539,178 @@ class ConnectionFrame(ctk.CTkFrame):
         """Toggle automatic reconnection setting."""
         enabled = self.auto_reconnect_var.get()
         
-        # Update error handler if available
-        if hasattr(self.app, 'error_handler'):
-            self.app.error_handler.set_auto_reconnect(enabled)
+        # --- NOVO: LÓGICA DO GESTOR OTA ---
+    def verificar_atualizacao_firmware(self, versao_aparelho):
+        """Avalia a versão conectada e exibe as OTAs compatíveis limitando downgrades ilógicos."""
+        if not versao_aparelho or versao_aparelho == "N/A":
+            if hasattr(self, 'frm_ota'): self.frm_ota.grid_remove()
+            return
+            
+        versao_limpa = versao_aparelho.upper()
+        opcoes_disponiveis = []
+        
+        # BLINDAGEM 1: Identifica se é o modelo PRO W
+        if "PRO W" in versao_limpa or "PROW" in versao_limpa or "LT32PRO_W" in versao_limpa or "_W_" in versao_limpa:
+            opcoes_disponiveis = ["LT32 PRO W - Sem atualizações via cabo disponíveis"]
+            self.btn_ota.configure(state="disabled", text="OTA Indisponível para PRO W")
+            
+        # BLINDAGEM 2: Lógica progressiva para versão B53
+        elif "B53" in versao_limpa:
+            self.btn_ota.configure(state="normal", text="🚀 Aplicar Versão Selecionada")
+            current_num = 0
+            match = re.search(r'V6\.?(\d+)', versao_limpa)
+            if match:
+                current_num = int(match.group(1))
+            
+            for nome, _ in OTA_FIRMWARES.items():
+                if "B53" in nome:
+                    m = re.search(r'V6\.?(\d+)', nome)
+                    if m:
+                        fw_num = int(m.group(1))
+                        # Só adiciona se for estritamente MAIOR que a versão atual
+                        if current_num == 0 or fw_num > current_num:
+                            opcoes_disponiveis.append(nome)
+            
+            # Se não sobrou nenhuma opção para atualizar, o aparelho já está no topo
+            if not opcoes_disponiveis and current_num > 0:
+                self.btn_ota.configure(state="disabled", text="Última Versão Instalada")
+                opcoes_disponiveis = ["Equipamento Atualizado"]
+        
+        # BLINDAGEM 3: Lógica para B52
+        elif "B52" in versao_limpa:
+            self.btn_ota.configure(state="normal", text="🚀 Aplicar Versão Selecionada")
+            opcoes_disponiveis = [k for k in OTA_FIRMWARES.keys() if "B52" in k]
+        
+        # Fallback
+        else:
+            self.btn_ota.configure(state="disabled", text="Versão incompatível")
+            opcoes_disponiveis = ["Sem OTAs para esta arquitetura"]
+            
+        if opcoes_disponiveis:
+            self.cmb_ota.configure(values=opcoes_disponiveis)
+            self.cmb_ota.set(opcoes_disponiveis[0])
+            self.frm_ota.grid()
+        else:
+            self.frm_ota.grid_remove()
+
+    def disparar_atualizacao_ota(self):
+        """Dispara o processo de checagem e envio."""
+        fw_selecionado = self.cmb_ota.get()
+        cmd_ota = OTA_FIRMWARES.get(fw_selecionado)
+        
+        if not cmd_ota: return
+        
+        confirmar = messagebox.askyesno(
+            "Atenção - Mudança de Firmware via OTA",
+            f"Você está prestes a enviar o firmware:\n{fw_selecionado}\n\n"
+            "O aparelho irá se conectar ao servidor da Lumini, baixar o arquivo e reiniciar.\n"
+            "⚠️ O rastreador OBRIGATORIAMENTE precisa de um Chip GPRS/Internet ativo para isso funcionar.\n\n"
+            "Deseja checar a configuração do APN e enviar o comando agora?"
+        )
+        
+        if not confirmar: return
+        
+        if hasattr(self.app, 'log_frame') and self.app.log_frame:
+            self.app.log_frame.log_message(f"INFO: Solicitada atualização OTA para {fw_selecionado}\n")
+            
+        self.btn_ota.configure(state="disabled", text="⏳ Checando APN...")
+        
+        import threading
+        threading.Thread(target=self._validar_rede_e_aplicar, args=(cmd_ota,), daemon=True).start()
+        
+    def _validar_rede_e_aplicar(self, cmd_ota):
+        """Verifica ativamente se o APN está configurado antes de liberar o OTA."""
+        import time
+        apn_lido = ""
+        
+        # 1. Envia o comando APN# diretamente para o aparelho em background
+        if hasattr(self, 'serial_service') and self.serial_service.is_connected:
+            self.app.after(0, lambda: self.app.log_frame.log_message("INFO: Checando APN do aparelho para OTA...\n"))
+            self.serial_service.send_command("ATSMS:APN#")
+        else:
+            self.app.after(0, self.btn_ota.configure, {"state": "normal", "text": "🚀 Aplicar Versão Selecionada"})
+            return
+
+        # 2. Aguarda até 4 segundos lendo o buffer de respostas em busca do APN
+        for _ in range(40): # 40 * 0.1s = 4 segundos
+            time.sleep(0.1)
+            # Procura de trás pra frente no buffer do serial_service
+            if hasattr(self.serial_service, 'response_buffer'):
+                for res in reversed(self.serial_service.response_buffer[-15:]):
+                    if res.startswith("APN:"):
+                        partes = res[4:].split(',')
+                        if partes and partes[0].strip():
+                            apn_lido = partes[0].strip()
+                        break
+            if apn_lido:
+                break
+                
+        if not apn_lido:
+            self.app.after(0, self.btn_ota.configure, {"state": "normal", "text": "🚀 Aplicar Versão Selecionada"})
+            self.app.after(0, lambda: messagebox.showerror(
+                "Falha na Leitura", 
+                "O aparelho não respondeu com a APN ou a APN está em branco.\n\nPor favor, configure uma APN válida antes de tentar atualizar o firmware OTA."
+            ))
+            return
+            
+        # 3. Base de dados de APNs
+        apn_db = {
+            "zap.vivo.com.br": "Vivo (Padrão/M2M)",
+            "claro.com.br": "Claro (Padrão/Dados)",
+            "bandalarga.claro.com.br": "Claro (Banda Larga)",
+            "generica.claro.com.br": "Claro (M2M Genérica)",
+            "timbrasil.br": "TIM (Connect)",
+            "tim.br": "TIM (Connect Alt)",
+            "algar.br": "Algar Telecom",
+            "gprs.oi.com.br": "Oi Internet",
+            "allcom.arquia.com.br": "Allcom (Arqia)",
+            "allcom.claro.com.br": "Allcom (Claro)",
+            "allcom.vivo.com.br": "Allcom (Vivo)",
+            "allcom.br": "Allcom (Algar)",
+            "m2data.arqia.br": "M2Data (Arqia)",
+            "m2data.claro.com.br": "M2Data (Claro)",
+            "m2data.vivo.com.br": "M2Data (Vivo)",
+            "arqia.br": "Arqia M2M",
+            "nlt.com.br": "NLT Telecom",
+            "virtueyes.com.br": "Virtueyes M2M",
+            "tmdata.vivo.com.br": "Tmdata (Vivo)",
+            "tmdata.claro.com.br": "Tmdata (Claro)",
+            "tmdata.tim.br": "Tmdata (TIM)",
+            "telecall.br": "Telecall",
+            "surf.br": "Surf Telecom"
+        }
+        
+        operadora = apn_db.get(apn_lido.lower(), "Desconhecida / Personalizada")
+        
+        def _pergunta_final():
+            # Força o botão a restaurar o visual antes de abrir o pop-up
+            self.btn_ota.configure(state="normal", text="🚀 Aplicar Versão Selecionada")
+            
+            prosseguir = messagebox.askyesno(
+                "Verificação de Rede Concluída", 
+                f"O APN atual configurado no aparelho é:\n\n"
+                f"👉 {apn_lido}\n"
+                f"🏢 Operadora Identificada: {operadora}\n\n"
+                f"Tem certeza que este chip possui pacote de dados ativo para concluir o download?\n"
+                f"(Se o chip estiver sem dados, o aparelho apenas piscará o led mas não atualizará!)"
+            )
+            
+            if prosseguir:
+                if hasattr(self.app, 'log_frame') and self.app.log_frame:
+                    self.app.log_frame.log_message(f"INFO: Enviando comando OTA (YCSJ)...\n")
+                self.serial_service.send_command(cmd_ota)
+                messagebox.showinfo("Comando Enviado", "Comando de atualização enviado!\n\nO aparelho baixará o arquivo, as luzes apagarão e ele reiniciará em alguns minutos.")
+            else:
+                # O usuário clicou em "Não", avisa como configurar a APN
+                messagebox.showinfo(
+                    "Configuração de APN", 
+                    "Para configurar a APN corretamente:\n\n"
+                    "1. Vá na aba 'Parâmetros' -> 'Parâmetros de Rede'.\n"
+                    "2. Preencha os dados da sua APN e clique no botão 'Enviar'.\n\n"
+                    "⚠️ Aviso: Ao enviar o comando de APN, o aparelho será reiniciado automaticamente para aplicar as configurações de rede."
+                )
+                
+            # Força a remoção de foco para desativar o hover do botão que estava pressionado
+            self.focus_set()
+        
+        self.app.after(0, _pergunta_final)
