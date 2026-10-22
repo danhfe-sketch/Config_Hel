@@ -181,3 +181,4 @@ User preferences are stored in the following location:
 - `~/.lt32pro_config/app_config.json`: Contains theme and language preferences
 
 The configuration file is automatically created when the application is first run and updated whenever settings are changed.# Config_Hel
+# Config_Hel
